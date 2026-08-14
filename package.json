@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "api": "npm run dev --workspace apps/api",
+    "admin": "npm run dev --workspace apps/admin",
     "mobile": "npm run start --workspace apps/mobile",
     "test": "npm run test --workspaces --if-present"
   },

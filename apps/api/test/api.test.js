@@ -197,6 +197,45 @@ describe('pipeline and money', () => {
   });
 });
 
+describe('admin stats', () => {
+  it('reports current commission, unpaid liability, and referral counts by status', async () => {
+    // A referral left at 'new' and a completed one (unpaid £80) to make the numbers non-trivial.
+    const fresh = await signIn('07700 900321');
+    await request(app).post('/me/profile').set(auth(fresh.token)).send({ firstName: 'Ada', notifyOptIn: false });
+    await request(app).post('/me/role').set(auth(fresh.token)).send({ role: 'referred' });
+    await request(app).post('/referrals').set(auth(fresh.token)).send({
+      code: agents.code,
+      fullName: 'Ada Lovelace',
+      treatmentInterest: 'implants',
+      preferredPracticeId: agents.practiceId,
+      consent: true,
+      consentVersion: 'referred-v1-2026-08',
+    });
+
+    const done = await signIn('07700 900654');
+    await request(app).post('/me/profile').set(auth(done.token)).send({ firstName: 'Grace', notifyOptIn: false });
+    await request(app).post('/me/role').set(auth(done.token)).send({ role: 'referred' });
+    const sub = await request(app).post('/referrals').set(auth(done.token)).send({
+      code: agents.code,
+      fullName: 'Grace Hopper',
+      treatmentInterest: 'veneers',
+      preferredPracticeId: agents.practiceId,
+      consent: true,
+      consentVersion: 'referred-v1-2026-08',
+    });
+    await request(app)
+      .patch(`/admin/referrals/${sub.body.referral.id}/status`)
+      .set(auth(agents.referrer))
+      .send({ status: 'treatment_completed' });
+
+    const res = await request(app).get('/admin/stats').set(auth(agents.referrer));
+    expect(res.status).toBe(200);
+    expect(res.body.stats.commissionPennies).toBe(8000);
+    expect(res.body.stats.liabilityPennies).toBe(8000);
+    expect(res.body.stats.referralCounts).toMatchObject({ new: 1, treatment_completed: 3 });
+  });
+});
+
 describe.skipIf(!process.env.DATABASE_URL)('concurrency (real Postgres only)', () => {
   it('two simultaneous wallet ops serialize under the advisory lock', async () => {
     // Exercised against Supabase in CI once DATABASE_URL exists (matrix row 9).

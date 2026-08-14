@@ -26,7 +26,7 @@ import {
   referralsForReferrer,
   referredStatusFor,
 } from './services/referralService.js';
-import { walletFor, requestPayout, markPayoutPaid, cancelPayout, getSetting } from './services/walletService.js';
+import { walletFor, requestPayout, markPayoutPaid, cancelPayout, getSetting, resolveRule } from './services/walletService.js';
 import { requireUser, requireAdmin } from './middleware/auth.js';
 
 const validate = (schema) => (req, res, next) => {
@@ -167,6 +167,23 @@ export function buildApp() {
       );
     }
     res.json({ ok: true, updated: entries.map(([k]) => k) });
+  }));
+
+  app.get('/admin/stats', requireUser, requireAdmin, wrap(async (_req, res) => {
+    const rule = await resolveRule(null);
+    const liability = await db.query(
+      `select coalesce(sum(balance),0)::int as total from
+         (select sum(amount_pennies)::int as balance from wallet_ledger group by user_id) b
+       where balance > 0`,
+    );
+    const counts = await db.query(`select status, count(*)::int as n from referrals group by status`);
+    res.json({
+      stats: {
+        commissionPennies: rule?.amount_pennies ?? null,
+        liabilityPennies: liability.rows[0].total,
+        referralCounts: Object.fromEntries(counts.rows.map((r) => [r.status, r.n])),
+      },
+    });
   }));
 
   app.put('/admin/reward-amount', requireUser, requireAdmin, wrap(async (req, res) => {

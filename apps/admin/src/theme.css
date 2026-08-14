@@ -1,0 +1,368 @@
+/* GM Referral admin — light workspace carrying the gold-card identity.
+   Token names mirror apps/mobile/src/theme.js (boardroom/gold/ivory/mist).
+   One bold element: the gold seam under the boardroom topbar; the sign-in
+   card is the gold member card itself. Everything else stays quiet. */
+
+:root {
+  --boardroom: #0b2b26;
+  --cardface: #123832;
+  --cardedge: #1b4a42;
+  --gold: #c9a961;
+  --goldbright: #e8cb8a;
+  --ivory: #f4efe4;
+  --paper: #f4efe4;
+  --surface: #fffcf5;
+  --ink: #1e3a34;
+  --mist: #66796f;
+  --hairline: rgba(11, 43, 38, 0.14);
+  --hairline-soft: rgba(11, 43, 38, 0.08);
+  --success: #4f7d43;
+  --danger: #b05038;
+  --display: 'Fraunces', Georgia, serif;
+  --body: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, Menlo, Consolas, monospace;
+  --seam: linear-gradient(90deg, rgba(201, 169, 97, 0.25), #e8cb8a 30%, #c9a961 55%, #e8cb8a 80%, rgba(201, 169, 97, 0.25));
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+button { font: inherit; cursor: pointer; }
+input, select { font: inherit; color: var(--ink); }
+
+:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+/* ---- topbar: the boardroom band with its gold seam ---- */
+
+.topbar {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 14px 28px 12px;
+  background: linear-gradient(180deg, var(--cardface), var(--boardroom));
+  border-bottom: 2px solid transparent;
+  border-image: var(--seam) 1;
+  color: var(--ivory);
+}
+
+.wordmark {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 13px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--goldbright);
+}
+
+.topbar h1 {
+  margin: 0;
+  flex: 1;
+  font-family: var(--display);
+  font-size: 19px;
+  font-weight: 400;
+  color: var(--ivory);
+}
+
+.ghost {
+  background: none;
+  border: 1px solid rgba(244, 239, 228, 0.35);
+  border-radius: 8px;
+  color: inherit;
+  padding: 4px 12px;
+  font-size: 13px;
+}
+.ghost:hover { border-color: var(--goldbright); color: var(--goldbright); }
+
+/* ---- layout ---- */
+
+main {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 24px 28px 48px;
+  display: grid;
+  gap: 18px;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 320px 1fr 360px;
+  gap: 18px;
+  align-items: start;
+}
+
+@media (max-width: 980px) {
+  .row { grid-template-columns: 1fr; }
+}
+
+/* ---- cards ---- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  padding: 18px 20px 20px;
+}
+
+.card h2 {
+  margin: 0 0 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--hairline-soft);
+  font-family: var(--display);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--boardroom);
+}
+
+.card ul { list-style: none; margin: 0; padding: 0; }
+
+.meta { margin: 2px 0 0; font-size: 12px; color: var(--mist); }
+.empty { margin: 0; font-size: 13px; color: var(--mist); }
+.fineprint { margin: 12px 0 0; font-size: 12px; color: var(--mist); }
+
+.amount {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 17px;
+  color: var(--boardroom);
+  font-variant-numeric: tabular-nums;
+}
+
+.chip {
+  display: inline-block;
+  padding: 1px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--mist);
+  background: transparent;
+}
+.chip-paid { color: var(--success); border-color: rgba(79, 125, 67, 0.4); }
+.chip-cancelled, .chip-expired { color: var(--danger); border-color: rgba(176, 80, 56, 0.35); }
+
+/* ---- forms (levers, lost reason) ---- */
+
+label {
+  display: block;
+  margin: 12px 0 4px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mist);
+}
+
+input, select {
+  width: 100%;
+  padding: 7px 10px;
+  background: #fff;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+}
+input:focus, select:focus { border-color: var(--gold); }
+
+button[type='submit'], .lost-confirm button, .payouts button {
+  margin-top: 14px;
+  padding: 8px 16px;
+  background: var(--boardroom);
+  color: var(--ivory);
+  border: 1px solid var(--boardroom);
+  border-radius: 8px;
+  font-size: 13px;
+  transition: background-color 120ms ease;
+}
+button[type='submit']:hover, .lost-confirm button:hover, .payouts button:hover {
+  background: var(--cardedge);
+}
+button[type='submit']:disabled { opacity: 0.6; cursor: default; }
+
+/* payout "Mark paid" reads as the gold-accented action it is */
+.payouts button {
+  margin-top: 8px;
+  background: none;
+  color: var(--boardroom);
+  border-color: var(--gold);
+}
+.payouts button:hover { background: rgba(201, 169, 97, 0.16); }
+
+.payouts li {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.payouts li:last-child { border-bottom: none; }
+.payouts li > div { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.payouts details { margin-top: 10px; }
+.payouts summary { font-size: 12px; color: var(--mist); cursor: pointer; }
+.payouts details .amount { font-size: 14px; margin: 0 8px; }
+
+/* ---- pipeline ---- */
+
+.pipeline-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.pipeline-group {
+  background: rgba(244, 239, 228, 0.55);
+  border: 1px solid var(--hairline-soft);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.pipeline-group h3 {
+  margin: 0 0 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mist);
+}
+
+.pipeline-group .count {
+  font-family: var(--display);
+  font-size: 14px;
+  color: var(--gold);
+}
+
+.pipeline-group li {
+  background: #fff;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.pipeline-group li:last-child { margin-bottom: 0; }
+.pipeline-group li > div { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.pipeline-group li .meta { overflow-wrap: anywhere; }
+.pipeline-group select { margin-top: 8px; }
+.pipeline-group .lost-confirm input { margin-top: 2px; }
+.pipeline-group .lost-confirm button { margin-top: 8px; }
+
+/* ---- stats strip ---- */
+
+.stats {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.stat-label {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mist);
+}
+
+.stat-value {
+  margin: 2px 0 0;
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 30px;
+  color: var(--boardroom);
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-counts { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ---- toast ---- */
+
+.toast {
+  position: fixed;
+  top: 64px;
+  right: 20px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--boardroom);
+  color: var(--ivory);
+  border-left: 3px solid var(--goldbright);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(11, 43, 38, 0.25);
+  font-size: 13px;
+}
+
+/* ---- sign-in: the gold member card ---- */
+
+.signin {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.signin-card {
+  width: min(380px, 100%);
+  background: linear-gradient(160deg, var(--cardface), var(--boardroom) 70%);
+  border: 1px solid var(--gold);
+  border-radius: 20px;
+  padding: 28px 30px 30px;
+  color: var(--ivory);
+  box-shadow: 0 18px 48px rgba(11, 43, 38, 0.28);
+}
+
+.signin-card::after {
+  content: '';
+  display: block;
+  height: 2px;
+  margin-top: 24px;
+  background: var(--seam);
+  border-radius: 2px;
+}
+
+.signin-card h1 {
+  margin: 2px 0 10px;
+  font-family: var(--display);
+  font-size: 24px;
+  font-weight: 400;
+  color: var(--ivory);
+}
+
+.signin-card label { color: rgba(244, 239, 228, 0.7); }
+
+.signin-card input {
+  background: rgba(244, 239, 228, 0.08);
+  border-color: rgba(244, 239, 228, 0.25);
+  color: var(--ivory);
+}
+.signin-card input:focus { border-color: var(--goldbright); }
+
+.signin-card button[type='submit'] {
+  width: 100%;
+  background: var(--gold);
+  border-color: var(--gold);
+  color: var(--boardroom);
+  font-weight: 600;
+}
+.signin-card button[type='submit']:hover { background: var(--goldbright); }
+
+.devhint {
+  margin: 14px 0 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--goldbright);
+}
+
+.error { margin: 12px 0 0; font-size: 13px; color: #e2a293; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}
