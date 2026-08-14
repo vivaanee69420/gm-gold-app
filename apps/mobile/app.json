@@ -1,0 +1,45 @@
+{
+  "expo": {
+    "name": "GM Referral",
+    "slug": "gm-referral",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "gmreferral",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0B2B26",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0B2B26"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "uk.co.gmdental.referral",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Scan a friend's referral QR code."
+      }
+    },
+    "android": {
+      "package": "uk.co.gmdental.referral",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0B2B26"
+      },
+      "permissions": ["CAMERA"]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-font",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Scan a friend's referral QR code."
+        }
+      ]
+    ]
+  }
+}

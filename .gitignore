@@ -9,3 +9,4 @@ web-build/
 *.log
 .DS_Store
 coverage/
+.gstack/
