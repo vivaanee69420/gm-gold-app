@@ -15,6 +15,10 @@ Created by /plan-eng-review on 2026-08-14.
 - [ ] SAR runbook (per-user export + anonymization SQL, tested on staging) → `docs/runbooks/` — REQUIREMENTS FR-27
 - [ ] Cash-operations runbook per practice (float, authorization, till reconciliation) → `docs/runbooks/` — REQUIREMENTS §7 checklist
 
+## Deployment gates
+
+- [ ] **Provision Supabase project** (deferred by decision 2026-08-14: $10/month starts at deployment, not before). Steps: create project "GM Referral" (org uptupfxqtxfoiesfwjtf, eu-west-2) → apply `supabase/migrations/*.sql` → set `DATABASE_URL` for the API → the skipped concurrency test (matrix row 9) unskips. Dev runs on embedded PGlite until then.
+
 ## Design gates awaiting answers
 
 - [ ] Refund/clawback detection mechanism — cannot be designed until Dentally's API answer arrives; today the sync worker cannot see refunds at all. → DESIGN open question 5
