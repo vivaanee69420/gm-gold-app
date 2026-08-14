@@ -24,7 +24,9 @@
     "android": {
       "package": "uk.co.gmdental.referral",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png",
         "backgroundColor": "#0B2B26"
       },
       "permissions": [
