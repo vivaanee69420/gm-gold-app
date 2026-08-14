@@ -1,0 +1,17 @@
+{
+  "name": "gm-referral",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "api": "npm run dev --workspace apps/api",
+    "mobile": "npm run start --workspace apps/mobile",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "@gm-referral/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./phone": "./src/phone.js",
+    "./referral-code": "./src/referral-code.js",
+    "./money": "./src/money.js",
+    "./schemas": "./src/schemas.js"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0"
+  }
+}
