@@ -27,7 +27,9 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0B2B26"
       },
-      "permissions": ["CAMERA"]
+      "permissions": [
+        "android.permission.CAMERA"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -37,9 +39,16 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Scan a friend's referral QR code."
+          "cameraPermission": "Scan a friend's referral QR code.",
+          "recordAudioAndroid": false
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "a0378230-eaff-4c01-92b2-8696d71cea1c"
+      }
+    },
+    "owner": "ruhithpasha"
   }
 }
