@@ -1,0 +1,19 @@
+# GM Referral API — monorepo-aware build (apps/api + packages/shared).
+# DATABASE_URL unset -> embedded PGlite; mount a volume at /app/apps/api/data to persist it.
+FROM node:22-slim
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+COPY apps/api/package.json apps/api/
+COPY apps/admin/package.json apps/admin/
+COPY apps/mobile/package.json apps/mobile/
+COPY packages/shared/package.json packages/shared/
+RUN npm ci --omit=dev --workspace apps/api --workspace packages/shared
+
+COPY packages/shared packages/shared
+COPY apps/api apps/api
+COPY supabase supabase
+
+ENV NODE_ENV=development
+EXPOSE 4000
+CMD ["node", "apps/api/src/server.js"]

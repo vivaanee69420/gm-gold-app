@@ -1,0 +1,9 @@
+node_modules
+**/node_modules
+apps/api/data
+apps/mobile/*
+!apps/mobile/package.json
+.git
+.gstack
+docs
+*.md

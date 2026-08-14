@@ -32,6 +32,20 @@ dev hint in the app. OTP mode is `dev` until the Meta/SMS accounts land (see TOD
 npm test         # shared (15) + api (11, +1 skipped until DATABASE_URL points at real Postgres)
 ```
 
+## Hosting (staging on Railway)
+
+Project `gm-referral` on Railway (Docker builds, account developergmd@outlook.com):
+
+- **api** — `Dockerfile.api`, embedded PGlite persisted on a volume at `/app/apps/api/data`
+  (set `DATABASE_URL` to switch to Supabase at production). https://api-production-9d24.up.railway.app
+- **admin** — `Dockerfile.admin` (Vite build served by Caddy), `VITE_API_URL` baked at build time.
+  https://admin-production-ae73.up.railway.app
+
+Deploy by hand with `railway up --service api|admin`, or push to `main` once the repo has a
+`RAILWAY_TOKEN` secret (Railway → project → Settings → Tokens) for `.github/workflows/deploy.yml`.
+Staging runs dev OTP mode and the dev admin gate — do not point real patient data at it until
+real admin auth (Supabase email) lands.
+
 ## Demo the loop
 
 1. App: sign in → "I'm a GM Dental patient" → your card shows a live code.

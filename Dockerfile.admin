@@ -1,0 +1,22 @@
+# GM Referral admin dashboard — Vite build served as a static site by Caddy.
+# VITE_API_URL must point at the deployed API (Railway passes service variables as build args).
+FROM node:22-slim AS build
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+COPY apps/api/package.json apps/api/
+COPY apps/admin/package.json apps/admin/
+COPY apps/mobile/package.json apps/mobile/
+COPY packages/shared/package.json packages/shared/
+RUN npm ci --workspace apps/admin --workspace packages/shared
+
+COPY packages/shared packages/shared
+COPY apps/admin apps/admin
+
+ARG VITE_API_URL
+ENV VITE_API_URL=$VITE_API_URL
+RUN npm run build --workspace apps/admin
+
+FROM caddy:2-alpine
+COPY apps/admin/Caddyfile /etc/caddy/Caddyfile
+COPY --from=build /app/apps/admin/dist /srv
