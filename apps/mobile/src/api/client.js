@@ -8,8 +8,17 @@
 // reports `source: 'live' | 'mock'` so the shell can show a dev banner.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 
-const BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:4000';
+// Resolve the API host: explicit env wins; otherwise reuse the Expo dev-server host
+// (so a phone on the same Wi-Fi finds the API without configuration).
+function resolveBaseUrl() {
+  if (process.env.EXPO_PUBLIC_API_URL) return process.env.EXPO_PUBLIC_API_URL;
+  const hostUri = Constants.expoConfig?.hostUri ?? Constants.expoGoConfig?.debuggerHost ?? '';
+  const host = hostUri.split(':')[0];
+  return host ? `http://${host}:4000` : 'http://localhost:4000';
+}
+const BASE_URL = resolveBaseUrl();
 const TOKEN_KEY = 'gmref.session.token';
 
 let mockMode = false;
