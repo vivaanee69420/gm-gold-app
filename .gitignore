@@ -10,3 +10,4 @@ web-build/
 .DS_Store
 coverage/
 .gstack/
+apps/api/data/
