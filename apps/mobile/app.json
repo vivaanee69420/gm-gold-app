@@ -51,6 +51,12 @@
         "projectId": "a0378230-eaff-4c01-92b2-8696d71cea1c"
       }
     },
-    "owner": "ruhithpasha"
+    "owner": "ruhithpasha",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/a0378230-eaff-4c01-92b2-8696d71cea1c"
+    }
   }
 }

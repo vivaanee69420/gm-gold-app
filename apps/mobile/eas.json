@@ -8,16 +8,19 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
-      }
+      },
+      "channel": "preview"
     },
     "preview-live-api": {
       "extends": "preview",
       "env": {
         "EXPO_PUBLIC_API_URL": "https://api-production-9d24.up.railway.app"
-      }
+      },
+      "channel": "preview-live-api"
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "channel": "production"
     }
   },
   "submit": {
