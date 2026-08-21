@@ -37,4 +37,19 @@ describe('PayoutQueue', () => {
     expect(calls).toEqual([{ method: 'POST', path: '/admin/payouts/p1/mark-paid', body: undefined }]);
     expect(onChanged).toHaveBeenCalled();
   });
+
+  it('cancels an open request with a reason (FR-21)', async () => {
+    const calls = stubFetchRoutes([{ method: 'POST', path: '/admin/payouts/p1/cancel' }]);
+    const onChanged = vi.fn();
+    render(<PayoutQueue payouts={payouts} onChanged={onChanged} notify={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /cancel…/i }));
+    await userEvent.type(screen.getByLabelText(/cancel reason for sarah l\./i), 'left the practice');
+    await userEvent.click(screen.getByRole('button', { name: /confirm cancel/i }));
+
+    expect(calls).toEqual([
+      { method: 'POST', path: '/admin/payouts/p1/cancel', body: { reason: 'left the practice' } },
+    ]);
+    expect(onChanged).toHaveBeenCalled();
+  });
 });

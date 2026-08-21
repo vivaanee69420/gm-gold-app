@@ -164,12 +164,21 @@ export async function markPayoutPaid(payoutId, adminId) {
   });
 }
 
-export async function cancelPayout(payoutId, actorId, byAdmin = false) {
+export async function cancelPayout(payoutId, actorId, byAdmin = false, reason = null) {
   const { rows } = await db.query(
     `update payout_requests set status='cancelled', cancelled_by=$2 where id=$1 and status='open' returning *`,
     [payoutId, actorId],
   );
   if (!rows[0]) throw Object.assign(new Error('payout_not_open'), { status: 409 });
-  await logEvent(db, { actorId, entityType: 'payout', entityId: payoutId, action: byAdmin ? 'cancelled_by_admin' : 'cancelled' });
+  if (byAdmin) {
+    // FR-21: an admin cancel carries a reason and the member hears about it — their
+    // balance is intact and they can re-request, so the message says exactly that.
+    await db.query(
+      `insert into notification_outbox (recipient_kind, recipient_id, template, payload)
+       values ('user',$1,'payout_cancelled',$2)`,
+      [rows[0].user_id, JSON.stringify({ amountPennies: rows[0].amount_pennies, reason })],
+    );
+  }
+  await logEvent(db, { actorId, entityType: 'payout', entityId: payoutId, action: byAdmin ? 'cancelled_by_admin' : 'cancelled', reason });
   return { ok: true };
 }

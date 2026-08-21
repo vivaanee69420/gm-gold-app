@@ -3,7 +3,7 @@
 //   boot ──▶ no user ──▶ [Login → Verify → Profile → RolePicker]
 //        └─▶ user.roles includes 'referrer' ──▶ tabs: Card / Referrals / Wallet
 //        └─▶ user.roles == ['referred']     ──▶ [EnterCode → InterestForm → ReferredStatus]
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Platform, Text, View } from 'react-native';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -19,6 +19,12 @@ import { colors } from './src/theme';
 
 const Stack = createNativeStackNavigator();
 const Tabs = createBottomTabNavigator();
+
+// Login screen is disabled for now — flip to false to bring it back.
+// While true, the app silently signs in with the dev phone below (dev OTP mode
+// only; in production devSignIn fails and the login screen shows as a fallback).
+const LOGIN_DISABLED = true;
+const AUTO_LOGIN_PHONE = '+447700900001';
 
 const navTheme = {
   ...DarkTheme,
@@ -54,16 +60,33 @@ function ReferrerTabs() {
 }
 
 function Router() {
-  const { booted, user, boot } = useAppState();
+  const { booted, user, boot, devSignIn } = useAppState();
+  const [autoLoginFailed, setAutoLoginFailed] = useState(false);
+  const autoLoginTried = useRef(false);
 
   useEffect(() => {
     boot();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (!booted) return <View style={{ flex: 1, backgroundColor: colors.boardroom }} />;
+  // LOGIN_DISABLED bypass: once boot confirms there's no session, sign in silently.
+  useEffect(() => {
+    if (!LOGIN_DISABLED || !booted || user || autoLoginTried.current) return;
+    autoLoginTried.current = true; // one attempt in flight at a time (sign-out retriggers)
+    devSignIn(AUTO_LOGIN_PHONE)
+      .catch(() => setAutoLoginFailed(true))
+      .finally(() => {
+        autoLoginTried.current = false;
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [booted, user]);
+
+  const autoLoginPending = LOGIN_DISABLED && !user && !autoLoginFailed;
+  if (!booted || autoLoginPending) return <View style={{ flex: 1, backgroundColor: colors.boardroom }} />;
 
   const roles = user?.roles ?? [];
+  // A signed-in user without a name/role starts past Login/Verify.
+  const initialAuthRoute = !user ? 'Login' : !user.firstName ? 'Profile' : 'RolePicker';
   return (
     <NavigationContainer theme={navTheme}>
       {roles.includes('referrer') ? (
@@ -75,7 +98,7 @@ function Router() {
           <Stack.Screen name="ReferredStatus" component={ReferredStatusScreen} />
         </Stack.Navigator>
       ) : (
-        <Stack.Navigator screenOptions={{ headerShown: false }}>
+        <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName={initialAuthRoute}>
           <Stack.Screen name="Login" component={LoginScreen} />
           <Stack.Screen name="Verify" component={VerifyScreen} />
           <Stack.Screen name="Profile" component={ProfileScreen} />

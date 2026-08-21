@@ -5,9 +5,15 @@ import { errorMessage } from './copy.js';
 import SignIn from './components/SignIn.jsx';
 import Levers from './components/Levers.jsx';
 import ConfirmQueue from './components/ConfirmQueue.jsx';
+import DentallyCard from './components/DentallyCard.jsx';
+import VerificationQueue from './components/VerificationQueue.jsx';
+import AgingReport from './components/AgingReport.jsx';
 import PayoutQueue from './components/PayoutQueue.jsx';
 import PipelineBoard from './components/PipelineBoard.jsx';
 import StatsStrip from './components/StatsStrip.jsx';
+import ReferralReviewQueue from './components/ReferralReviewQueue.jsx';
+import FunnelReport from './components/FunnelReport.jsx';
+import TopReferrers from './components/TopReferrers.jsx';
 
 export default function App() {
   const [signedIn, setSignedIn] = useState(isSignedIn());
@@ -18,17 +24,32 @@ export default function App() {
 
   const loadAll = useCallback(async () => {
     try {
-      const [settings, stats, payouts, referrals] = await Promise.all([
+      const [settings, stats, payouts, referrals, proposals, verifications, aging, dentally, reviews, funnel, top] = await Promise.all([
         api('/admin/settings'),
         api('/admin/stats'),
         api('/admin/payouts'),
         api('/admin/referrals'),
+        api('/admin/proposals'),
+        api('/admin/verifications'),
+        api('/admin/aging'),
+        api('/admin/dentally/status'),
+        api('/admin/referral-review'),
+        api('/admin/reports/funnel'),
+        api('/admin/reports/top-referrers'),
       ]);
       setData({
         settings: settings.settings,
         stats: stats.stats,
         payouts: payouts.payouts,
         referrals: referrals.referrals,
+        proposals: proposals.proposals,
+        verifications: verifications.verifications,
+        aging: aging.aging,
+        agingDays: aging.days,
+        dentally,
+        reviews: reviews.reviews,
+        funnel: funnel.funnel,
+        topReferrers: top.topReferrers,
       });
     } catch (err) {
       notify(err.code ?? 'load_failed');
@@ -40,6 +61,19 @@ export default function App() {
       setSignedIn(false);
       setData(null);
     });
+  }, []);
+
+  // Landing back from Dentally's OAuth approval screen (?dentally=connected|error).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const outcome = params.get('dentally');
+    if (!outcome) return;
+    setToast(
+      outcome === 'connected'
+        ? 'Dentally connected — completed treatments will now be proposed automatically.'
+        : `Dentally connection failed: ${params.get('reason') ?? 'unknown error'}. Try again or check the API log.`,
+    );
+    window.history.replaceState({}, '', window.location.pathname);
   }, []);
 
   useEffect(() => {
@@ -82,8 +116,23 @@ export default function App() {
               onChanged={loadAll}
               notify={notify}
             />
-            <ConfirmQueue />
+            <ConfirmQueue proposals={data.proposals} onChanged={loadAll} notify={notify} />
             <PayoutQueue payouts={data.payouts} onChanged={loadAll} notify={notify} />
+          </div>
+          <div className="row">
+            <DentallyCard status={data.dentally} onChanged={loadAll} notify={notify} />
+            <VerificationQueue verifications={data.verifications} onChanged={loadAll} notify={notify} />
+            <AgingReport aging={data.aging} days={data.agingDays} />
+          </div>
+          <div className="row">
+            <ReferralReviewQueue reviews={data.reviews} onChanged={loadAll} notify={notify} />
+            <FunnelReport
+              key={`invites:${data.funnel.inviteSent}`}
+              funnel={data.funnel}
+              onChanged={loadAll}
+              notify={notify}
+            />
+            <TopReferrers topReferrers={data.topReferrers} />
           </div>
           <PipelineBoard referrals={data.referrals} onChanged={loadAll} notify={notify} />
           <StatsStrip stats={data.stats} />

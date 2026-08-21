@@ -45,6 +45,18 @@ export function AppStateProvider({ children }) {
         dispatch({ type: 'otp-sent', phone, devHint: out.devHint });
         return out;
       },
+      // Silent sign-in for the LOGIN_DISABLED bypass (App.js): sends a dev OTP and
+      // verifies it with the code from devHint. Only works while the API runs in dev
+      // OTP mode — in production there is no devHint, so this throws and the normal
+      // login screen shows instead.
+      devSignIn: async (phone) => {
+        const sent = await api.sendOtp(phone);
+        const code = sent.devHint?.match(/\d{6}/)?.[0];
+        if (!code) throw new Error('dev_sign_in_unavailable');
+        const out = await api.verifyOtp(phone, code);
+        dispatch({ type: 'signed-in', user: out.user });
+        return out.user;
+      },
       verifyOtp: async (code) => {
         const out = await api.verifyOtp(state.pendingPhone, code);
         dispatch({ type: 'signed-in', user: out.user });

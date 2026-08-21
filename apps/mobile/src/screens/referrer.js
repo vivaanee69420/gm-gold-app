@@ -31,6 +31,11 @@ export function CardScreen() {
         <GoldCard name={`${user?.firstName ?? 'Gold'} ${user?.lastName ?? 'Member'}`} code={code} />
       </View>
       <GoldButton label="Share on WhatsApp" onPress={share} style={{ marginTop: space(5) }} />
+      {user?.verificationStatus === 'pending_review' ? (
+        <Body muted style={{ textAlign: 'center', marginTop: space(3), fontSize: 12 }}>
+          We’re confirming you’re a GM Dental patient — your card works while we check.
+        </Body>
+      ) : null}
       <Body muted style={{ textAlign: 'center', marginTop: space(3), fontSize: 12 }}>
         You earn cash when a friend’s treatment completes. No limit on friends.
       </Body>
@@ -55,6 +60,10 @@ export function ReferralsScreen() {
   useFocusEffect(
     useCallback(() => {
       load();
+      // Auto-refresh while the screen is open: a confirmed commission appears
+      // within 30s without pull-to-refresh.
+      const timer = setInterval(load, 30_000);
+      return () => clearInterval(timer);
     }, [load]),
   );
 
@@ -102,6 +111,10 @@ export function WalletScreen() {
   useFocusEffect(
     useCallback(() => {
       load();
+      // Auto-refresh while the screen is open: a confirmed commission appears
+      // within 30s without pull-to-refresh.
+      const timer = setInterval(load, 30_000);
+      return () => clearInterval(timer);
     }, [load]),
   );
 

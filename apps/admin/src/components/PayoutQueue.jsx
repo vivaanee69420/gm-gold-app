@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import { formatPennies } from '@gm-referral/shared/money';
 import { api } from '../api/client.js';
 
 export default function PayoutQueue({ payouts, onChanged, notify }) {
+  const [cancelDrafts, setCancelDrafts] = useState({}); // payoutId -> reason text
   const open = payouts.filter((p) => p.status === 'open');
   const settled = payouts.filter((p) => p.status !== 'open');
 
@@ -11,6 +13,20 @@ export default function PayoutQueue({ payouts, onChanged, notify }) {
       onChanged();
     } catch (err) {
       notify(err.code ?? 'mark_paid_failed');
+    }
+  };
+
+  // FR-21: admin cancel requires a reason; the member keeps their balance.
+  const cancel = async (id) => {
+    try {
+      await api(`/admin/payouts/${id}/cancel`, { method: 'POST', body: { reason: cancelDrafts[id] } });
+      setCancelDrafts((d) => {
+        const { [id]: _dropped, ...rest } = d;
+        return rest;
+      });
+      onChanged();
+    } catch (err) {
+      notify(err.code ?? 'cancel_failed');
     }
   };
 
@@ -27,6 +43,21 @@ export default function PayoutQueue({ payouts, onChanged, notify }) {
             </div>
             <p className="meta">collecting at {p.practice} · requested {new Date(p.requested_at).toLocaleDateString('en-GB')}</p>
             <button onClick={() => markPaid(p.id)}>Mark paid</button>
+            {cancelDrafts[p.id] === undefined ? (
+              <button className="ghost" onClick={() => setCancelDrafts((d) => ({ ...d, [p.id]: '' }))}>
+                Cancel…
+              </button>
+            ) : (
+              <span className="lost-confirm">
+                <label htmlFor={`cancel-${p.id}`}>Cancel reason for {p.member}</label>
+                <input
+                  id={`cancel-${p.id}`}
+                  value={cancelDrafts[p.id]}
+                  onChange={(e) => setCancelDrafts((d) => ({ ...d, [p.id]: e.target.value }))}
+                />
+                <button onClick={() => cancel(p.id)}>Confirm cancel</button>
+              </span>
+            )}
           </li>
         ))}
       </ul>

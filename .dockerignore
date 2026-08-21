@@ -5,5 +5,7 @@ apps/mobile/*
 !apps/mobile/package.json
 .git
 .gstack
+.env
+**/.env
 docs
 *.md

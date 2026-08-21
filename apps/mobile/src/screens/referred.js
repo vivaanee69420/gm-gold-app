@@ -179,7 +179,10 @@ export function ReferredStatusScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      api.referredStatus().then(setStatus).catch(() => setStatus({ status: 'new' }));
+      const load = () => api.referredStatus().then(setStatus).catch(() => setStatus({ status: 'new' }));
+      load();
+      const timer = setInterval(load, 30_000); // auto-refresh: status moves without reopening
+      return () => clearInterval(timer);
     }, []),
   );
 

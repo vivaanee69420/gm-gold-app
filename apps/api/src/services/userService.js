@@ -2,6 +2,8 @@ import jwt from 'jsonwebtoken';
 import { generateCode } from '@gm-referral/shared/referral-code';
 import { db, logEvent } from '../db.js';
 import { config } from '../config.js';
+import { matchPatientIndex } from './dentally/syncService.js';
+import { resolveDentallyMode } from './dentally/connectionService.js';
 
 export async function getOrCreateUserByPhone(phone) {
   const found = await db.query(`select * from users where phone = $1`, [phone]);
@@ -37,10 +39,30 @@ export async function saveProfile(userId, { firstName, lastName, notifyOptIn }) 
 
 export async function pickRole(userId, role) {
   if (role === 'referrer') {
-    // Referrer verification (FR-05): Dentally phone match lands in Stage 5.
-    // Until then dev-verifies immediately so the loop is walkable; the review
-    // queue path exists in the data model and activates with the integration.
-    await db.query(`update users set role_referrer=true, verification_status='verified' where id=$1`, [userId]);
+    // Referrer verification (FR-05): exact phone match against the Dentally patient
+    // index. One clean match → verified (linked to the Dentally record); none or
+    // several (shared family number) → pending_review for the admin queue, with the
+    // sync worker auto-resolving once a clean match appears. Mode 'off' keeps the
+    // pre-Stage-5 dev-verify so the loop stays walkable without any Dentally at all.
+    if ((await resolveDentallyMode()) === 'off') {
+      await db.query(`update users set role_referrer=true, verification_status='verified' where id=$1`, [userId]);
+    } else {
+      const user = await getUser(userId);
+      const match = await matchPatientIndex(user.phone);
+      if (match.status === 'verified') {
+        await db.query(
+          `update users set role_referrer=true, verification_status='verified',
+             dentally_patient_id=$2, practice_id=$3 where id=$1`,
+          [userId, match.dentallyPatientId, match.practiceId],
+        );
+      } else {
+        await db.query(`update users set role_referrer=true, verification_status='pending_review' where id=$1`, [userId]);
+        await logEvent(db, {
+          actorId: userId, entityType: 'user', entityId: userId,
+          action: 'verification_pending', reason: match.reason,
+        });
+      }
+    }
     const existing = await db.query(`select code from referral_codes where user_id=$1 and active`, [userId]);
     if (!existing.rows[0]) {
       let attempts = 0;

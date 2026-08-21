@@ -5,7 +5,8 @@ Created by /plan-eng-review on 2026-08-14.
 
 ## External waits (Stage 0 — all four emails should be sent today)
 
-- [ ] **Dentally API access** (owner: Ruhith) — three questions: completed+paid readable? patient mobiles readable? one account for six practices or six? + sandbox request. Blocks build Stages 5–6. → `docs/DESIGN.md` open question 1
+- [x] **Dentally data — LIVE via Dental Os (2026-08-21, decision by Ruhith)**: the sync reads the central Dental Os DB (fed by Dentally webhooks) through read-only role `gm_referral_reader`; ~16k patients indexed on first backfill; `gmref_doorbell` triggers on Dental Os ping `/webhooks/dentally` for second-level latency. Real practices seeded (migration 0006). Direct-Dentally OAuth + token paths remain as built fallbacks (spike script kept). **The Dentally-credentials email is now OPTIONAL** — only needed if we ever switch to direct mode.
+  - [ ] Deploy current code + env (`DATABASE_URL`, `DENTAL_OS_DATABASE_URL`, `DENTALLY_WEBHOOK_SECRET`) to Railway so the doorbell (which targets the staging URL) completes the instant-update chain in staging.
 - [ ] **Meta WhatsApp Business verification** (owner: Ruhith) — 2–4 weeks lead time; blocks `whatsapp_primary` mode only. → open question / FR-02a
 - [ ] **Accountant: cash-commission tax treatment** (owner: practice accountant) — blocks payout wording + terms. → open question 2
 - [ ] **Solicitor: incentive claims + UK GDPR Article 9 basis** (owner: solicitor) — blocks consent wording finalization + launch. → open question 5 / compliance checklist
@@ -17,7 +18,10 @@ Created by /plan-eng-review on 2026-08-14.
 
 ## Deployment gates
 
-- [ ] **Provision Supabase project** (deferred by decision 2026-08-14: $10/month starts at deployment, not before). Steps: create project "GM Referral" (org uptupfxqtxfoiesfwjtf, eu-west-2) → apply `supabase/migrations/*.sql` → set `DATABASE_URL` for the API → the skipped concurrency test (matrix row 9) unskips. Dev runs on embedded PGlite until then.
+- [x] **Provision Supabase project** — DONE 2026-08-21: "gm refferal app" (`xiijsxabqwngeoxlflya`), migrations 0001–0004 applied + `_migrations` ledger written + RLS enabled everywhere (see README "Supabase"). Remaining:
+  - [ ] ⚠ **Region is ap-southeast-2 (Sydney), design says eu-west-2 (London)** — recreate in London before launch (UK latency + GDPR residency); DB is fully scripted so the move is ~5 minutes while it holds no real data.
+  - [x] Local `DATABASE_URL` — DONE 2026-08-21: dedicated `gm_referral_api` role + `apps/api/.env` (session pooler), verified live incl. advisory locks.
+  - [ ] Set the same `DATABASE_URL` on the Railway api service when staging should switch off its PGlite volume.
 
 ## Design gates awaiting answers
 
