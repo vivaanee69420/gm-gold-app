@@ -44,7 +44,17 @@
           "cameraPermission": "Scan a friend's referral QR code.",
           "recordAudioAndroid": false
         }
-      ]
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true
+          }
+        }
+      ],
+      "./plugins/withAndroidArchitectures.js"
     ],
     "extra": {
       "eas": {
