@@ -1,11 +1,17 @@
 // Referral pipeline (FR-08..FR-14): capture, adjacent-only transitions,
 // privileged completion (which credits in the same flow), fraud rules.
+import { normalizePhone } from '@gm-referral/shared/phone';
 import { db, logEvent, withTransaction } from '../db.js';
 import { creditReferral } from './walletService.js';
 
 export const STATUS_ORDER = ['new', 'contacted', 'booked', 'attended', 'treatment_agreed', 'treatment_completed'];
 
-export async function submitReferral({ code, fullName, treatmentInterest, preferredPracticeId, consentVersion, referredUser, source = 'code' }) {
+export async function submitReferral({ code, fullName, email, phone, treatmentInterest, preferredPracticeId, consentVersion, referredUser, source = 'code' }) {
+  // The phone the friend will book with at Dentally is what commission matching
+  // runs on — accept an override, normalized, falling back to the account phone.
+  const referredPhone = (phone ? normalizePhone(phone) : null) ?? referredUser.phone;
+  if (phone && !normalizePhone(phone)) throw Object.assign(new Error('validation'), { status: 422 });
+
   const { rows: codeRows } = await db.query(
     `select rc.code, rc.user_id, u.phone as referrer_phone
      from referral_codes rc join users u on u.id = rc.user_id
@@ -14,7 +20,7 @@ export async function submitReferral({ code, fullName, treatmentInterest, prefer
   );
   const codeRow = codeRows[0];
   if (!codeRow) throw Object.assign(new Error('invalid_code'), { status: 404 });
-  if (codeRow.referrer_phone === referredUser.phone) {
+  if (codeRow.referrer_phone === referredPhone) {
     throw Object.assign(new Error('self_referral_not_allowed'), { status: 422 });
   }
 
@@ -22,10 +28,10 @@ export async function submitReferral({ code, fullName, treatmentInterest, prefer
     let referral;
     try {
       const { rows } = await client.query(
-        `insert into referrals (referrer_id, referred_user_id, referred_phone, referred_name,
+        `insert into referrals (referrer_id, referred_user_id, referred_phone, referred_name, referred_email,
                                 treatment_interest, preferred_practice_id, consent_version, source)
-         values ($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
-        [codeRow.user_id, referredUser.id, referredUser.phone, fullName, treatmentInterest, preferredPracticeId, consentVersion, source],
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *`,
+        [codeRow.user_id, referredUser.id, referredPhone, fullName, email ?? null, treatmentInterest, preferredPracticeId, consentVersion, source],
       );
       referral = rows[0];
     } catch (err) {
@@ -123,7 +129,8 @@ export async function referralsForReferrer(referrerId) {
 
 export async function referredStatusFor(userId) {
   const { rows } = await db.query(
-    `select r.status, p.name as practice_name, u.first_name as referrer_name
+    `select r.status, r.appointment_starts_at, p.name as practice_name, p.booking_url,
+            u.first_name as referrer_name
      from referrals r
      left join practices p on p.id = r.preferred_practice_id
      left join users u on u.id = r.referrer_id
@@ -131,7 +138,13 @@ export async function referredStatusFor(userId) {
     [userId],
   );
   return rows[0]
-    ? { status: rows[0].status, practiceName: rows[0].practice_name, referrerName: rows[0].referrer_name }
+    ? {
+        status: rows[0].status,
+        practiceName: rows[0].practice_name,
+        referrerName: rows[0].referrer_name,
+        bookingUrl: rows[0].booking_url,
+        appointmentStartsAt: rows[0].appointment_starts_at,
+      }
     : null;
 }
 

@@ -1,23 +1,15 @@
 // Referred-friend flow: enter/scan code → interest + consent → living status screen
 // that then opens the chain: explore treatments, get your own card, refer onward.
 import React, { useCallback, useEffect, useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Linking, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useFocusEffect } from '@react-navigation/native';
 import { normalizeCode } from '@gm-referral/shared/referral-code';
-import { TREATMENT_INTERESTS } from '@gm-referral/shared/schemas';
 import { api, isMockMode } from '../api/client';
 import { Body, Eyebrow, Field, GoldButton, Hairline, Screen, Title } from '../components/ui';
 import { colors, radius, space, type } from '../theme';
 import { useAppState } from '../state/AppState';
 
-const INTEREST_LABELS = {
-  implants: 'Implants',
-  aligners: 'Aligners',
-  veneers: 'Veneers',
-  bonding: 'Bonding',
-  not_sure: 'Not sure yet',
-};
 const TREATMENT_BLURBS = [
   ['Implants', 'Fixed replacement teeth that look and feel like your own.'],
   ['Aligners', 'Discreet clear trays that straighten your smile over months, not years.'],
@@ -54,7 +46,7 @@ export function EnterCodeScreen({ navigation }) {
     }
     setError(null);
     setScanning(false);
-    navigation.navigate('InterestForm', { code });
+    navigation.navigate('BookingForm', { code });
   };
 
   const openScanner = async () => {
@@ -107,10 +99,14 @@ export function EnterCodeScreen({ navigation }) {
   );
 }
 
-export function InterestFormScreen({ navigation, route }) {
+export function BookingFormScreen({ navigation, route }) {
   const { code } = route.params;
-  const [fullName, setFullName] = useState('');
-  const [interest, setInterest] = useState(null);
+  const { user } = useAppState();
+  const [fullName, setFullName] = useState(
+    user?.firstName ? `${user.firstName} ${user.lastName ?? ''}`.trim() : '',
+  );
+  const [phone, setPhone] = useState(user?.phone ?? '');
+  const [email, setEmail] = useState('');
   const [practices, setPractices] = useState([]);
   const [practiceId, setPracticeId] = useState(null);
   const [consent, setConsent] = useState(false);
@@ -125,14 +121,18 @@ export function InterestFormScreen({ navigation, route }) {
     setBusy(true);
     setError(null);
     try {
-      await api.submitReferral({
+      const out = await api.submitReferral({
         code,
         fullName: fullName.trim(),
-        treatmentInterest: interest,
+        phone: phone.trim(),
+        email: email.trim(),
         preferredPracticeId: practiceId,
         consent: true,
         consentVersion: CONSENT_VERSION,
       });
+      // Straight to the practice's Dentally booking page; the appointment they book
+      // there flows back via the sync and confirms on the Your appointment screen.
+      if (out.bookingUrl) Linking.openURL(out.bookingUrl).catch(() => {});
       navigation.reset({ index: 0, routes: [{ name: 'ReferredStatus' }] });
     } catch (err) {
       const code2 = err.payload?.error;
@@ -150,22 +150,35 @@ export function InterestFormScreen({ navigation, route }) {
     }
   };
 
-  const ready = fullName.trim().length > 1 && interest && practiceId && consent;
+  const emailOk = /\S+@\S+\.\S+/.test(email.trim());
+  const ready = fullName.trim().length > 1 && phone.trim().length >= 10 && emailOk && practiceId && consent;
+  const chosenPractice = practices.find((p) => p.id === practiceId);
 
   return (
     <Screen>
       <Eyebrow>Free consultation</Eyebrow>
-      <Title>Tell us about you</Title>
+      <Title>Book your visit</Title>
+      <Body muted style={{ marginBottom: space(4) }}>
+        Leave your details, then pick a time that suits you on our booking page.
+      </Body>
       <Field label="Your full name" value={fullName} onChangeText={setFullName} placeholder="Jane Smith" autoComplete="name" />
-
-      <Text style={styles.groupLabel}>What are you interested in?</Text>
-      <View style={styles.pillWrap}>
-        {TREATMENT_INTERESTS.map((key) => (
-          <Pressable key={key} onPress={() => setInterest(key)} style={[styles.pill, interest === key && styles.pillActive]}>
-            <Text style={[styles.pillText, interest === key && styles.pillTextActive]}>{INTEREST_LABELS[key]}</Text>
-          </Pressable>
-        ))}
-      </View>
+      <Field
+        label="Mobile number"
+        value={phone}
+        onChangeText={setPhone}
+        placeholder="07700 900123"
+        keyboardType="phone-pad"
+        autoComplete="tel"
+      />
+      <Field
+        label="Email"
+        value={email}
+        onChangeText={setEmail}
+        placeholder="jane@example.com"
+        keyboardType="email-address"
+        autoCapitalize="none"
+        autoComplete="email"
+      />
 
       <Text style={styles.groupLabel}>Preferred practice</Text>
       <View style={styles.pillWrap}>
@@ -193,9 +206,11 @@ export function InterestFormScreen({ navigation, route }) {
       </Pressable>
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
-      <GoldButton label="Request my consultation" onPress={submit} disabled={!ready || busy} />
+      <GoldButton label="Continue to booking" onPress={submit} disabled={!ready || busy} />
       <Body muted style={{ textAlign: 'center', marginTop: space(3), fontSize: 12 }}>
-        Your friend earns a reward when your treatment completes — it costs you nothing.
+        {chosenPractice
+          ? `Next: pick your appointment time on ${chosenPractice.name}’s booking page.`
+          : 'Your friend earns a reward when your treatment completes — it costs you nothing.'}
       </Body>
     </Screen>
   );
@@ -226,6 +241,10 @@ export function ReferredStatusScreen() {
   ];
   const currentIndex = Math.max(0, stages.findIndex(([key]) => key === status?.status));
   const alreadyReferrer = user?.roles?.includes('referrer');
+  const appt = status?.appointmentStartsAt ? new Date(status.appointmentStartsAt) : null;
+  const showAppt = appt && ['booked', 'attended', 'treatment_agreed'].includes(status?.status);
+  const awaitingBooking = !showAppt && status?.status === 'new';
+  const completed = status?.status === 'treatment_completed';
 
   // The chain: a referred friend becomes a referrer with their own card. App.js
   // switches to the referrer tabs (this screen stays reachable as "My visit").
@@ -242,11 +261,54 @@ export function ReferredStatusScreen() {
 
   return (
     <Screen>
-      <Eyebrow>Your request</Eyebrow>
-      <Title>{status?.practiceName ?? 'The practice'} will call you</Title>
-      <Body muted style={{ marginBottom: space(6) }}>
-        Usually within one working day. Here’s where things are:
-      </Body>
+      <Eyebrow>Your appointment</Eyebrow>
+      {showAppt ? (
+        <>
+          <Title>Your appointment is confirmed</Title>
+          <View style={styles.apptCard}>
+            <Text style={styles.apptDate}>
+              {appt.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}
+            </Text>
+            <Text style={styles.apptTime}>
+              {appt.toLocaleTimeString('en-GB', { hour: 'numeric', minute: '2-digit' })}
+              {status?.practiceName ? ` · ${status.practiceName}` : ''}
+            </Text>
+            <Body muted style={{ fontSize: 12, marginTop: space(2) }}>
+              Need to change it? Call the practice — this page updates automatically.
+            </Body>
+          </View>
+        </>
+      ) : awaitingBooking ? (
+        <>
+          <Title>Book your free consultation</Title>
+          <Body muted style={{ marginBottom: space(4) }}>
+            {status?.bookingUrl
+              ? `Pick a time on ${status?.practiceName ?? 'the practice'}’s booking page — your appointment will be confirmed here.`
+              : `${status?.practiceName ?? 'The practice'} will call you to book — usually within one working day.`}
+          </Body>
+          {status?.bookingUrl ? (
+            <GoldButton
+              label={`Book at ${status?.practiceName ?? 'the practice'}`}
+              onPress={() => Linking.openURL(status.bookingUrl).catch(() => {})}
+              style={{ marginBottom: space(4) }}
+            />
+          ) : null}
+        </>
+      ) : completed ? (
+        <>
+          <Title>Treatment complete</Title>
+          <Body muted style={{ marginBottom: space(6) }}>
+            Thanks for visiting {status?.practiceName ?? 'GM Dental'} — here’s your journey:
+          </Body>
+        </>
+      ) : (
+        <>
+          <Title>{status?.practiceName ?? 'The practice'} will call you</Title>
+          <Body muted style={{ marginBottom: space(6) }}>
+            Usually within one working day. Here’s where things are:
+          </Body>
+        </>
+      )}
       {stages.map(([key, label], i) => (
         <View key={key}>
           <View style={styles.stageRow}>
@@ -333,6 +395,16 @@ const styles = StyleSheet.create({
     marginBottom: space(2),
   },
   treatmentRow: { flexDirection: 'row', gap: space(3), paddingVertical: space(3), alignItems: 'baseline' },
+  apptCard: {
+    backgroundColor: colors.cardface,
+    borderWidth: 1,
+    borderColor: colors.gold,
+    borderRadius: radius.card,
+    padding: space(5),
+    marginBottom: space(6),
+  },
+  apptDate: { fontFamily: type.display, color: colors.goldbright, fontSize: 24 },
+  apptTime: { color: colors.ivory, fontSize: 16, marginTop: space(1) },
   treatmentName: { color: colors.goldbright, fontSize: 14, fontWeight: '600', width: 84 },
   chainCard: {
     marginTop: space(8),

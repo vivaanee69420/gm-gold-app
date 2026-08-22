@@ -59,6 +59,8 @@ curl -X POST localhost:4000/dev/dentally/complete-treatment \
   -H 'content-type: application/json' \
   -d '{"phone":"+447700900777","practiceId":"<uuid>","amountPennies":52000}'
 # also: /dev/dentally/add-patient {phone} — seed a patient so signup verifies
+# also: /dev/dentally/book-appointment {phone, startsAt?} — simulate a Dentally
+#       online booking; the referral flips to booked and "Your appointment" fills in
 ```
 
 ## Tests

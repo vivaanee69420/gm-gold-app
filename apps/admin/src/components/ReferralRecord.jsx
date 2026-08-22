@@ -61,6 +61,7 @@ export default function ReferralRecord({ referrals }) {
                     <td>
                       <strong>{r.referred_name}</strong>
                       <p className="meta">{r.referred_phone}</p>
+                      {r.referred_email && <p className="meta">{r.referred_email}</p>}
                     </td>
                     <td>
                       <strong>{r.referrer}</strong>

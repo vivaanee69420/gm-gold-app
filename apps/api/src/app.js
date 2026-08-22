@@ -36,7 +36,7 @@ import {
   pendingVerifications,
   decideVerification,
 } from './services/dentally/proposalService.js';
-import { stubAddCompletedTreatment, stubAddPatient } from './services/dentally/client.js';
+import { stubAddBookedAppointment, stubAddCompletedTreatment, stubAddPatient } from './services/dentally/client.js';
 import {
   connectionStatus,
   buildAuthorizeUrl,
@@ -132,8 +132,13 @@ export function buildApp() {
   // ---- referrals ----
   app.post('/referrals', requireUser, validate(referralSubmitSchema), wrap(async (req, res) => {
     const referral = await submitReferral({ ...req.data, consentVersion: req.data.consentVersion, referredUser: req.user });
-    const { rows } = await db.query('select name from practices where id=$1', [req.data.preferredPracticeId]);
-    res.json({ ok: true, referral: { id: referral.id, status: referral.status }, practiceName: rows[0]?.name });
+    const { rows } = await db.query('select name, booking_url from practices where id=$1', [req.data.preferredPracticeId]);
+    res.json({
+      ok: true,
+      referral: { id: referral.id, status: referral.status },
+      practiceName: rows[0]?.name,
+      bookingUrl: rows[0]?.booking_url ?? null,
+    });
   }));
 
   app.get('/referrals/mine', requireUser, wrap(async (req, res) => {
@@ -175,8 +180,8 @@ export function buildApp() {
   app.get('/admin/referrals', requireUser, requireAdmin, wrap(async (req, res) => {
     const scope = practiceScope(req);
     const { rows } = await db.query(
-      `select r.id, r.referred_name, r.referred_phone, r.status, r.treatment_interest,
-              r.created_at::date::text as created_at, r.source,
+      `select r.id, r.referred_name, r.referred_phone, r.referred_email, r.status, r.treatment_interest,
+              r.appointment_starts_at, r.created_at::date::text as created_at, r.source,
               p.name as practice, u.first_name || ' ' || coalesce(u.last_name,'') as referrer,
               u.phone as referrer_phone, rc.code as referrer_code,
               wl.amount_pennies as commission_pennies, wl.created_at::date::text as commission_at
@@ -453,6 +458,17 @@ export function buildApp() {
         await db.query(`update practices set dentally_site_id=$1 where id=$1::uuid`, [practiceId]);
       }
       stubAddCompletedTreatment({ phone, siteId: practiceId, amountPennies });
+      res.json({ ok: true, sync: await runSync('dev-endpoint') });
+    }));
+
+    app.post('/dev/dentally/book-appointment', wrap(async (req, res) => {
+      if ((await resolveDentallyMode()) !== 'stub') return res.status(409).json({ error: 'dentally_not_stub' });
+      const { phone, practiceId = null, startsAt } = req.body ?? {};
+      if (!phone) return res.status(422).json({ error: 'phone_required' });
+      if (practiceId) {
+        await db.query(`update practices set dentally_site_id=$1 where id=$1::uuid`, [practiceId]);
+      }
+      stubAddBookedAppointment({ phone, siteId: practiceId, ...(startsAt ? { startsAt } : {}) });
       res.json({ ok: true, sync: await runSync('dev-endpoint') });
     }));
 

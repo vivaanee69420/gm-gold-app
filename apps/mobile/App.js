@@ -13,7 +13,7 @@ import { useFonts, Fraunces_400Regular, Fraunces_600SemiBold } from '@expo-googl
 import { AppStateProvider, useAppState } from './src/state/AppState';
 import { LoginScreen, VerifyScreen, ProfileScreen, RolePickerScreen } from './src/screens/auth';
 import { CardScreen, ReferralsScreen, WalletScreen } from './src/screens/referrer';
-import { EnterCodeScreen, InterestFormScreen, ReferredStatusScreen } from './src/screens/referred';
+import { EnterCodeScreen, BookingFormScreen, ReferredStatusScreen } from './src/screens/referred';
 import { isMockMode } from './src/api/client';
 import { colors } from './src/theme';
 
@@ -61,7 +61,7 @@ function ReferrerTabs() {
       <Tabs.Screen name="Wallet" component={WalletScreen} options={{ tabBarIcon: (p) => <TabIcon glyph="◈" {...p} /> }} />
       {alsoReferred && (
         <Tabs.Screen
-          name="My visit"
+          name="Appointment"
           component={ReferredStatusScreen}
           options={{ tabBarIcon: (p) => <TabIcon glyph="✦" {...p} /> }}
         />
@@ -105,7 +105,7 @@ function Router() {
       ) : roles.includes('referred') ? (
         <Stack.Navigator screenOptions={{ headerShown: false }}>
           <Stack.Screen name="EnterCode" component={EnterCodeScreen} />
-          <Stack.Screen name="InterestForm" component={InterestFormScreen} />
+          <Stack.Screen name="BookingForm" component={BookingFormScreen} />
           <Stack.Screen name="ReferredStatus" component={ReferredStatusScreen} />
         </Stack.Navigator>
       ) : (

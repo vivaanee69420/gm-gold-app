@@ -62,7 +62,11 @@ export const roleSchema = z.object({
 export const referralSubmitSchema = z.object({
   code: referralCodeSchema,
   fullName: z.string().trim().min(2).max(120),
-  treatmentInterest: z.enum(TREATMENT_INTERESTS),
+  // Booking-first flow: contact details instead of an interest question. Email and
+  // phone are required in the app's form; optional here so staff entry stays possible.
+  email: z.string().trim().email().max(254).optional(),
+  phone: z.string().trim().min(5).max(20).optional(),
+  treatmentInterest: z.enum(TREATMENT_INTERESTS).default('not_sure'),
   preferredPracticeId: z.string().uuid(),
   consent: z.literal(true),
   consentVersion: z.string().min(1),

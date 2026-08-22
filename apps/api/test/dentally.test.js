@@ -265,3 +265,40 @@ describe('POST /webhooks/dentally', () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe('booking-first flow: the Dentally appointment confirms the referral', () => {
+  it('a future appointment for the referred phone moves the referral to booked with its time', async () => {
+    const referrer = await signIn('+447700930001');
+    await request(app).post('/me/profile').set(auth(referrer.token)).send({ firstName: 'Rita', lastName: 'Referrer', notifyOptIn: true });
+    const role = await request(app).post('/me/role').set(auth(referrer.token)).send({ role: 'referrer' });
+    const code = role.body.user.referralCode;
+
+    // The friend leaves contact details (email captured, no interest question).
+    const friend = await signIn('+447700930002');
+    const sub = await request(app).post('/referrals').set(auth(friend.token)).send({
+      code,
+      fullName: 'Fred Friend',
+      email: 'fred@example.com',
+      preferredPracticeId: agents.practiceId,
+      consent: true,
+      consentVersion: 'referred-v1-2026-08',
+    });
+    expect(sub.status).toBe(200);
+
+    // They book on the practice's Dentally page → the appointment reaches the sync feed.
+    const startsAt = new Date(base + 5 * 86_400_000).toISOString();
+    stub.stubAddBookedAppointment({ phone: '+447700930002', startsAt, updatedAt: ts() });
+    const summary = await runSync('test');
+    expect(summary.bookingsDetected).toBe(1);
+
+    const status = await request(app).get('/referrals/referred-status').set(auth(friend.token));
+    expect(status.body.status).toBe('booked');
+    expect(new Date(status.body.appointmentStartsAt).toISOString()).toBe(startsAt);
+
+    const { rows } = await db.query(
+      `select referred_email, appointment_dentally_id from referrals where referred_phone='+447700930002'`,
+    );
+    expect(rows[0].referred_email).toBe('fred@example.com');
+    expect(rows[0].appointment_dentally_id).toMatch(/^appointment-/);
+  });
+});

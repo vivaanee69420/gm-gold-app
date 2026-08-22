@@ -83,10 +83,15 @@ function mockRespond(path, options = {}) {
   if (path === '/referrals/mine') return { referrals: mock.referrals };
   if (path === '/wallet') return { wallet: mock.wallet };
   if (path === '/referrals') {
-    return { ok: true, referral: { id: 'r-new', status: 'new' }, practiceName: mock.practices.find((p) => p.id === body.preferredPracticeId)?.name ?? 'the practice' };
+    return {
+      ok: true,
+      referral: { id: 'r-new', status: 'new' },
+      practiceName: mock.practices.find((p) => p.id === body.preferredPracticeId)?.name ?? 'the practice',
+      bookingUrl: null,
+    };
   }
   if (path === '/referrals/referred-status') {
-    return { status: 'new', practiceName: 'Ashford', referrerName: 'Sarah' };
+    return { status: 'new', practiceName: 'Ashford', referrerName: 'Sarah', bookingUrl: null, appointmentStartsAt: null };
   }
   if (path === '/payouts') {
     mock.wallet.openPayout = { id: 'p1', amountPennies: mock.wallet.balancePennies, practiceName: 'Ashford', status: 'open' };

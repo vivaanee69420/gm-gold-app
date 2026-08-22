@@ -71,6 +71,8 @@ const liveClient = {
       id: String(a.id),
       patientId: String(a.patient_id),
       siteId: a.site_id != null ? String(a.site_id) : null,
+      startsAt: a.start_time ?? null,
+      cancelled: a.cancelled_at != null,
       completedAt: a.completed_at ?? null,
       updatedAt: a.updated_at ?? null,
     }));
@@ -149,7 +151,7 @@ const dentalOsClient = {
   },
   async listAppointments({ updatedAfter }) {
     const { rows } = await dosQuery(
-      `select a.id, a.contact_id, a.status, a.ends_at, a.updated_at, p.pms_site_id as site_id
+      `select a.id, a.contact_id, a.status, a.starts_at, a.ends_at, a.updated_at, p.pms_site_id as site_id
        from appointments a left join practices p on p.id = a.practice_id
        where a.updated_at > $1
        order by a.updated_at asc limit ${DOS_PAGE}`,
@@ -159,6 +161,8 @@ const dentalOsClient = {
       id: String(r.id),
       patientId: r.contact_id ? String(r.contact_id) : null,
       siteId: r.site_id ?? null,
+      startsAt: iso(r.starts_at),
+      cancelled: r.status === 'cancelled',
       completedAt: r.status === 'completed' ? iso(r.ends_at ?? r.updated_at) : null,
       updatedAt: iso(r.updated_at),
     }));
@@ -208,6 +212,29 @@ export function stubAddPatient({ phone, siteId = null, updatedAt = new Date().to
   const patient = { id: String(stubStore.nextId++), phone: normalizePhone(phone), siteId, updatedAt };
   stubStore.patients.push(patient);
   return patient;
+}
+
+/** One call = a patient (reused by phone if known) + a BOOKED future appointment. */
+export function stubAddBookedAppointment({
+  phone,
+  siteId = null,
+  startsAt = new Date(Date.now() + 2 * 86_400_000).toISOString(),
+  updatedAt = new Date().toISOString(),
+}) {
+  const e164 = normalizePhone(phone);
+  let patient = stubStore.patients.find((p) => p.phone === e164);
+  if (!patient) patient = stubAddPatient({ phone, siteId, updatedAt });
+  const appointment = {
+    id: String(stubStore.nextId++),
+    patientId: patient.id,
+    siteId: siteId ?? patient.siteId,
+    startsAt,
+    cancelled: false,
+    completedAt: null,
+    updatedAt,
+  };
+  stubStore.appointments.push(appointment);
+  return { patient, appointment };
 }
 
 /** One call = a patient (reused by phone if known) + a completed appointment + a paid invoice. */

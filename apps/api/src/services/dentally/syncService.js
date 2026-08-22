@@ -178,17 +178,75 @@ async function processCompletedPage(client, appointments) {
   return created;
 }
 
+/**
+ * One page of appointments → booked referrals. A future, uncancelled appointment for
+ * a phone with an open referral (new/contacted) confirms the friend's Dentally booking:
+ * the referral moves to 'booked' with the appointment time, the app's "Your appointment"
+ * page fills in, and the referrer is notified. Rebooking refreshes the stored time.
+ */
+async function processBookedPage(client, appointments) {
+  const upcoming = appointments.filter((a) => a.startsAt && !a.completedAt && !a.cancelled && a.patientId);
+  if (!upcoming.length) return 0;
+
+  const patients = new Map();
+  for (const a of upcoming) {
+    if (!patients.has(a.patientId)) patients.set(a.patientId, await client.getPatient(a.patientId));
+  }
+  const phones = [...new Set([...patients.values()].filter((p) => p?.phone).map((p) => p.phone))];
+  if (!phones.length) return 0;
+  const { rows: referrals } = await db.query(
+    `select id, referrer_id, referred_name, referred_phone, status, appointment_dentally_id
+     from referrals
+     where referred_phone = any($1) and status in ('new','contacted','booked')`,
+    [phones],
+  );
+  if (!referrals.length) return 0;
+
+  let booked = 0;
+  for (const appointment of upcoming) {
+    const patient = patients.get(appointment.patientId);
+    if (!patient?.phone) continue;
+    for (const referral of referrals.filter((r) => r.referred_phone === patient.phone)) {
+      const fromStatus = referral.status;
+      const isNewBooking = fromStatus !== 'booked';
+      // Already booked: only refresh the time for the SAME appointment (a reschedule).
+      if (!isNewBooking && referral.appointment_dentally_id !== `appointment-${appointment.id}`) continue;
+      const { rows: updated } = await db.query(
+        `update referrals set status='booked', appointment_dentally_id=$2, appointment_starts_at=$3
+         where id=$1 and status in ('new','contacted','booked') returning id`,
+        [referral.id, `appointment-${appointment.id}`, appointment.startsAt],
+      );
+      if (!updated[0] || !isNewBooking) continue;
+      booked += 1;
+      referral.status = 'booked';
+      referral.appointment_dentally_id = `appointment-${appointment.id}`;
+      await logEvent(db, {
+        entityType: 'referral', entityId: referral.id, action: 'status_changed',
+        fromValue: fromStatus, toValue: 'booked', reason: `dentally appointment-${appointment.id}`,
+      });
+      await db.query(
+        `insert into notification_outbox (recipient_kind, recipient_id, template, payload)
+         values ('user',$1,'friend_booked',$2)`,
+        [referral.referrer_id, JSON.stringify({ friendName: referral.referred_name.split(' ')[0] })],
+      );
+    }
+  }
+  return booked;
+}
+
 async function scanCompletions(client) {
   let proposals = 0;
+  let bookings = 0;
   await drainPages(
     APPTS_CURSOR,
     (updatedAfter) => client.listAppointments({ updatedAfter }),
     async (appointments) => {
+      bookings += await processBookedPage(client, appointments);
       proposals += await processCompletedPage(client, appointments);
       return appointments.length;
     },
   );
-  return proposals;
+  return { proposals, bookings };
 }
 
 /** FR-05 auto-resolve: pending_review referrers with a now-clean index match become verified. */
@@ -253,10 +311,10 @@ export async function runSync(trigger = 'manual') {
       try {
         const client = dentallyClient(mode);
         const patientsIndexed = await refreshPatientIndex(client);
-        const proposalsCreated = await scanCompletions(client);
+        const { proposals: proposalsCreated, bookings: bookingsDetected } = await scanCompletions(client);
         const verificationsResolved = await retryPendingVerifications();
-        const summary = { trigger, patientsIndexed, proposalsCreated, verificationsResolved };
-        if (proposalsCreated || verificationsResolved) console.log('[dentally] sync', JSON.stringify(summary));
+        const summary = { trigger, patientsIndexed, proposalsCreated, bookingsDetected, verificationsResolved };
+        if (proposalsCreated || bookingsDetected || verificationsResolved) console.log('[dentally] sync', JSON.stringify(summary));
         return summary;
       } finally {
         await lockClient.query(`select pg_advisory_unlock(hashtext('dentally_sync'))`);
