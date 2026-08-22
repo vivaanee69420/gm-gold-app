@@ -99,6 +99,20 @@ Deploy by hand with `railway up --service api|admin`, or push to `main` once the
 Staging runs dev OTP mode and the dev admin gate — do not point real patient data at it until
 real admin auth (Supabase email) lands.
 
+## Ship an app update (OTA)
+
+JS/UI changes reach installed .apks over the air — no store, no rebuild:
+
+```bash
+cd apps/mobile
+npx eas-cli update --branch preview-live-api --environment preview --message "what changed"
+```
+
+Phones apply it on the second full restart. `EXPO_PUBLIC_API_URL` (staging) lives in the EAS
+"preview" environment so every update bundle carries it — without it the app can't find the API
+and falls back to mock "Preview data". Native changes (new packages, app.json version bumps)
+need a full rebuild instead: `npx eas-cli build --profile preview-live-api --platform android`.
+
 ## Demo the loop
 
 1. App: sign in → "I'm a GM Dental patient" → your card shows a live code.
