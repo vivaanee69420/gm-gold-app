@@ -151,15 +151,18 @@ const dentalOsClient = {
   },
   async listAppointments({ updatedAfter }) {
     const { rows } = await dosQuery(
-      `select a.id, a.contact_id, a.status, a.starts_at, a.ends_at, a.updated_at, p.pms_site_id as site_id
+      `select a.id, a.contact_id, a.pms_patient_id, a.status, a.starts_at, a.ends_at, a.updated_at,
+              p.pms_site_id as site_id
        from appointments a left join practices p on p.id = a.practice_id
        where a.updated_at > $1
        order by a.updated_at asc limit ${DOS_PAGE}`,
       [updatedAfter],
     );
+    // ~40% of webhook-fed appointments arrive without contact_id but WITH Dentally's
+    // own patient id — the pms: prefix routes those through the fallback lookup below.
     const items = rows.map((r) => ({
       id: String(r.id),
-      patientId: r.contact_id ? String(r.contact_id) : null,
+      patientId: r.contact_id ? String(r.contact_id) : r.pms_patient_id ? `pms:${r.pms_patient_id}` : null,
       siteId: r.site_id ?? null,
       startsAt: iso(r.starts_at),
       cancelled: r.status === 'cancelled',
@@ -170,11 +173,12 @@ const dentalOsClient = {
   },
   async getPatient(id) {
     if (!id) return null;
+    const byPms = String(id).startsWith('pms:');
     const { rows } = await dosQuery(
       `select c.id, c.phone, p.pms_site_id as site_id, c.updated_at
        from contacts c left join practices p on p.id = c.practice_id
-       where c.id = $1`,
-      [id],
+       where ${byPms ? 'c.pms_external_id = $1' : 'c.id = $1'} limit 1`,
+      [byPms ? String(id).slice(4) : id],
     );
     const r = rows[0];
     return r
@@ -182,9 +186,13 @@ const dentalOsClient = {
       : null;
   },
   async listInvoices({ patientId }) {
+    const byPms = String(patientId).startsWith('pms:');
     const { rows } = await dosQuery(
-      `select id, paid, dated_on, amount_pence from invoices where contact_id = $1`,
-      [patientId],
+      byPms
+        ? `select id, paid, dated_on, amount_pence from invoices
+           where contact_id = (select id from contacts where pms_external_id = $1 limit 1)`
+        : `select id, paid, dated_on, amount_pence from invoices where contact_id = $1`,
+      [byPms ? String(patientId).slice(4) : patientId],
     );
     return {
       items: rows.map((r) => ({
