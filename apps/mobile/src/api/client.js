@@ -30,12 +30,11 @@ const mock = {
   otp: '123456',
   user: null,
   practices: [
-    { id: '11111111-1111-4111-8111-111111111111', name: 'Sidcup' },
-    { id: '22222222-2222-4222-8222-222222222222', name: 'Bexley' },
-    { id: '33333333-3333-4333-8333-333333333333', name: 'Bromley' },
-    { id: '44444444-4444-4444-8444-444444444444', name: 'Dartford' },
-    { id: '55555555-5555-4555-8555-555555555555', name: 'Orpington' },
-    { id: '66666666-6666-4666-8666-666666666666', name: 'Sevenoaks' },
+    { id: '11111111-1111-4111-8111-111111111111', name: 'Ashford' },
+    { id: '22222222-2222-4222-8222-222222222222', name: 'Barnet' },
+    { id: '33333333-3333-4333-8333-333333333333', name: 'Bexleyheath' },
+    { id: '44444444-4444-4444-8444-444444444444', name: 'Rochester' },
+    { id: '55555555-5555-4555-8555-555555555555', name: 'Warwick Lodge' },
   ],
   referrals: [
     { id: 'r1', friendName: 'Priya M.', status: 'booked', createdAt: '2026-08-02' },
@@ -52,7 +51,7 @@ const mock = {
       { id: 'l1', kind: 'credit', amountPennies: 2000, note: 'Tom H. completed treatment', at: '2026-08-01' },
       { id: 'l2', kind: 'credit', amountPennies: 2000, note: 'Referral completed', at: '2026-07-02' },
       { id: 'l3', kind: 'credit', amountPennies: 2000, note: 'Referral completed', at: '2026-06-15' },
-      { id: 'l4', kind: 'debit', amountPennies: -8000, note: 'Collected at Sidcup', at: '2026-06-20' },
+      { id: 'l4', kind: 'debit', amountPennies: -8000, note: 'Collected at Ashford', at: '2026-06-20' },
     ],
   },
 };
@@ -87,10 +86,10 @@ function mockRespond(path, options = {}) {
     return { ok: true, referral: { id: 'r-new', status: 'new' }, practiceName: mock.practices.find((p) => p.id === body.preferredPracticeId)?.name ?? 'the practice' };
   }
   if (path === '/referrals/referred-status') {
-    return { status: 'new', practiceName: 'Sidcup', referrerName: 'Sarah' };
+    return { status: 'new', practiceName: 'Ashford', referrerName: 'Sarah' };
   }
   if (path === '/payouts') {
-    mock.wallet.openPayout = { id: 'p1', amountPennies: mock.wallet.balancePennies, practiceName: 'Sidcup', status: 'open' };
+    mock.wallet.openPayout = { id: 'p1', amountPennies: mock.wallet.balancePennies, practiceName: 'Ashford', status: 'open' };
     return { ok: true, payout: mock.wallet.openPayout };
   }
   return { error: 'mock_not_implemented', path };

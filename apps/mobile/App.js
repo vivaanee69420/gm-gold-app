@@ -43,6 +43,10 @@ function TabIcon({ glyph, focused }) {
 }
 
 function ReferrerTabs() {
+  // A referred friend who joined the chain keeps their own treatment journey
+  // in a "My visit" tab alongside the full referrer experience.
+  const { user } = useAppState();
+  const alsoReferred = user?.roles?.includes('referred');
   return (
     <Tabs.Navigator
       screenOptions={{
@@ -55,6 +59,13 @@ function ReferrerTabs() {
       <Tabs.Screen name="Card" component={CardScreen} options={{ tabBarIcon: (p) => <TabIcon glyph="▣" {...p} /> }} />
       <Tabs.Screen name="Referrals" component={ReferralsScreen} options={{ tabBarIcon: (p) => <TabIcon glyph="☰" {...p} /> }} />
       <Tabs.Screen name="Wallet" component={WalletScreen} options={{ tabBarIcon: (p) => <TabIcon glyph="◈" {...p} /> }} />
+      {alsoReferred && (
+        <Tabs.Screen
+          name="My visit"
+          component={ReferredStatusScreen}
+          options={{ tabBarIcon: (p) => <TabIcon glyph="✦" {...p} /> }}
+        />
+      )}
     </Tabs.Navigator>
   );
 }
