@@ -42,8 +42,9 @@ read-only role `gm_referral_reader` (SELECT on contacts/appointments/invoices/pr
 `gmref_doorbell` triggers on Dental Os (appointments→completed, invoices→paid) POST to
 `/webhooks/dentally` with the `x-gmref-secret` header (= `DENTALLY_WEBHOOK_SECRET`), so a
 completion syncs in seconds; the 15-min cron is the safety net. Real practices (Ashford, Barnet,
-Bexleyheath, Rochester, Warwick Lodge) are seeded by migration 0006 with their true Dentally site
-uuids in `practices.dentally_site_id`; app screens auto-refresh every 30s so credits appear
+Bexleyheath, Rochester — Warwick Lodge seeded but deactivated 2026-08-22) are seeded by migrations
+0006/0009 with their true Dentally site uuids in `practices.dentally_site_id` and their online
+booking portals in `practices.booking_url`; app screens auto-refresh every 30s so credits appear
 without pull-to-refresh.
 
 Effective mode per request: `DENTALLY_MODE` override → `DENTAL_OS_DATABASE_URL` (**dentalos**) →

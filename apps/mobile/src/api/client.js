@@ -34,7 +34,6 @@ const mock = {
     { id: '22222222-2222-4222-8222-222222222222', name: 'Barnet' },
     { id: '33333333-3333-4333-8333-333333333333', name: 'Bexleyheath' },
     { id: '44444444-4444-4444-8444-444444444444', name: 'Rochester' },
-    { id: '55555555-5555-4555-8555-555555555555', name: 'Warwick Lodge' },
   ],
   referrals: [
     { id: 'r1', friendName: 'Priya M.', status: 'booked', createdAt: '2026-08-02' },

@@ -13,9 +13,11 @@ Created by /plan-eng-review on 2026-08-14.
 
 ## Booking-first referred flow (built 2026-08-22)
 
-- [ ] **Per-practice Dentally booking links** (owner: Ruhith) — `practices.booking_url` exists but is
-  empty; until each practice's link is set, the app falls back to "the practice will call you".
-  Set with: `update practices set booking_url='https://…' where name='Ashford';` (repeat per practice).
+- [x] **Per-practice Dentally booking links** — DONE for Ashford, Barnet, Bexleyheath, Rochester
+  (migration 0009, provided by Ruhith 2026-08-22). Warwick Lodge removed from the app (deactivated)
+  per Ruhith, same day. Remaining:
+  - [ ] ⚠ All four portals return CloudFront 403 from a non-UK connection (likely geo-restriction) —
+    verify they open from a UK network/phone before promoting the flow.
 - [ ] **Dental Os doorbell for bookings** — the trigger only fires on appointment-completed +
   invoice-paid, so new bookings confirm on the 15-min poll (or admin "Sync now"), not in seconds.
   Extend the Dental Os trigger to also ping on appointment insert/update when instant confirmation matters.
