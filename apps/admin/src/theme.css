@@ -388,6 +388,65 @@ button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: de
 .pipeline-group .lost-confirm input { margin-top: 2px; }
 .pipeline-group .lost-confirm button { margin-top: 8px; }
 
+/* ---- referral record: the audit register ---- */
+
+.record-search {
+  max-width: 340px;
+  margin-bottom: 14px;
+}
+
+.record-scroll { overflow-x: auto; }
+
+.record-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.record-table th {
+  text-align: left;
+  padding: 6px 18px 8px 0;
+  border-bottom: 1px solid var(--hairline);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mist);
+  white-space: nowrap;
+}
+
+.record-table td {
+  padding: 11px 18px 11px 0;
+  border-bottom: 1px solid var(--hairline-soft);
+  vertical-align: top;
+}
+.record-table tr:last-child td { border-bottom: none; }
+.record-table td .meta { margin-top: 1px; }
+.record-table .chip { white-space: nowrap; }
+
+.record-code {
+  font-family: var(--mono);
+  font-size: 13px;
+  letter-spacing: 1px;
+}
+
+.record-credited { color: var(--success); }
+.record-due {
+  color: var(--boardroom);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border: 1px solid var(--gold);
+  border-radius: 999px;
+  background: rgba(201, 169, 97, 0.16);
+  white-space: nowrap;
+}
+
+.chip-status-treatment_completed { color: var(--success); border-color: rgba(79, 125, 67, 0.4); }
+.chip-status-lost { color: var(--danger); border-color: rgba(176, 80, 56, 0.35); }
+
 /* ---- payouts settled drawer ---- */
 
 .payouts details { margin-top: 12px; }

@@ -176,10 +176,19 @@ export function buildApp() {
     const scope = practiceScope(req);
     const { rows } = await db.query(
       `select r.id, r.referred_name, r.referred_phone, r.status, r.treatment_interest,
-              p.name as practice, u.first_name || ' ' || coalesce(u.last_name,'') as referrer
+              r.created_at::date::text as created_at, r.source,
+              p.name as practice, u.first_name || ' ' || coalesce(u.last_name,'') as referrer,
+              u.phone as referrer_phone, rc.code as referrer_code,
+              wl.amount_pennies as commission_pennies, wl.created_at::date::text as commission_at
        from referrals r
        left join practices p on p.id = r.preferred_practice_id
        join users u on u.id = r.referrer_id
+       left join lateral (
+         select code from referral_codes
+         where user_id = r.referrer_id and active
+         order by created_at desc limit 1
+       ) rc on true
+       left join wallet_ledger wl on wl.referral_id = r.id and wl.kind = 'credit'
        ${scope ? 'where r.preferred_practice_id = any($1::uuid[])' : ''}
        order by r.created_at desc`,
       scope ? [scope] : [],

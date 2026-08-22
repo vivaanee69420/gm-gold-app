@@ -14,6 +14,7 @@ import StatsStrip from './components/StatsStrip.jsx';
 import ReferralReviewQueue from './components/ReferralReviewQueue.jsx';
 import FunnelReport from './components/FunnelReport.jsx';
 import TopReferrers from './components/TopReferrers.jsx';
+import ReferralRecord from './components/ReferralRecord.jsx';
 import { Zone } from './components/ui.jsx';
 
 export default function App() {
@@ -120,6 +121,7 @@ export default function App() {
             </div>
           </Zone>
           <PipelineBoard referrals={data.referrals} onChanged={loadAll} notify={notify} />
+          <ReferralRecord referrals={data.referrals} />
           <Zone label="Reports">
             <div className="zone-grid-wide">
               <FunnelReport
