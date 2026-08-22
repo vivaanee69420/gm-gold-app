@@ -14,6 +14,7 @@ import StatsStrip from './components/StatsStrip.jsx';
 import ReferralReviewQueue from './components/ReferralReviewQueue.jsx';
 import FunnelReport from './components/FunnelReport.jsx';
 import TopReferrers from './components/TopReferrers.jsx';
+import { Zone } from './components/ui.jsx';
 
 export default function App() {
   const [signedIn, setSignedIn] = useState(isSignedIn());
@@ -105,37 +106,43 @@ export default function App() {
         </div>
       )}
       {!data ? (
-        <p className="empty">Loading…</p>
+        <p className="loading">Loading…</p>
       ) : (
         <main>
-          <div className="row">
-            <Levers
-              key={`${data.stats.commissionPennies}:${data.settings.payout_threshold_pennies}:${data.settings.payout_expiry_days}`}
-              commissionPennies={data.stats.commissionPennies}
-              settings={data.settings}
-              onChanged={loadAll}
-              notify={notify}
-            />
-            <ConfirmQueue proposals={data.proposals} onChanged={loadAll} notify={notify} />
-            <PayoutQueue payouts={data.payouts} onChanged={loadAll} notify={notify} />
-          </div>
-          <div className="row">
-            <DentallyCard status={data.dentally} onChanged={loadAll} notify={notify} />
-            <VerificationQueue verifications={data.verifications} onChanged={loadAll} notify={notify} />
-            <AgingReport aging={data.aging} days={data.agingDays} />
-          </div>
-          <div className="row">
-            <ReferralReviewQueue reviews={data.reviews} onChanged={loadAll} notify={notify} />
-            <FunnelReport
-              key={`invites:${data.funnel.inviteSent}`}
-              funnel={data.funnel}
-              onChanged={loadAll}
-              notify={notify}
-            />
-            <TopReferrers topReferrers={data.topReferrers} />
-          </div>
-          <PipelineBoard referrals={data.referrals} onChanged={loadAll} notify={notify} />
           <StatsStrip stats={data.stats} />
+          <Zone label="Needs attention">
+            <div className="zone-grid">
+              <ConfirmQueue proposals={data.proposals} onChanged={loadAll} notify={notify} />
+              <PayoutQueue payouts={data.payouts} onChanged={loadAll} notify={notify} />
+              <VerificationQueue verifications={data.verifications} onChanged={loadAll} notify={notify} />
+              <ReferralReviewQueue reviews={data.reviews} onChanged={loadAll} notify={notify} />
+              <AgingReport aging={data.aging} days={data.agingDays} />
+            </div>
+          </Zone>
+          <PipelineBoard referrals={data.referrals} onChanged={loadAll} notify={notify} />
+          <Zone label="Reports">
+            <div className="zone-grid-wide">
+              <FunnelReport
+                key={`invites:${data.funnel.inviteSent}`}
+                funnel={data.funnel}
+                onChanged={loadAll}
+                notify={notify}
+              />
+              <TopReferrers topReferrers={data.topReferrers} />
+            </div>
+          </Zone>
+          <Zone label="Setup">
+            <div className="zone-grid-wide">
+              <Levers
+                key={`${data.stats.commissionPennies}:${data.settings.payout_threshold_pennies}:${data.settings.payout_expiry_days}`}
+                commissionPennies={data.stats.commissionPennies}
+                settings={data.settings}
+                onChanged={loadAll}
+                notify={notify}
+              />
+              <DentallyCard status={data.dentally} onChanged={loadAll} notify={notify} />
+            </div>
+          </Zone>
         </main>
       )}
     </div>

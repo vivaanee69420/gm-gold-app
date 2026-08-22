@@ -136,7 +136,7 @@ export function ProfileScreen({ navigation }) {
         <View style={styles.optRow}>
           <View style={{ flex: 1, paddingRight: space(3) }}>
           <Body>Message me about my referrals and rewards</Body>
-          <Body muted style={{ fontSize: 12, marginTop: 2 }}>WhatsApp or SMS. You can turn this off any time.</Body>
+          <Body muted style={{ fontSize: 12, marginTop: 2 }}>Email or SMS. You can turn this off any time.</Body>
           </View>
           <Switch
             value={notifyOptIn}
@@ -154,11 +154,15 @@ export function ProfileScreen({ navigation }) {
 export function RolePickerScreen() {
   const { pickRole } = useAppState();
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
 
   const choose = async (role) => {
     setBusy(true);
+    setError(null);
     try {
       await pickRole(role); // App.js switches stacks based on the updated user
+    } catch {
+      setError('Could not save your choice — check your connection and try again.');
     } finally {
       setBusy(false);
     }
@@ -172,6 +176,7 @@ export function RolePickerScreen() {
         <Body muted style={{ marginBottom: space(6) }}>
           You can do both later — this just sets up your first screen.
         </Body>
+        {error ? <Text style={styles.error}>{error}</Text> : null}
         <GoldButton label="I’m a GM Dental patient — I want to refer friends" onPress={() => choose('referrer')} disabled={busy} />
         <GoldButton label="A friend referred me — I have their code" variant="ghost" onPress={() => choose('referred')} disabled={busy} />
       </View>

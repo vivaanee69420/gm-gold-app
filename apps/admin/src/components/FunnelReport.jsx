@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { api } from '../api/client.js';
+import { Card, ListRow } from './ui.jsx';
 
 // FR-25/FR-28: the funnel with the tripwire metric on top. invite_sent is externally
 // sourced (GHL campaigns) and hand-entered; share_tapped is shown but noisy —
@@ -29,10 +30,11 @@ export default function FunnelReport({ funnel, onChanged, notify }) {
     ['Commissions credited', funnel.commissionsCredited],
     ['Payouts collected', funnel.payoutsPaid],
   ];
+  const max = Math.max(...steps.map(([, value]) => value ?? 0), 1);
+  const hasAny = steps.some(([, value]) => (value ?? 0) > 0);
 
   return (
-    <section className="card funnel">
-      <h2>Funnel</h2>
+    <Card title="Funnel" className="funnel">
       <div className="stat">
         <p className="stat-label">Tripwire · code → submitted</p>
         <p className="stat-value">
@@ -44,32 +46,33 @@ export default function FunnelReport({ funnel, onChanged, notify }) {
             : 'a collapsing rate triggers the web-form fallback decision (DESIGN.md)'}
         </p>
       </div>
-      <ul>
-        <li>
-          <form onSubmit={saveInvites}>
-            <div>
-              <label htmlFor="invite-count">Invites sent (manual)</label>
-              <input
-                id="invite-count"
-                inputMode="numeric"
-                value={invites}
-                onChange={(e) => setInvites(e.target.value)}
-              />
-              <button type="submit" className="ghost">Save</button>
-            </div>
-            <p className="meta">entered by hand from GHL campaign counts — CSV upload is Phase 2</p>
-          </form>
-        </li>
+      <ul className="funnel-steps">
         {steps.map(([label, value, note]) => (
-          <li key={label}>
-            <div>
-              <strong>{label}</strong>
-              <span className="amount">{value}</span>
-            </div>
-            {note && <p className="meta">{note}</p>}
-          </li>
+          <ListRow key={label} title={label} value={value} meta={note}>
+            {hasAny && (
+              <div
+                className={value ? 'funnel-bar' : 'funnel-bar funnel-bar-zero'}
+                style={{ width: `${Math.max(((value ?? 0) / max) * 100, 1)}%` }}
+              />
+            )}
+          </ListRow>
         ))}
       </ul>
-    </section>
+      <form className="invites-form" onSubmit={saveInvites}>
+        <div className="invites-line">
+          <div>
+            <label htmlFor="invite-count">Invites sent (manual)</label>
+            <input
+              id="invite-count"
+              inputMode="numeric"
+              value={invites}
+              onChange={(e) => setInvites(e.target.value)}
+            />
+          </div>
+          <button type="submit" className="ghost">Save</button>
+        </div>
+        <p className="meta">entered by hand from GHL campaign counts — CSV upload is Phase 2</p>
+      </form>
+    </Card>
   );
 }

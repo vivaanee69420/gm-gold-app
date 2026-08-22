@@ -22,6 +22,7 @@ const BASE_URL = resolveBaseUrl();
 const TOKEN_KEY = 'gmref.session.token';
 
 let mockMode = false;
+let liveSeen = false; // once the real API has answered, never silently swap to mock
 export const isMockMode = () => mockMode;
 
 // ---------- mock fixtures (mirror the API's response shapes) ----------
@@ -66,10 +67,12 @@ function mockRespond(path, options = {}) {
   }
   if (path === '/me') return { user: mock.user, source: 'mock' };
   if (path === '/me/profile') {
+    mock.user = mock.user ?? { phone: null, firstName: null, roles: [], verificationStatus: 'unverified' };
     Object.assign(mock.user, { firstName: body.firstName, lastName: body.lastName, notifyOptIn: body.notifyOptIn });
     return { ok: true, user: mock.user };
   }
   if (path === '/me/role') {
+    mock.user = mock.user ?? { phone: null, firstName: null, roles: [], verificationStatus: 'unverified' };
     mock.user.roles = [...new Set([...(mock.user.roles || []), body.role])];
     if (body.role === 'referrer') {
       mock.user.verificationStatus = 'verified';
@@ -106,16 +109,24 @@ async function request(path, { method = 'GET', body } = {}) {
   };
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 4000);
+    // Generous: /me/role verifies against the Dental Os patient index and can
+    // take several seconds; an abort mid-write must not masquerade as success.
+    const timer = setTimeout(() => controller.abort(), 15000);
     const res = await fetch(`${BASE_URL}${path}`, { ...options, signal: controller.signal });
     clearTimeout(timer);
     mockMode = false;
+    liveSeen = true;
     const json = await res.json();
     if (!res.ok) throw Object.assign(new Error(json.error || `http_${res.status}`), { api: true, payload: json });
     return json;
   } catch (err) {
     if (err.api) throw err; // real API said no — surface it
-    mockMode = true; // network-level failure — fall back so the UI stays alive
+    if (liveSeen) {
+      // The backend exists but this call failed (offline blip, timeout). Faking a
+      // mock answer here would show stale or false state — surface it instead.
+      throw Object.assign(new Error('network_unavailable'), { network: true });
+    }
+    mockMode = true; // backend never reachable — preview mode keeps the UI browsable
     return mockRespond(path, options);
   }
 }

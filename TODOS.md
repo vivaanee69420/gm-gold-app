@@ -7,7 +7,7 @@ Created by /plan-eng-review on 2026-08-14.
 
 - [x] **Dentally data — LIVE via Dental Os (2026-08-21, decision by Ruhith)**: the sync reads the central Dental Os DB (fed by Dentally webhooks) through read-only role `gm_referral_reader`; ~16k patients indexed on first backfill; `gmref_doorbell` triggers on Dental Os ping `/webhooks/dentally` for second-level latency. Real practices seeded (migration 0006). Direct-Dentally OAuth + token paths remain as built fallbacks (spike script kept). **The Dentally-credentials email is now OPTIONAL** — only needed if we ever switch to direct mode.
   - [ ] Deploy current code + env (`DATABASE_URL`, `DENTAL_OS_DATABASE_URL`, `DENTALLY_WEBHOOK_SECRET`) to Railway so the doorbell (which targets the staging URL) completes the instant-update chain in staging.
-- [ ] **Meta WhatsApp Business verification** (owner: Ruhith) — 2–4 weeks lead time; blocks `whatsapp_primary` mode only. → open question / FR-02a
+- [x] ~~**Meta WhatsApp Business verification**~~ — OBSOLETE (2026-08-22, decision by Ruhith): **email replaces WhatsApp** for auth OTP and reminders. Auth email first; reminder emails are a later phase. No Meta verification needed; `whatsapp_primary` mode is dropped from the plan. → new work item: pick an email provider + wire OTP-by-email alongside SMS.
 - [ ] **Accountant: cash-commission tax treatment** (owner: practice accountant) — blocks payout wording + terms. → open question 2
 - [ ] **Solicitor: incentive claims + UK GDPR Article 9 basis** (owner: solicitor) — blocks consent wording finalization + launch. → open question 5 / compliance checklist
 

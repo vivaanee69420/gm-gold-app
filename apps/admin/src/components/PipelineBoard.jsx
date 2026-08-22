@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { REFERRAL_STATUSES } from '@gm-referral/shared/schemas';
 import { api } from '../api/client.js';
+import { Card } from './ui.jsx';
 
 const LABELS = {
   new: 'New',
@@ -45,8 +46,7 @@ export default function PipelineBoard({ referrals, onChanged, notify }) {
   };
 
   return (
-    <section className="card pipeline">
-      <h2>Pipeline</h2>
+    <Card title="Pipeline" count={referrals.length} className="pipeline">
       {referrals.length === 0 && <p className="empty">No referrals yet.</p>}
       <div className="pipeline-groups">
         {REFERRAL_STATUSES.map((status) => {
@@ -54,9 +54,9 @@ export default function PipelineBoard({ referrals, onChanged, notify }) {
           if (group.length === 0) return null;
           return (
             <div className="pipeline-group" key={status}>
-              <h3>
+              <h4>
                 {LABELS[status]} <span className="count">{group.length}</span>
-              </h3>
+              </h4>
               <ul>
                 {group.map((r) => (
                   <li key={r.id}>
@@ -82,7 +82,7 @@ export default function PipelineBoard({ referrals, onChanged, notify }) {
                           value={lostDrafts[r.id]}
                           onChange={(e) => setLostDrafts((d) => ({ ...d, [r.id]: e.target.value }))}
                         />
-                        <button onClick={() => advance(r.id, 'lost', lostDrafts[r.id])}>Confirm lost</button>
+                        <button className="btn-primary" onClick={() => advance(r.id, 'lost', lostDrafts[r.id])}>Confirm lost</button>
                       </span>
                     )}
                   </li>
@@ -92,6 +92,6 @@ export default function PipelineBoard({ referrals, onChanged, notify }) {
           );
         })}
       </div>
-    </section>
+    </Card>
   );
 }

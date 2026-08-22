@@ -159,7 +159,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.gold,
   },
-  buttonLabel: { color: colors.black, fontSize: 15, fontWeight: '700', letterSpacing: 0.3 },
+  buttonLabel: { color: colors.black, fontSize: 15, fontWeight: '700', letterSpacing: 0.3, textAlign: 'center' },
   fieldLabel: { color: colors.mist, fontSize: 12, letterSpacing: 0.8, marginBottom: space(1.5), textTransform: 'uppercase' },
   input: {
     backgroundColor: colors.cardface,

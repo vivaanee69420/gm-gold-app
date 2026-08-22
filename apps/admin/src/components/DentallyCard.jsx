@@ -1,4 +1,5 @@
 import { api } from '../api/client.js';
+import { Card } from './ui.jsx';
 
 const MODE_LABEL = {
   dentalos: 'Live — reading Dentally data from Dental Os',
@@ -45,8 +46,7 @@ export default function DentallyCard({ status, onChanged, notify }) {
   const { mode, oauthConfigured, envToken, connection } = status;
 
   return (
-    <section className="card dentally-card">
-      <h2>Dentally</h2>
+    <Card title="Dentally" className="dentally-card">
       <p className="meta">{MODE_LABEL[mode] ?? mode}</p>
       {mode === 'dentalos' ? (
         <p className="meta">Completed &amp; paid treatments flow in from the central Dental Os database.</p>
@@ -63,17 +63,18 @@ export default function DentallyCard({ status, onChanged, notify }) {
       ) : oauthConfigured ? (
         <>
           <p className="meta">One click connects every practice under your Dentally account — no keys to copy.</p>
-          <button onClick={connect}>Connect Dentally</button>
+          <button className="btn-primary" onClick={connect}>Connect Dentally</button>
         </>
       ) : (
         <p className="empty">
-          Waiting on OAuth app credentials from Dentally — add DENTALLY_CLIENT_ID and
-          DENTALLY_CLIENT_SECRET to the API's .env, then this becomes a one-click connect.
+          Production reads Dentally through the central Dental Os database — set DENTAL_OS_DATABASE_URL
+          on the API and this switches to live automatically. Direct Dentally OAuth
+          (DENTALLY_CLIENT_ID / DENTALLY_CLIENT_SECRET) remains available as a fallback.
         </p>
       )}
       {mode !== 'off' && (
         <button className="ghost" onClick={syncNow}>Sync now</button>
       )}
-    </section>
+    </Card>
   );
 }

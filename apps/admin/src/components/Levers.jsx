@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { parseGBPToPennies } from '@gm-referral/shared/money';
 import { api } from '../api/client.js';
+import { Card } from './ui.jsx';
 
 const penniesToPounds = (pennies) => (pennies / 100).toFixed(2).replace(/\.00$/, '');
 
@@ -37,8 +38,7 @@ export default function Levers({ commissionPennies, settings, onChanged, notify 
   };
 
   return (
-    <section className="card levers">
-      <h2>Reward levers</h2>
+    <Card title="Reward levers" className="levers">
       <form onSubmit={save}>
         <label htmlFor="lever-commission">Commission per referral (£)</label>
         <input id="lever-commission" type="text" inputMode="decimal" value={commission} onChange={(e) => setCommission(e.target.value)} />
@@ -49,6 +49,6 @@ export default function Levers({ commissionPennies, settings, onChanged, notify 
         <button type="submit" disabled={saving}>Save changes</button>
       </form>
       <p className="fineprint">Changes apply to future confirmations and requests only.</p>
-    </section>
+    </Card>
   );
 }

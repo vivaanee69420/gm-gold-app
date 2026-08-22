@@ -1,7 +1,8 @@
-/* GM Referral admin — light workspace carrying the gold-card identity.
+/* GM Referral admin — the front-desk ledger.
    Token names mirror apps/mobile/src/theme.js (boardroom/gold/ivory/mist).
-   One bold element: the gold seam under the boardroom topbar; the sign-in
-   card is the gold member card itself. Everything else stays quiet. */
+   One bold element: the ledger line — the liability figure set large over the
+   gold seam at the top of the page (echoing the topbar seam). Everything else
+   stays quiet: labeled zones, hairline rules, gold reserved for counts and money. */
 
 :root {
   --boardroom: #0b2b26;
@@ -31,8 +32,8 @@ body {
   background: var(--paper);
   color: var(--ink);
   font-family: var(--body);
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 15px;
+  line-height: 1.55;
 }
 
 button { font: inherit; cursor: pointer; }
@@ -46,10 +47,13 @@ input, select { font: inherit; color: var(--ink); }
 /* ---- topbar: the boardroom band with its gold seam ---- */
 
 .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   display: flex;
   align-items: baseline;
-  gap: 12px;
-  padding: 14px 28px 12px;
+  gap: 14px;
+  padding: 16px 32px 14px;
   background: linear-gradient(180deg, var(--cardface), var(--boardroom));
   border-bottom: 2px solid transparent;
   border-image: var(--seam) 1;
@@ -69,40 +73,112 @@ input, select { font: inherit; color: var(--ink); }
   margin: 0;
   flex: 1;
   font-family: var(--display);
-  font-size: 19px;
+  font-size: 20px;
   font-weight: 400;
   color: var(--ivory);
 }
 
 .ghost {
   background: none;
-  border: 1px solid rgba(244, 239, 228, 0.35);
+  border: 1px solid rgba(11, 43, 38, 0.28);
   border-radius: 8px;
   color: inherit;
-  padding: 4px 12px;
+  padding: 5px 14px;
   font-size: 13px;
 }
-.ghost:hover { border-color: var(--goldbright); color: var(--goldbright); }
+.ghost:hover { border-color: var(--gold); color: var(--boardroom); }
 
-/* ---- layout ---- */
+.topbar .ghost, .toast .ghost { border-color: rgba(244, 239, 228, 0.35); }
+.topbar .ghost:hover, .toast .ghost:hover { border-color: var(--goldbright); color: var(--goldbright); }
+
+/* ---- page structure: labeled zones ---- */
 
 main {
-  max-width: 1180px;
+  max-width: 1240px;
   margin: 0 auto;
-  padding: 24px 28px 48px;
-  display: grid;
-  gap: 18px;
+  padding: 30px 32px 72px;
+  display: flex;
+  flex-direction: column;
+  gap: 40px;
 }
 
-.row {
+.loading {
+  margin: 0;
+  padding: 72px 0;
+  text-align: center;
+  color: var(--mist);
+}
+
+.zone-label {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0 0 16px;
+  font-family: var(--body);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--mist);
+}
+.zone-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--hairline-soft);
+}
+
+.zone-grid {
   display: grid;
-  grid-template-columns: 320px 1fr 360px;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+.zone-grid-wide {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
   gap: 18px;
   align-items: start;
 }
 
-@media (max-width: 980px) {
-  .row { grid-template-columns: 1fr; }
+/* ---- the ledger line: liability over the gold seam ---- */
+
+.overview {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 28px;
+  flex-wrap: wrap;
+  padding-bottom: 22px;
+  border-bottom: 2px solid transparent;
+  border-image: var(--seam) 1;
+}
+
+.stat-label {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mist);
+}
+
+.stat-value {
+  margin: 4px 0 0;
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 46px;
+  line-height: 1.05;
+  color: var(--boardroom);
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-counts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 460px;
 }
 
 /* ---- cards ---- */
@@ -114,48 +190,88 @@ main {
   padding: 18px 20px 20px;
 }
 
-.card h2 {
+.card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
   margin: 0 0 14px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--hairline-soft);
+}
+
+.card-head h3, .card h2 {
+  margin: 0;
+  flex: 1;
   font-family: var(--display);
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 600;
   color: var(--boardroom);
+}
+
+.count-badge {
+  min-width: 26px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--boardroom);
+  background: rgba(201, 169, 97, 0.22);
+  border: 1px solid rgba(201, 169, 97, 0.45);
+}
+.count-badge-zero {
+  color: var(--mist);
+  background: transparent;
+  border-color: var(--hairline-soft);
 }
 
 .card ul { list-style: none; margin: 0; padding: 0; }
 
-.meta { margin: 2px 0 0; font-size: 12px; color: var(--mist); }
-.empty { margin: 0; font-size: 13px; color: var(--mist); }
-.fineprint { margin: 12px 0 0; font-size: 12px; color: var(--mist); }
+/* every card list row: name left, figure right — no more collisions */
+.list-row { padding: 11px 0; border-bottom: 1px solid var(--hairline-soft); }
+.list-row:last-child { border-bottom: none; padding-bottom: 0; }
+.list-row:first-child { padding-top: 2px; }
+.list-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.list-line strong { font-weight: 600; }
+
+.meta { margin: 2px 0 0; font-size: 12.5px; color: var(--mist); overflow-wrap: anywhere; }
+.empty { margin: 0; font-size: 13.5px; color: var(--mist); }
+.fineprint { margin: 12px 0 0; font-size: 12.5px; color: var(--mist); }
 
 .amount {
   font-family: var(--display);
   font-weight: 600;
-  font-size: 17px;
+  font-size: 16px;
   color: var(--boardroom);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .chip {
   display: inline-block;
-  padding: 1px 10px;
+  padding: 2px 10px;
   border: 1px solid var(--hairline);
   border-radius: 999px;
   font-size: 12px;
   color: var(--mist);
-  background: transparent;
+  background: var(--surface);
 }
 .chip-paid { color: var(--success); border-color: rgba(79, 125, 67, 0.4); }
 .chip-cancelled, .chip-expired { color: var(--danger); border-color: rgba(176, 80, 56, 0.35); }
 
-/* ---- forms (levers, lost reason) ---- */
+/* ---- forms (levers, lost reason, invites) ---- */
 
 label {
   display: block;
   margin: 12px 0 4px;
   font-size: 11px;
+  font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--mist);
@@ -163,14 +279,15 @@ label {
 
 input, select {
   width: 100%;
-  padding: 7px 10px;
+  padding: 8px 10px;
   background: #fff;
   border: 1px solid var(--hairline);
   border-radius: 8px;
 }
 input:focus, select:focus { border-color: var(--gold); }
 
-button[type='submit'], .lost-confirm button, .payouts button {
+/* solid boardroom action; .btn-gold is the money action (mark paid) */
+button[type='submit'], .btn-primary {
   margin-top: 14px;
   padding: 8px 16px;
   background: var(--boardroom);
@@ -180,35 +297,54 @@ button[type='submit'], .lost-confirm button, .payouts button {
   font-size: 13px;
   transition: background-color 120ms ease;
 }
-button[type='submit']:hover, .lost-confirm button:hover, .payouts button:hover {
-  background: var(--cardedge);
-}
-button[type='submit']:disabled { opacity: 0.6; cursor: default; }
+button[type='submit']:hover, .btn-primary:hover { background: var(--cardedge); }
+button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: default; }
 
-/* payout "Mark paid" reads as the gold-accented action it is */
-.payouts button {
-  margin-top: 8px;
+.btn-gold {
+  margin-top: 14px;
+  padding: 8px 16px;
   background: none;
   color: var(--boardroom);
-  border-color: var(--gold);
+  border: 1px solid var(--gold);
+  border-radius: 8px;
+  font-size: 13px;
+  transition: background-color 120ms ease;
 }
-.payouts button:hover { background: rgba(201, 169, 97, 0.16); }
+.btn-gold:hover { background: rgba(201, 169, 97, 0.16); }
 
-.payouts li {
-  padding: 12px 0;
-  border-bottom: 1px solid var(--hairline-soft);
+.list-row .btn-primary, .list-row .btn-gold, .list-row .ghost {
+  margin-top: 10px;
+  margin-right: 8px;
 }
-.payouts li:last-child { border-bottom: none; }
-.payouts li > div { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-.payouts details { margin-top: 10px; }
-.payouts summary { font-size: 12px; color: var(--mist); cursor: pointer; }
-.payouts details .amount { font-size: 14px; margin: 0 8px; }
+.lost-confirm { display: block; }
+.lost-confirm .btn-primary, .lost-confirm button { margin-top: 8px; }
+
+/* ---- funnel: the ladder with proportional gold bars ---- */
+
+.funnel-steps .list-row { padding: 8px 0; }
+.funnel-bar {
+  height: 3px;
+  margin-top: 6px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--goldbright), var(--gold));
+  min-width: 2px;
+  transition: width 300ms ease;
+}
+.funnel-bar-zero { background: var(--hairline-soft); }
+
+.funnel .stat-value { font-size: 34px; }
+
+.invites-form { margin-top: 16px; padding-top: 4px; border-top: 1px solid var(--hairline-soft); }
+.invites-form .invites-line { display: flex; align-items: flex-end; gap: 10px; }
+.invites-form .invites-line > div { flex: 1; }
+.invites-form input { max-width: 120px; }
+.invites-form button { margin-top: 0; }
 
 /* ---- pipeline ---- */
 
 .pipeline-groups {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 14px;
   align-items: start;
 }
@@ -220,7 +356,7 @@ button[type='submit']:disabled { opacity: 0.6; cursor: default; }
   padding: 12px;
 }
 
-.pipeline-group h3 {
+.pipeline-group h4 {
   margin: 0 0 10px;
   display: flex;
   justify-content: space-between;
@@ -252,45 +388,25 @@ button[type='submit']:disabled { opacity: 0.6; cursor: default; }
 .pipeline-group .lost-confirm input { margin-top: 2px; }
 .pipeline-group .lost-confirm button { margin-top: 8px; }
 
-/* ---- stats strip ---- */
+/* ---- payouts settled drawer ---- */
 
-.stats {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 18px;
-  flex-wrap: wrap;
-}
-
-.stat-label {
-  margin: 0;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--mist);
-}
-
-.stat-value {
-  margin: 2px 0 0;
-  font-family: var(--display);
-  font-weight: 600;
-  font-size: 30px;
-  color: var(--boardroom);
-  font-variant-numeric: tabular-nums;
-}
-
-.stat-counts { display: flex; gap: 8px; flex-wrap: wrap; }
+.payouts details { margin-top: 12px; }
+.payouts summary { font-size: 12.5px; color: var(--mist); cursor: pointer; }
+.payouts details .amount { font-size: 14px; margin: 0 8px; }
+.payouts details li { padding: 8px 0; border-bottom: 1px solid var(--hairline-soft); }
+.payouts details li:last-child { border-bottom: none; }
 
 /* ---- toast ---- */
 
 .toast {
   position: fixed;
-  top: 64px;
+  top: 68px;
   right: 20px;
-  z-index: 10;
+  z-index: 30;
   display: flex;
   align-items: center;
   gap: 10px;
+  max-width: 420px;
   padding: 10px 14px;
   background: var(--boardroom);
   color: var(--ivory);
@@ -362,6 +478,16 @@ button[type='submit']:disabled { opacity: 0.6; cursor: default; }
 }
 
 .error { margin: 12px 0 0; font-size: 13px; color: #e2a293; }
+
+/* ---- small screens ---- */
+
+@media (max-width: 720px) {
+  .topbar { padding: 12px 18px 10px; }
+  main { padding: 22px 18px 56px; gap: 30px; }
+  .stat-value { font-size: 36px; }
+  .stat-counts { justify-content: flex-start; }
+  .overview { align-items: flex-start; flex-direction: column; gap: 14px; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }

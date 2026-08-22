@@ -30,7 +30,7 @@ export function CardScreen() {
       <View style={{ marginTop: space(2) }}>
         <GoldCard name={`${user?.firstName ?? 'Gold'} ${user?.lastName ?? 'Member'}`} code={code} />
       </View>
-      <GoldButton label="Share on WhatsApp" onPress={share} style={{ marginTop: space(5) }} />
+      <GoldButton label="Share my card" onPress={share} style={{ marginTop: space(5) }} />
       {user?.verificationStatus === 'pending_review' ? (
         <Body muted style={{ textAlign: 'center', marginTop: space(3), fontSize: 12 }}>
           We’re confirming you’re a GM Dental patient — your card works while we check.
@@ -52,6 +52,8 @@ export function ReferralsScreen() {
     try {
       const out = await api.myReferrals();
       setReferrals(out.referrals ?? []);
+    } catch {
+      // offline blip mid-session — keep whatever we already show
     } finally {
       setRefreshing(false);
     }
@@ -103,9 +105,13 @@ export function WalletScreen() {
   const [requesting, setRequesting] = useState(false);
 
   const load = useCallback(async () => {
-    const [w, p] = await Promise.all([api.wallet(), api.practices()]);
-    setWallet(w.wallet);
-    setPractices(p.practices ?? []);
+    try {
+      const [w, p] = await Promise.all([api.wallet(), api.practices()]);
+      setWallet(w.wallet);
+      setPractices(p.practices ?? []);
+    } catch {
+      // offline blip mid-session — keep whatever we already show
+    }
   }, []);
 
   useFocusEffect(
@@ -137,6 +143,8 @@ export function WalletScreen() {
       // MVP: collect at the first practice; a picker lands with the admin build.
       await api.requestPayout(practices[0]?.id);
       await load();
+    } catch {
+      // request didn't land — leave the button enabled to try again
     } finally {
       setRequesting(false);
     }

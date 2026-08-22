@@ -1,4 +1,5 @@
 import { api } from '../api/client.js';
+import { Card, ListRow } from './ui.jsx';
 
 export default function ConfirmQueue({ proposals, onChanged, notify }) {
   const confirm = async (id) => {
@@ -22,31 +23,36 @@ export default function ConfirmQueue({ proposals, onChanged, notify }) {
   };
 
   return (
-    <section className="card confirm-queue">
-      <h2>Confirm completions</h2>
+    <Card title="Confirm completions" count={proposals.length} className="confirm-queue">
       {proposals.length === 0 && (
         <p className="empty">Nothing waiting — Dentally proposes completed &amp; paid treatments here.</p>
       )}
       <ul>
         {proposals.map((p) => (
-          <li key={p.id}>
-            <div>
-              <strong>{p.referred_name}</strong>
-              <span className="amount">{p.invoice_state}</span>
-            </div>
-            <p className="meta">
-              referred by {p.referrer} · {p.practice ?? 'practice unknown'} · matched {p.matched_phone}
-              {p.review_status === 'existing_patient_suspect' && ' · ⚠ under review'}
-            </p>
-            <button onClick={() => confirm(p.id)} disabled={p.review_status === 'existing_patient_suspect'}>
+          <ListRow
+            key={p.id}
+            title={p.referred_name}
+            value={p.invoice_state}
+            meta={
+              <>
+                referred by {p.referrer} · {p.practice ?? 'practice unknown'} · matched {p.matched_phone}
+                {p.review_status === 'existing_patient_suspect' && ' · ⚠ under review'}
+              </>
+            }
+          >
+            <button
+              className="btn-primary"
+              onClick={() => confirm(p.id)}
+              disabled={p.review_status === 'existing_patient_suspect'}
+            >
               Confirm — credit referrer
             </button>
             <button className="ghost" onClick={() => reject(p.id)}>
               Reject
             </button>
-          </li>
+          </ListRow>
         ))}
       </ul>
-    </section>
+    </Card>
   );
 }

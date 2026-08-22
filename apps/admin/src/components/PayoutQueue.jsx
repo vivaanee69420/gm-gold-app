@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { formatPennies } from '@gm-referral/shared/money';
 import { api } from '../api/client.js';
+import { Card, ListRow } from './ui.jsx';
 
 export default function PayoutQueue({ payouts, onChanged, notify }) {
   const [cancelDrafts, setCancelDrafts] = useState({}); // payoutId -> reason text
@@ -31,18 +32,17 @@ export default function PayoutQueue({ payouts, onChanged, notify }) {
   };
 
   return (
-    <section className="card payouts">
-      <h2>Payout requests</h2>
+    <Card title="Payout requests" count={open.length} className="payouts">
       {open.length === 0 && <p className="empty">No open requests.</p>}
       <ul>
         {open.map((p) => (
-          <li key={p.id}>
-            <div>
-              <strong>{p.member}</strong>
-              <span className="amount">{formatPennies(p.amount_pennies)}</span>
-            </div>
-            <p className="meta">collecting at {p.practice} · requested {new Date(p.requested_at).toLocaleDateString('en-GB')}</p>
-            <button onClick={() => markPaid(p.id)}>Mark paid</button>
+          <ListRow
+            key={p.id}
+            title={p.member}
+            value={formatPennies(p.amount_pennies)}
+            meta={`collecting at ${p.practice} · requested ${new Date(p.requested_at).toLocaleDateString('en-GB')}`}
+          >
+            <button className="btn-gold" onClick={() => markPaid(p.id)}>Mark paid</button>
             {cancelDrafts[p.id] === undefined ? (
               <button className="ghost" onClick={() => setCancelDrafts((d) => ({ ...d, [p.id]: '' }))}>
                 Cancel…
@@ -55,10 +55,10 @@ export default function PayoutQueue({ payouts, onChanged, notify }) {
                   value={cancelDrafts[p.id]}
                   onChange={(e) => setCancelDrafts((d) => ({ ...d, [p.id]: e.target.value }))}
                 />
-                <button onClick={() => cancel(p.id)}>Confirm cancel</button>
+                <button className="btn-primary" onClick={() => cancel(p.id)}>Confirm cancel</button>
               </span>
             )}
-          </li>
+          </ListRow>
         ))}
       </ul>
       {settled.length > 0 && (
@@ -74,6 +74,6 @@ export default function PayoutQueue({ payouts, onChanged, notify }) {
           </ul>
         </details>
       )}
-    </section>
+    </Card>
   );
 }

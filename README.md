@@ -24,7 +24,8 @@ npm run mobile   # Expo dev server — press w for web preview, or scan the QR w
 ```
 
 Dev sign-in: any UK mobile number; the 6-digit code is printed by the API console and shown as a
-dev hint in the app. OTP mode is `dev` until the Meta/SMS accounts land (see TODOS.md).
+dev hint in the app. OTP mode is `dev` until the email/SMS provider lands — email replaces
+WhatsApp for auth and reminders (decision 2026-08-22, see TODOS.md).
 
 ## Dentally sync (Stage 5)
 

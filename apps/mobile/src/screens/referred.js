@@ -96,7 +96,7 @@ export function InterestFormScreen({ navigation, route }) {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    api.practices().then((out) => setPractices(out.practices ?? []));
+    api.practices().then((out) => setPractices(out.practices ?? [])).catch(() => {});
   }, []);
 
   const submit = async () => {

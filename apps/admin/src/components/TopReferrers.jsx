@@ -1,23 +1,20 @@
 import { formatPennies } from '@gm-referral/shared/money';
+import { Card, ListRow } from './ui.jsx';
 
 export default function TopReferrers({ topReferrers }) {
   return (
-    <section className="card top-referrers">
-      <h2>Top referrers</h2>
+    <Card title="Top referrers" count={topReferrers.length} className="top-referrers">
       {topReferrers.length === 0 && <p className="empty">No referrals yet.</p>}
       <ul>
         {topReferrers.map((r) => (
-          <li key={r.id}>
-            <div>
-              <strong>{r.name}</strong>
-              <span className="amount">{formatPennies(r.credited_pennies)}</span>
-            </div>
-            <p className="meta">
-              {r.completed} completed of {r.referrals} referred
-            </p>
-          </li>
+          <ListRow
+            key={r.id}
+            title={r.name}
+            value={formatPennies(r.credited_pennies)}
+            meta={`${r.completed} completed of ${r.referrals} referred`}
+          />
         ))}
       </ul>
-    </section>
+    </Card>
   );
 }
