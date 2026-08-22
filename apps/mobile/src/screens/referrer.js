@@ -13,7 +13,7 @@ import { useAppState } from '../state/AppState';
 const STORE_LINKS = 'iPhone: https://apps.apple.com/gb/app/gm-referral · Android: https://play.google.com/store/apps/details?id=uk.co.gmdental.referral';
 
 export function CardScreen() {
-  const { user } = useAppState();
+  const { user, signOut } = useAppState();
   const code = user?.referralCode ?? 'GMRF7K2X';
 
   const share = () =>
@@ -39,6 +39,10 @@ export function CardScreen() {
       <Body muted style={{ textAlign: 'center', marginTop: space(3), fontSize: 12 }}>
         You earn cash when a friend’s treatment completes. No limit on friends.
       </Body>
+      <View style={{ flex: 1 }} />
+      <Text style={styles.signOut} onPress={signOut} accessibilityRole="button">
+        Sign out{user?.phone ? ` · ${user.phone}` : ''}
+      </Text>
     </Screen>
   );
 }
@@ -209,4 +213,12 @@ const styles = StyleSheet.create({
   },
   lifetime: { color: colors.ivory, fontSize: 15, fontWeight: '600' },
   amount: { color: colors.goldbright, fontSize: 15, fontVariant: ['tabular-nums'] },
+  signOut: {
+    color: colors.mist,
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: space(6),
+    padding: space(2),
+    textDecorationLine: 'underline',
+  },
 });

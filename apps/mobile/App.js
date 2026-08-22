@@ -20,10 +20,9 @@ import { colors } from './src/theme';
 const Stack = createNativeStackNavigator();
 const Tabs = createBottomTabNavigator();
 
-// Login screen is disabled for now — flip to false to bring it back.
-// While true, the app silently signs in with the dev phone below (dev OTP mode
-// only; in production devSignIn fails and the login screen shows as a fallback).
-const LOGIN_DISABLED = true;
+// Dev shortcut: true silently signs in with the dev phone below (dev OTP mode only).
+// Re-enabled real sign-in 2026-08-22 — every install was landing in the same shared account.
+const LOGIN_DISABLED = false;
 const AUTO_LOGIN_PHONE = '+447700900001';
 
 const navTheme = {
