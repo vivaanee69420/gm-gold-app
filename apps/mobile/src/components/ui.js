@@ -131,7 +131,7 @@ export function Hairline({ style }) {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.boardroom },
-  screenInner: { flexGrow: 1, padding: space(5), paddingTop: space(8) },
+  screenInner: { flexGrow: 1, padding: space(5), paddingTop: space(14) },
   eyebrow: {
     color: colors.gold,
     fontSize: 11,
