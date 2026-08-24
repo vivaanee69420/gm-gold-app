@@ -98,6 +98,20 @@ async function drainPages(cursorKey, fetchPage, processPage) {
   return processed;
 }
 
+// Match a referral to a Dentally patient: exact E.164 phone first, email as the
+// fallback (FR-16e) — covers portal bookings whose phone Dentally stored differently.
+const matchesPatient = (referral, patient) =>
+  (patient.phone && referral.referred_phone === patient.phone) ||
+  (patient.email && referral.referred_email && referral.referred_email.trim().toLowerCase() === patient.email);
+
+const patientKeys = (patients) => {
+  const values = [...patients.values()];
+  return {
+    phones: [...new Set(values.filter((p) => p?.phone).map((p) => p.phone))],
+    emails: [...new Set(values.filter((p) => p?.email).map((p) => p.email))],
+  };
+};
+
 async function refreshPatientIndex(client) {
   return drainPages(
     PATIENTS_CURSOR,
@@ -121,19 +135,21 @@ async function processCompletedPage(client, appointments) {
   }
   await batchUpsertPatientIndex([...patients.values()].filter(Boolean)); // one read path (FR-16c)
 
-  const phones = [...new Set([...patients.values()].filter((p) => p?.phone).map((p) => p.phone))];
-  if (!phones.length) return 0;
+  const { phones, emails } = patientKeys(patients);
+  if (!phones.length && !emails.length) return 0;
   const { rows: referrals } = await db.query(
-    `select * from referrals where referred_phone = any($1) and status not in ('lost','treatment_completed')`,
-    [phones],
+    `select * from referrals
+     where (referred_phone = any($1) or lower(referred_email) = any($2))
+       and status not in ('lost','treatment_completed')`,
+    [phones, emails],
   );
   if (!referrals.length) return 0;
 
   let created = 0;
   for (const appointment of completed) {
     const patient = patients.get(appointment.patientId);
-    if (!patient?.phone) continue;
-    const matching = referrals.filter((r) => r.referred_phone === patient.phone);
+    if (!patient?.phone && !patient?.email) continue;
+    const matching = referrals.filter((r) => matchesPatient(r, patient));
     if (!matching.length) continue;
 
     let paidInvoice; // fetched once per appointment, only when a referral matched
@@ -158,7 +174,7 @@ async function processCompletedPage(client, appointments) {
         [
           referral.id,
           `appointment-${appointment.id}`,
-          patient.phone,
+          patient.phone ?? patient.email,
           invoiceState,
           await practiceIdForSite(appointment.siteId),
         ],
@@ -192,21 +208,22 @@ async function processBookedPage(client, appointments) {
   for (const a of upcoming) {
     if (!patients.has(a.patientId)) patients.set(a.patientId, await client.getPatient(a.patientId));
   }
-  const phones = [...new Set([...patients.values()].filter((p) => p?.phone).map((p) => p.phone))];
-  if (!phones.length) return 0;
+  const { phones, emails } = patientKeys(patients);
+  if (!phones.length && !emails.length) return 0;
   const { rows: referrals } = await db.query(
-    `select id, referrer_id, referred_name, referred_phone, status, appointment_dentally_id
+    `select id, referrer_id, referred_name, referred_phone, referred_email, status, appointment_dentally_id
      from referrals
-     where referred_phone = any($1) and status in ('new','contacted','booked')`,
-    [phones],
+     where (referred_phone = any($1) or lower(referred_email) = any($2))
+       and status in ('new','contacted','booked')`,
+    [phones, emails],
   );
   if (!referrals.length) return 0;
 
   let booked = 0;
   for (const appointment of upcoming) {
     const patient = patients.get(appointment.patientId);
-    if (!patient?.phone) continue;
-    for (const referral of referrals.filter((r) => r.referred_phone === patient.phone)) {
+    if (!patient?.phone && !patient?.email) continue;
+    for (const referral of referrals.filter((r) => matchesPatient(r, patient))) {
       const fromStatus = referral.status;
       const isNewBooking = fromStatus !== 'booked';
       // Already booked: only refresh the time for the SAME appointment (a reschedule).

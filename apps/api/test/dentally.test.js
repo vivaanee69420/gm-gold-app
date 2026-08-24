@@ -302,3 +302,60 @@ describe('booking-first flow: the Dentally appointment confirms the referral', (
     expect(rows[0].appointment_dentally_id).toMatch(/^appointment-/);
   });
 });
+
+describe('email fallback: Dentally records under a different phone still match the referral', () => {
+  const makeReferral = async (referrerPhone, friendPhone, fullName, email) => {
+    const referrer = await signIn(referrerPhone);
+    await request(app).post('/me/profile').set(auth(referrer.token)).send({ firstName: 'Ravi', lastName: 'Referrer', notifyOptIn: true });
+    const role = await request(app).post('/me/role').set(auth(referrer.token)).send({ role: 'referrer' });
+    const friend = await signIn(friendPhone);
+    const sub = await request(app).post('/referrals').set(auth(friend.token)).send({
+      code: role.body.user.referralCode,
+      fullName,
+      email,
+      preferredPracticeId: agents.practiceId,
+      consent: true,
+      consentVersion: 'referred-v1-2026-08',
+    });
+    expect(sub.status).toBe(200);
+    return friend;
+  };
+
+  it('a booking under a different phone but the referral email confirms the booking', async () => {
+    const friend = await makeReferral('+447700940001', '+447700940002', 'Gita Friend', 'gita@example.com');
+
+    // Dentally holds them under a non-UK number; only the email (case differs) lines up.
+    const startsAt = new Date(base + 6 * 86_400_000).toISOString();
+    stub.stubAddBookedAppointment({ phone: '+917204108703', email: 'Gita@Example.com', startsAt, updatedAt: ts() });
+    const summary = await runSync('test');
+    expect(summary.bookingsDetected).toBe(1);
+
+    const status = await request(app).get('/referrals/referred-status').set(auth(friend.token));
+    expect(status.body.status).toBe('booked');
+    expect(new Date(status.body.appointmentStartsAt).toISOString()).toBe(startsAt);
+  });
+
+  it('a completed paid treatment under a different phone but the referral email proposes', async () => {
+    await makeReferral('+447700940003', '+447700940004', 'Hema Friend', 'hema@example.com');
+
+    stub.stubAddCompletedTreatment({ phone: '+919900112233', email: 'hema@example.com', completedAt: ts(), updatedAt: ts() });
+    const sync = await runSync('test');
+    expect(sync.proposalsCreated).toBe(1);
+    const { rows } = await db.query(
+      `select cp.id from completion_proposals cp join referrals r on r.id = cp.referral_id
+       where r.referred_phone = '+447700940004'`,
+    );
+    expect(rows.length).toBe(1);
+  });
+
+  it('a booking with neither phone nor email matching stays unmatched', async () => {
+    await makeReferral('+447700940005', '+447700940006', 'Nina Friend', 'nina@example.com');
+
+    stub.stubAddBookedAppointment({ phone: '+917204100000', email: 'someone.else@example.com', startsAt: new Date(base + 7 * 86_400_000).toISOString(), updatedAt: ts() });
+    const summary = await runSync('test');
+    expect(summary.bookingsDetected).toBe(0);
+
+    const { rows } = await db.query(`select status from referrals where referred_phone='+447700940006'`);
+    expect(rows[0].status).toBe('new');
+  });
+});

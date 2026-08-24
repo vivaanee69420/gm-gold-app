@@ -11,11 +11,16 @@
 //                        └── mode 'stub':  in-memory fixtures with the same shapes; dev + tests
 //                                          mutate via stubAddPatient / stubAddCompletedTreatment
 //
-// Normalized shapes (all timestamps ISO strings, phones E.164 or null):
+// Normalized shapes (all timestamps ISO strings, phones E.164 or null, emails lowercase or null):
 //   appointment { id, patientId, siteId, completedAt, updatedAt }   siteId = Dentally site uuid
-//   patient     { id, phone, siteId, updatedAt }                    id: Dental Os contact uuid /
+//   patient     { id, phone, email, siteId, updatedAt }             id: Dental Os contact uuid /
 //   invoice     { id, paid, paidOn, amountPennies }                     Dentally patient id (live)
 import { normalizePhone } from '@gm-referral/shared/phone';
+
+export function normalizeEmail(input) {
+  const s = typeof input === 'string' ? input.trim().toLowerCase() : '';
+  return s.includes('@') ? s : null;
+}
 import { config } from '../../config.js';
 import { getAccessToken } from './connectionService.js';
 
@@ -85,6 +90,7 @@ const liveClient = {
     const items = (body.patients ?? []).map((p) => ({
       id: String(p.id),
       phone: normalizePhone(p.mobile_phone ?? p.phone_normalized ?? ''),
+      email: normalizeEmail(p.email_address ?? p.email ?? ''),
       siteId: p.site_id != null ? String(p.site_id) : null,
       updatedAt: p.updated_at ?? null,
     }));
@@ -97,6 +103,7 @@ const liveClient = {
     return {
       id: String(p.id),
       phone: normalizePhone(p.mobile_phone ?? p.phone_normalized ?? ''),
+      email: normalizeEmail(p.email_address ?? p.email ?? ''),
       siteId: p.site_id != null ? String(p.site_id) : null,
       updatedAt: p.updated_at ?? null,
     };
@@ -175,14 +182,14 @@ const dentalOsClient = {
     if (!id) return null;
     const byPms = String(id).startsWith('pms:');
     const { rows } = await dosQuery(
-      `select c.id, c.phone, p.pms_site_id as site_id, c.updated_at
+      `select c.id, c.phone, c.email, p.pms_site_id as site_id, c.updated_at
        from contacts c left join practices p on p.id = c.practice_id
        where ${byPms ? 'c.pms_external_id = $1' : 'c.id = $1'} limit 1`,
       [byPms ? String(id).slice(4) : id],
     );
     const r = rows[0];
     return r
-      ? { id: String(r.id), phone: normalizePhone(r.phone ?? ''), siteId: r.site_id ?? null, updatedAt: iso(r.updated_at) }
+      ? { id: String(r.id), phone: normalizePhone(r.phone ?? ''), email: normalizeEmail(r.email ?? ''), siteId: r.site_id ?? null, updatedAt: iso(r.updated_at) }
       : null;
   },
   async listInvoices({ patientId }) {
@@ -216,11 +223,14 @@ export function stubReset() {
   stubStore.down = false;
 }
 
-export function stubAddPatient({ phone, siteId = null, updatedAt = new Date().toISOString() }) {
-  const patient = { id: String(stubStore.nextId++), phone: normalizePhone(phone), siteId, updatedAt };
+export function stubAddPatient({ phone, email = null, siteId = null, updatedAt = new Date().toISOString() }) {
+  const patient = { id: String(stubStore.nextId++), phone: normalizePhone(phone), email: normalizeEmail(email), siteId, updatedAt };
   stubStore.patients.push(patient);
   return patient;
 }
+
+const stubFindPatient = (e164, email) =>
+  stubStore.patients.find((p) => (e164 && p.phone === e164) || (email && p.email === email));
 
 /** One call = a patient (reused by phone if known) + a BOOKED future appointment. */
 export function stubAddBookedAppointment({
@@ -228,10 +238,11 @@ export function stubAddBookedAppointment({
   siteId = null,
   startsAt = new Date(Date.now() + 2 * 86_400_000).toISOString(),
   updatedAt = new Date().toISOString(),
+  email = null,
 }) {
   const e164 = normalizePhone(phone);
-  let patient = stubStore.patients.find((p) => p.phone === e164);
-  if (!patient) patient = stubAddPatient({ phone, siteId, updatedAt });
+  let patient = stubFindPatient(e164, normalizeEmail(email));
+  if (!patient) patient = stubAddPatient({ phone, email, siteId, updatedAt });
   const appointment = {
     id: String(stubStore.nextId++),
     patientId: patient.id,
@@ -253,10 +264,11 @@ export function stubAddCompletedTreatment({
   completedAt = new Date().toISOString(),
   updatedAt = new Date().toISOString(),
   paid = true,
+  email = null,
 }) {
   const e164 = normalizePhone(phone);
-  let patient = stubStore.patients.find((p) => p.phone === e164);
-  if (!patient) patient = stubAddPatient({ phone, siteId, updatedAt });
+  let patient = stubFindPatient(e164, normalizeEmail(email));
+  if (!patient) patient = stubAddPatient({ phone, email, siteId, updatedAt });
   const appointment = {
     id: String(stubStore.nextId++),
     patientId: patient.id,
