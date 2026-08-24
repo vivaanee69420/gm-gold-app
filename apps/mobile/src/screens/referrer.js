@@ -7,6 +7,7 @@ import { formatCode } from '@gm-referral/shared/referral-code';
 import { api } from '../api/client';
 import { GoldCard } from '../components/GoldCard';
 import { Body, Eyebrow, GoldButton, GoldSeam, Hairline, Screen, StatusChip, Title } from '../components/ui';
+import BookAppointment from '../components/BookAppointment';
 import { colors, space, type } from '../theme';
 import { useAppState } from '../state/AppState';
 
@@ -31,6 +32,7 @@ export function CardScreen() {
         <GoldCard name={`${user?.firstName ?? 'Gold'} ${user?.lastName ?? 'Member'}`} code={code} />
       </View>
       <GoldButton label="Share my card" onPress={share} style={{ marginTop: space(5) }} />
+      <BookAppointment label="Book an appointment" style={{ marginTop: space(3) }} />
       {user?.verificationStatus === 'pending_review' ? (
         <Body muted style={{ textAlign: 'center', marginTop: space(3), fontSize: 12 }}>
           We’re confirming you’re a GM Dental patient — your card works while we check.

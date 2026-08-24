@@ -15,6 +15,7 @@
 import { db, logEvent } from '../../db.js';
 import { dentallyClient } from './client.js';
 import { resolveDentallyMode } from './connectionService.js';
+import { expireUnbookedReferrals } from '../referralService.js';
 
 const APPTS_CURSOR = 'dentally_appointments';
 const PATIENTS_CURSOR = 'dentally_patients';
@@ -330,8 +331,9 @@ export async function runSync(trigger = 'manual') {
         const patientsIndexed = await refreshPatientIndex(client);
         const { proposals: proposalsCreated, bookings: bookingsDetected } = await scanCompletions(client);
         const verificationsResolved = await retryPendingVerifications();
-        const summary = { trigger, patientsIndexed, proposalsCreated, bookingsDetected, verificationsResolved };
-        if (proposalsCreated || bookingsDetected || verificationsResolved) console.log('[dentally] sync', JSON.stringify(summary));
+        const referralsExpired = await expireUnbookedReferrals();
+        const summary = { trigger, patientsIndexed, proposalsCreated, bookingsDetected, verificationsResolved, referralsExpired };
+        if (proposalsCreated || bookingsDetected || verificationsResolved || referralsExpired) console.log('[dentally] sync', JSON.stringify(summary));
         return summary;
       } finally {
         await lockClient.query(`select pg_advisory_unlock(hashtext('dentally_sync'))`);

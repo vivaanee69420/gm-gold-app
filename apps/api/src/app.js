@@ -125,8 +125,8 @@ export function buildApp() {
 
   // ---- reference data ----
   app.get('/practices', wrap(async (_req, res) => {
-    const { rows } = await db.query('select id, name from practices where active order by name');
-    res.json({ practices: rows });
+    const { rows } = await db.query('select id, name, booking_url from practices where active order by name');
+    res.json({ practices: rows.map((p) => ({ id: p.id, name: p.name, bookingUrl: p.booking_url })) });
   }));
 
   // ---- referrals ----

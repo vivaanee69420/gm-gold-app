@@ -9,6 +9,8 @@ export const config = {
   jwtSecret: process.env.API_JWT_SECRET ?? 'dev-only-secret-change-me',
   // sms_only | whatsapp_primary come later (FR-02a); dev logs codes instead of sending.
   otpChannelMode: process.env.OTP_CHANNEL_MODE ?? 'dev',
+  // FR: a referred friend must book within this window or the referral resets.
+  referralBookingWindowHours: Number(process.env.REFERRAL_BOOKING_WINDOW_HOURS ?? 12),
   consentVersionReferred: 'referred-v1-2026-08',
   // Dentally (FR-05/FR-16). Effective mode is resolved at runtime by
   // connectionService.resolveDentallyMode(): DENTALLY_MODE override > env token

@@ -236,6 +236,74 @@ describe('admin stats', () => {
   });
 });
 
+describe('practices booking links + 12h booking window', () => {
+  const mk = {};
+
+  beforeAll(async () => {
+    ({ db: mk.db } = await import('../src/db.js'));
+    const practices = await request(app).get('/practices');
+    mk.practiceId = practices.body.practices[0].id;
+    const referrer = await signIn('+447700970001');
+    await request(app).post('/me/profile').set(auth(referrer.token)).send({ firstName: 'Wind', lastName: 'Ow', notifyOptIn: true });
+    const role = await request(app).post('/me/role').set(auth(referrer.token)).send({ role: 'referrer' });
+    mk.code = role.body.user.referralCode;
+  });
+
+  const submit = (token, fullName) =>
+    request(app).post('/referrals').set(auth(token)).send({
+      code: mk.code,
+      fullName,
+      email: `${fullName.replace(/\s+/g, '.').toLowerCase()}@example.com`,
+      preferredPracticeId: mk.practiceId,
+      consent: true,
+      consentVersion: 'referred-v1-2026-08',
+    });
+
+  it('GET /practices includes each practice booking_url', async () => {
+    const res = await request(app).get('/practices');
+    expect(res.status).toBe(200);
+    expect(res.body.practices.length).toBeGreaterThan(0);
+    for (const p of res.body.practices) expect(p).toHaveProperty('bookingUrl');
+  });
+
+  it('an unbooked referral older than 12h resets — friend starts from the beginning and can resubmit', async () => {
+    const friend = await signIn('+447700970002');
+    expect((await submit(friend.token, 'Exp Iry')).status).toBe(200);
+
+    // Still inside the window: the submitted state (with practice attached) shows.
+    const before = await request(app).get('/referrals/referred-status').set(auth(friend.token));
+    expect(before.body.status).toBe('new');
+    expect(before.body.practiceName).toBeTruthy();
+
+    await mk.db.query(
+      `update referrals set created_at = now() - interval '13 hours' where referred_phone = '+447700970002'`,
+    );
+
+    // Past the window: the referral is cleared and the flow resets.
+    const after = await request(app).get('/referrals/referred-status').set(auth(friend.token));
+    expect(after.body.status).toBe('new');
+    expect(after.body.practiceName).toBeFalsy();
+    const { rows } = await mk.db.query(`select status from referrals where referred_phone = '+447700970002'`);
+    expect(rows[0].status).toBe('lost');
+
+    // The phone is free again — starting over works.
+    expect((await submit(friend.token, 'Exp Iry')).status).toBe(200);
+  });
+
+  it('a booked referral is never expired by the window', async () => {
+    const friend = await signIn('+447700970003');
+    expect((await submit(friend.token, 'Boo Ked')).status).toBe(200);
+    await mk.db.query(
+      `update referrals set status='booked', appointment_dentally_id='appointment-window-test',
+       appointment_starts_at = now() + interval '2 days', created_at = now() - interval '13 hours'
+       where referred_phone = '+447700970003'`,
+    );
+
+    const res = await request(app).get('/referrals/referred-status').set(auth(friend.token));
+    expect(res.body.status).toBe('booked');
+  });
+});
+
 describe.skipIf(!process.env.DATABASE_URL)('concurrency (real Postgres only)', () => {
   it('two simultaneous wallet ops serialize under the advisory lock', async () => {
     // Exercised against Supabase in CI once DATABASE_URL exists (matrix row 9).

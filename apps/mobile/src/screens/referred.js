@@ -7,6 +7,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { normalizeCode } from '@gm-referral/shared/referral-code';
 import { api, isMockMode } from '../api/client';
 import { Body, Eyebrow, Field, GoldButton, Hairline, Screen, Title } from '../components/ui';
+import BookAppointment from '../components/BookAppointment';
 import { colors, radius, space, type } from '../theme';
 import { useAppState } from '../state/AppState';
 
@@ -277,6 +278,7 @@ export function ReferredStatusScreen() {
               Need to change it? Call the practice — this page updates automatically.
             </Body>
           </View>
+          <BookAppointment label="Book another appointment" style={{ marginBottom: space(4) }} />
         </>
       ) : awaitingBooking ? (
         <>

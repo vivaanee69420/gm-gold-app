@@ -2,6 +2,7 @@
 // privileged completion (which credits in the same flow), fraud rules.
 import { normalizePhone } from '@gm-referral/shared/phone';
 import { db, logEvent, withTransaction } from '../db.js';
+import { config } from '../config.js';
 import { creditReferral } from './walletService.js';
 
 export const STATUS_ORDER = ['new', 'contacted', 'booked', 'attended', 'treatment_agreed', 'treatment_completed'];
@@ -127,14 +128,42 @@ export async function referralsForReferrer(referrerId) {
   }));
 }
 
+/**
+ * Booking window (FR: 12h default): an unbooked referral (new/contacted, no Dentally
+ * appointment) older than the window flips to 'lost'. That frees the friend's phone
+ * (partial unique index skips lost) so they start the flow from the beginning.
+ * Runs from the sync worker and lazily on status reads.
+ */
+export async function expireUnbookedReferrals() {
+  const { rows } = await db.query(
+    `update referrals set status='lost'
+     where status in ('new','contacted') and appointment_dentally_id is null
+       and created_at < now() - make_interval(hours => $1)
+     returning id, referred_name`,
+    [config.referralBookingWindowHours],
+  );
+  for (const r of rows) {
+    await logEvent(db, {
+      entityType: 'referral',
+      entityId: r.id,
+      action: 'status_changed',
+      toValue: 'lost',
+      reason: `booking_window_expired_${config.referralBookingWindowHours}h`,
+    });
+  }
+  return rows.length;
+}
+
 export async function referredStatusFor(userId) {
+  await expireUnbookedReferrals();
   const { rows } = await db.query(
     `select r.status, r.appointment_starts_at, p.name as practice_name, p.booking_url,
             u.first_name as referrer_name
      from referrals r
      left join practices p on p.id = r.preferred_practice_id
      left join users u on u.id = r.referrer_id
-     where r.referred_user_id = $1 order by r.created_at desc limit 1`,
+     where r.referred_user_id = $1 and r.status <> 'lost'
+     order by r.created_at desc limit 1`,
     [userId],
   );
   return rows[0]
