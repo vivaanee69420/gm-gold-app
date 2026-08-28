@@ -3,6 +3,7 @@ import { api, onUnauthorized } from './api/client.js';
 import { isSignedIn, signOut } from './api/auth.js';
 import { errorMessage } from './copy.js';
 import SignIn from './components/SignIn.jsx';
+import ManagerPage from './pages/ManagerPage.jsx';
 import OperationsPage from './pages/OperationsPage.jsx';
 import ReportsPage from './pages/ReportsPage.jsx';
 
@@ -13,6 +14,7 @@ const PAGES = [
 
 export default function App() {
   const [signedIn, setSignedIn] = useState(isSignedIn());
+  const [me, setMe] = useState(null);
   const [data, setData] = useState(null);
   const [toast, setToast] = useState(null);
   const [route, setRoute] = useState(window.location.pathname);
@@ -58,9 +60,17 @@ export default function App() {
     }
   }, [notify]);
 
+  const signOutNow = useCallback(() => {
+    signOut();
+    setSignedIn(false);
+    setMe(null);
+    setData(null);
+  }, []);
+
   useEffect(() => {
     onUnauthorized(() => {
       setSignedIn(false);
+      setMe(null);
       setData(null);
     });
   }, []);
@@ -86,11 +96,34 @@ export default function App() {
     setRoute('/reports');
   }, []);
 
+  // FR-24: fetch role + practice scope first — a manager gets a stripped-down
+  // payouts-only screen; everyone else gets the full dashboard's loadAll.
   useEffect(() => {
-    if (signedIn) loadAll();
-  }, [signedIn, loadAll]);
+    if (!signedIn) return;
+    api('/admin/me').then(setMe).catch((err) => notify(err.code ?? 'load_failed'));
+  }, [signedIn, notify]);
+
+  useEffect(() => {
+    if (signedIn && me && me.role !== 'manager') loadAll();
+  }, [signedIn, me, loadAll]);
 
   if (!signedIn) return <SignIn onSignedIn={() => setSignedIn(true)} />;
+
+  const toastEl = toast && (
+    <div role="alert" className="toast">
+      {toast}
+      <button className="ghost" onClick={() => setToast(null)}>Dismiss</button>
+    </div>
+  );
+
+  if (me?.role === 'manager') {
+    return (
+      <>
+        {toastEl}
+        <ManagerPage me={me} notify={notify} onSignOut={signOutNow} />
+      </>
+    );
+  }
 
   // Unknown paths fall back to Operations.
   const activePath = route === '/reports' ? '/reports' : '/';
@@ -116,23 +149,11 @@ export default function App() {
             </a>
           ))}
         </nav>
-        <button
-          className="ghost"
-          onClick={() => {
-            signOut();
-            setSignedIn(false);
-            setData(null);
-          }}
-        >
+        <button className="ghost" onClick={signOutNow}>
           Sign out
         </button>
       </header>
-      {toast && (
-        <div role="alert" className="toast">
-          {toast}
-          <button className="ghost" onClick={() => setToast(null)}>Dismiss</button>
-        </div>
-      )}
+      {toastEl}
       {!data ? (
         <p className="loading">Loading…</p>
       ) : (
