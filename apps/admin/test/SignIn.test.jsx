@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import SignIn from '../src/components/SignIn.jsx';
 import { clearToken, getToken } from '../src/api/client.js';
@@ -24,7 +24,9 @@ describe('SignIn', () => {
     await userEvent.type(screen.getByLabelText(/password/i), 'correcthorsebattery');
     await userEvent.click(screen.getByRole('button', { name: /sign in/i }));
 
-    expect(onSignedIn).toHaveBeenCalledWith({ id: 'a1', email: 'sam@gmdental.co.uk', role: 'admin', practices: [] });
+    // The click only kicks off the request; onSignedIn lands a microtask or two later.
+    await waitFor(() =>
+      expect(onSignedIn).toHaveBeenCalledWith({ id: 'a1', email: 'sam@gmdental.co.uk', role: 'admin', practices: [] }));
     expect(getToken()).toBe('tok-1');
   });
 

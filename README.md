@@ -67,7 +67,8 @@ curl -X POST localhost:4000/dev/dentally/complete-treatment \
 ## Tests
 
 ```bash
-npm test         # shared (20) + api (116, +2 skipped until DATABASE_URL points at real Postgres)
+npm test         # shared (21) + api (136, +2 skipped until DATABASE_URL points at real Postgres)
+cd apps/admin && npx vitest run   # dashboard (64, jsdom + testing-library)
 ```
 
 ## Dashboard accounts
@@ -82,14 +83,26 @@ bootstrapped from the command line with `scripts/create-admin.js`:
 # local PGlite (no DATABASE_URL set)
 cd apps/api && node scripts/create-admin.js you@gmdental.co.uk 'a-long-password'
 
-# Railway / Supabase — point DATABASE_URL at the target database
-DATABASE_URL=… node apps/api/scripts/create-admin.js you@gmdental.co.uk 'a-long-password'
+# Railway / Supabase — point DATABASE_URL at the target database. API_JWT_SECRET must be set
+# alongside it: config.js refuses to load whenever a real database is configured without one,
+# rather than signing real sessions with the default secret that ships in this repo. The
+# deployed API needs the same variable set for exactly that reason.
+DATABASE_URL=… API_JWT_SECRET=… node apps/api/scripts/create-admin.js you@gmdental.co.uk 'a-long-password'
 ```
 
 Migration `0011_admin_accounts.sql` deactivates every pre-existing (pre-password) `admin_users`
 row, so on a fresh deploy there is no working account until this is run — do it immediately after
 deploying, before anyone tries to sign in. `role` defaults to `admin`; pass `manager <practiceId>`
 to seed a payouts-only account instead (`GET /practices` lists ids).
+
+Failed sign-ins are rate limited in the API **process memory only**: 5 failures per
+email+IP and 30 per IP, each over a rolling 15 minutes, both answering `429 rate_limited`.
+Nothing is persisted, so **restarting or redeploying the API clears every lockout** — that is
+the escape hatch if someone locks themselves out and can't wait 15 minutes. (It also means the
+limits are per replica; a shared store is a Phase-2 concern if the API ever runs more than one.)
+
+Managers can be moved between practices in place from the Team card (`POST
+/admin/team/:id/practice`) — no need to deactivate and re-create the account.
 
 ## Supabase (provisioned 2026-08-21)
 

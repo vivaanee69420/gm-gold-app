@@ -108,11 +108,16 @@ async function migrate() {
   }
 }
 
-/** Append-only audit event (NFR-03). Callable with a tx client or the pool. */
-export async function logEvent(clientOrDb, { actorId = null, entityType, entityId, action, fromValue = null, toValue = null, reason = null }) {
+/**
+ * Append-only audit event (NFR-03). Callable with a tx client or the pool.
+ * `actorKind` says which id space `actorId` belongs to — 'user' (users.id), 'admin'
+ * (admin_users.id) or 'system' (sync worker / cron sweeps, which carry no actor id).
+ * Null when there genuinely is no actor to name; never guessed.
+ */
+export async function logEvent(clientOrDb, { actorId = null, actorKind = null, entityType, entityId, action, fromValue = null, toValue = null, reason = null }) {
   await (clientOrDb ?? db).query(
-    `insert into events (actor_id, entity_type, entity_id, action, from_value, to_value, reason)
-     values ($1,$2,$3,$4,$5,$6,$7)`,
-    [actorId, entityType, String(entityId), action, fromValue, toValue, reason],
+    `insert into events (actor_id, actor_kind, entity_type, entity_id, action, from_value, to_value, reason)
+     values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [actorId, actorKind, entityType, String(entityId), action, fromValue, toValue, reason],
   );
 }

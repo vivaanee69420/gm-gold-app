@@ -124,6 +124,17 @@ describe('admin schemas', () => {
       adminCreateSchema.parse({ email: 'a@gmdental.co.uk', password: '123456789', role: 'admin' }),
     ).toThrow();
   });
+  // Passwords are hashed with scrypt, whose cost scales with the input — an unbounded field
+  // lets one request burn arbitrary CPU on the login path. 256 is far past any real password.
+  it('accepts a 256-character password but rejects a longer one', () => {
+    const max = 'a'.repeat(256);
+    const tooLong = 'a'.repeat(257);
+    expect(adminLoginSchema.parse({ email: 'a@gmdental.co.uk', password: max }).password).toBe(max);
+    expect(() => adminLoginSchema.parse({ email: 'a@gmdental.co.uk', password: tooLong })).toThrow();
+    expect(adminCreateSchema.parse({ email: 'a@gmdental.co.uk', password: max, role: 'admin' }).password).toBe(max);
+    expect(() => adminCreateSchema.parse({ email: 'a@gmdental.co.uk', password: tooLong, role: 'admin' })).toThrow();
+  });
+
   it('rejects an unknown role', () => {
     expect(() =>
       adminCreateSchema.parse({ email: 'a@gmdental.co.uk', password: 'correct-horse-battery', role: 'owner' }),

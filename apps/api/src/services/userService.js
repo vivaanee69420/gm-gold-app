@@ -9,17 +9,36 @@ export async function getOrCreateUserByPhone(phone) {
   const found = await db.query(`select * from users where phone = $1`, [phone]);
   if (found.rows[0]) return found.rows[0];
   const created = await db.query(`insert into users (phone) values ($1) returning *`, [phone]);
+  // No actorKind: this row is created mid-OTP-verify, before any session exists — there is no
+  // acting id to name, and 'user' would imply one. Null is the honest answer.
   await logEvent(db, { entityType: 'user', entityId: created.rows[0].id, action: 'created' });
   return created.rows[0];
 }
 
 export function issueToken(user) {
   // Dev sessions: long-lived signed token. Supabase Auth sessions replace this in Stage 2-proper.
-  return jwt.sign({ sub: user.id, phone: user.phone }, config.jwtSecret, { expiresIn: '90d' });
+  // iatMs: see tokenRevoked() — jwt's own `iat` is whole seconds, too coarse to say whether this
+  // token was minted before or after a revocation that happened in the same second.
+  return jwt.sign({ sub: user.id, phone: user.phone, iatMs: Date.now() }, config.jwtSecret, { expiresIn: '90d' });
 }
 
 export function verifyToken(token) {
   return jwt.verify(token, config.jwtSecret);
+}
+
+/**
+ * Was this token minted before `revokedAt` (FR-03 "sign out everywhere", and the admin
+ * equivalent)? Tokens carry `iatMs` — milliseconds at issue — so the answer is exact. Tokens
+ * minted before that claim existed fall back to comparing jwt's own second-granularity `iat`
+ * against the revocation floored to the same granularity: coarse, but it errs towards keeping
+ * a token alive rather than killing one minted in the very second of the revocation that
+ * preceded it (a fresh login right after a password change is exactly that case).
+ */
+export function tokenRevoked(payload, revokedAt) {
+  if (!revokedAt) return false;
+  const revokedMs = new Date(revokedAt).getTime();
+  if (typeof payload.iatMs === 'number') return payload.iatMs < revokedMs;
+  return payload.iat < Math.floor(revokedMs / 1000);
 }
 
 export async function getUser(id) {
@@ -58,7 +77,7 @@ export async function pickRole(userId, role) {
       } else {
         await db.query(`update users set role_referrer=true, verification_status='pending_review' where id=$1`, [userId]);
         await logEvent(db, {
-          actorId: userId, entityType: 'user', entityId: userId,
+          actorId: userId, actorKind: 'user', entityType: 'user', entityId: userId,
           action: 'verification_pending', reason: match.reason,
         });
       }
@@ -78,7 +97,7 @@ export async function pickRole(userId, role) {
   } else {
     await db.query(`update users set role_referred=true where id=$1`, [userId]);
   }
-  await logEvent(db, { actorId: userId, entityType: 'user', entityId: userId, action: 'role_picked', toValue: role });
+  await logEvent(db, { actorId: userId, actorKind: 'user', entityType: 'user', entityId: userId, action: 'role_picked', toValue: role });
   return publicUser(await getUser(userId));
 }
 

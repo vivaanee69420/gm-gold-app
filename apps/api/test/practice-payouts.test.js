@@ -122,6 +122,29 @@ describe('manager payout list', () => {
   });
 });
 
+// I4 (final review): a manager who moves branch is re-scoped, not deleted and re-created.
+// What they can see must move with them the moment the row changes — no re-login, no revocation.
+describe('re-scoping a manager (POST /admin/team/:id/practice)', () => {
+  it("moves what they see: the new practice's payouts, and no longer the old practice's", async () => {
+    const movedToken = await managerFor('07700 900940', t.a);
+    const me = await request(app).get('/admin/me').set(auth(movedToken));
+    expect(me.body.practices.map((p) => p.id)).toEqual([t.a]);
+    expect((await request(app).get('/admin/payouts').set(auth(movedToken))).body.payouts.map((p) => p.id))
+      .toContain(t.sarah.payoutId);
+
+    const res = await request(app).post(`/admin/team/${me.body.id}/practice`).set(auth(t.admin))
+      .send({ practiceId: t.b });
+    expect(res.status).toBe(200);
+
+    // Same token, no re-login: requireAdmin re-reads practice_ids on every request.
+    const after = await request(app).get('/admin/payouts').set(auth(movedToken));
+    const ids = after.body.payouts.map((p) => p.id);
+    expect(ids).toContain(t.bob.payoutId);
+    expect(ids).not.toContain(t.sarah.payoutId);
+    expect((await request(app).get('/admin/me').set(auth(movedToken))).body.practices.map((p) => p.id)).toEqual([t.b]);
+  });
+});
+
 describe('manager is fenced to their practice', () => {
   it("cannot mark another practice's payout paid", async () => {
     const res = await request(app)
@@ -176,6 +199,25 @@ describe('mark paid = type the cash handed over', () => {
       .post(`/admin/payouts/${t.sarah.payoutId}/mark-paid`).set(auth(t.managerA)).send({ amountPennies: 10000 });
     expect(again.status).toBe(409);
     expect(again.body.error).toBe('payout_not_open');
+  });
+});
+
+// I6 (final review): actor_id alone can't say WHICH id space it points at — admin_users.id
+// and users.id are separate tables with separate uuids, so an audit row saying "actor
+// 9f3c…" was unreadable. actor_kind records that, and 'system' covers the sync worker.
+describe('events.actor_kind', () => {
+  it("logs a mark-paid as 'admin' and the member's own payout request as 'user'", async () => {
+    const { rows: paid } = await db.query(
+      `select actor_kind, actor_id from events where entity_type='payout' and action='paid' and entity_id=$1`,
+      [t.sarah.payoutId],
+    );
+    expect(paid[0].actor_kind).toBe('admin');
+
+    const { rows: requested } = await db.query(
+      `select actor_kind, actor_id from events where entity_type='payout' and action='requested' and entity_id=$1`,
+      [t.sarah.payoutId],
+    );
+    expect(requested[0]).toMatchObject({ actor_kind: 'user', actor_id: t.sarah.user.id });
   });
 });
 

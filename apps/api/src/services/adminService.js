@@ -4,8 +4,10 @@
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import jwt from 'jsonwebtoken';
+import { z } from 'zod';
 import { adminCreateSchema, adminPasswordSchema } from '@gm-referral/shared/schemas';
 import { db, logEvent, withTransaction } from '../db.js';
+import { tokenRevoked } from './userService.js';
 import { config } from '../config.js';
 
 const httpError = (message, status) => Object.assign(new Error(message), { status });
@@ -68,8 +70,12 @@ export async function practicesForAdmin({ role, practiceIds }) {
 // In-memory, single-replica: counters live in this process only and reset on deploy/restart
 // (no shared store — good enough for the current single-instance API; a DB/Redis-backed
 // limiter is a Phase-2 concern if we ever run more than one replica). Two layers: a tight
-// per-email limit (defends one account against a targeted guesser) and a coarse per-IP limit
-// in front of it (defends the login route itself against one source hammering many emails).
+// per-email-AND-IP limit (defends one account against a targeted guesser) and a coarse per-IP
+// limit in front of it (defends the login route itself against one source hammering many
+// emails). The strict key deliberately includes the IP: keyed on the email alone, anyone who
+// knows an address could burn its five attempts and lock the real owner out from their own
+// network — a one-request denial of service per account. A guesser rotating IPs to dodge the
+// strict counter still runs into the 30-per-IP ceiling on every address they use.
 const MAX_EMAIL_FAILURES = 5;
 const MAX_IP_FAILURES = 30;
 const FAILURE_WINDOW_MS = 15 * 60 * 1000;
@@ -117,15 +123,19 @@ function makeLimiter(max) {
   };
 }
 
-const emailLimiter = makeLimiter(MAX_EMAIL_FAILURES);
+const strictLimiter = makeLimiter(MAX_EMAIL_FAILURES);
 const ipLimiter = makeLimiter(MAX_IP_FAILURES);
+
+// One bucket per (email, source) pair. A request with no IP at all (a direct service call in
+// a test, or a proxy that stripped it) falls back to a single shared 'no-ip' bucket.
+const strictKey = (email, ip) => `${email}|${ip ?? 'no-ip'}`;
 
 // Test-only: wipe both limiters' state. Needed alongside __setClockForTests whenever a test
 // advances the clock into a simulated future — an entry recorded under that fake "now" reads
 // as not-yet-expired once the real clock resumes (its firstFailureAt is ahead of real time),
 // so it would otherwise linger until real wall-clock time actually caught up to it.
 export function __resetLimitersForTests() {
-  emailLimiter.reset();
+  strictLimiter.reset();
   ipLimiter.reset();
 }
 
@@ -141,7 +151,8 @@ export async function createAdmin({ email, password, role, practiceIds = [], cre
   const normalizedEmail = parsed.data.email;
 
   if (role === 'admin') {
-    if (practiceIds.length) throw httpError('practice_required', 422);
+    // Not practice_required: an admin isn't missing a practice, it can't have one at all.
+    if (practiceIds.length) throw httpError('practice_not_allowed', 422);
   } else if (role === 'manager') {
     if (practiceIds.length !== 1) throw httpError('practice_required', 422);
     const { rows: activeRows } = await db.query(
@@ -173,8 +184,10 @@ export async function createAdmin({ email, password, role, practiceIds = [], cre
   }
 
   await logEvent(db, {
-    actorId: createdBy, entityType: 'admin_user', entityId: row.id,
-    action: 'created', toValue: role,
+    // createdBy is null when the bootstrap CLI (scripts/create-admin.js) runs it — there is no
+    // acting account then, so the kind stays null rather than claiming one.
+    actorId: createdBy, actorKind: createdBy ? 'admin' : null,
+    entityType: 'admin_user', entityId: row.id, action: 'created', toValue: role,
   });
   return row;
 }
@@ -182,7 +195,8 @@ export async function createAdmin({ email, password, role, practiceIds = [], cre
 // ---- authenticate ----
 export async function authenticate(email, password, { ip = null } = {}) {
   const normalizedEmail = normalizeEmail(email);
-  emailLimiter.assertNotLimited(normalizedEmail);
+  const strict = strictKey(normalizedEmail, ip);
+  strictLimiter.assertNotLimited(strict);
   if (ip) ipLimiter.assertNotLimited(ip);
 
   const { rows } = await db.query(`select * from admin_users where email = $1`, [normalizedEmail]);
@@ -195,12 +209,12 @@ export async function authenticate(email, password, { ip = null } = {}) {
   const passwordOk = await verifyPassword(password, compareHash);
 
   if (!row || !passwordOk || !row.active) {
-    emailLimiter.recordFailure(normalizedEmail);
+    strictLimiter.recordFailure(strict);
     if (ip) ipLimiter.recordFailure(ip);
     throw httpError('invalid_credentials', 401);
   }
 
-  emailLimiter.clear(normalizedEmail);
+  strictLimiter.clear(strict);
   // The IP counter is intentionally NOT cleared on success: one correct login shouldn't let
   // an attacker "launder" a shared IP's budget while still guessing at other accounts on it.
   await db.query(`update admin_users set last_login_at = now() where id = $1`, [row.id]);
@@ -212,13 +226,12 @@ export async function authenticate(email, password, { ip = null } = {}) {
 }
 
 // ---- tokens ----
-// `iat` override: used by changeOwnPassword to hand back a token that's guaranteed valid
-// against the sessions_revoked_at it just wrote (see the comment there — jsonwebtoken keeps
-// a caller-supplied iat instead of overwriting it, per its own sign.js).
-export function issueAdminToken(admin, { iat } = {}) {
-  const payload = { sub: admin.id, kind: 'admin', role: admin.role };
-  if (iat) payload.iat = iat;
-  return jwt.sign(payload, config.jwtSecret, { expiresIn: '12h' });
+// `iatMs` (milliseconds at issue) is what revocation compares against — jwt's own `iat` is
+// whole seconds, too coarse to order a token against a revocation in the same second. The
+// override is used by the password-change paths to mint a token pinned to the exact
+// sessions_revoked_at they just wrote, so it is never born already dead.
+export function issueAdminToken(admin, { iatMs = Date.now() } = {}) {
+  return jwt.sign({ sub: admin.id, kind: 'admin', role: admin.role, iatMs }, config.jwtSecret, { expiresIn: '12h' });
 }
 
 /** Load the acting admin for a verified `kind: 'admin'` token payload; null if it shouldn't work. */
@@ -226,15 +239,9 @@ export async function loadAdminForToken(payload) {
   const { rows } = await db.query(`select * from admin_users where id = $1`, [payload.sub]);
   const row = rows[0];
   if (!row || !row.active) return null;
-  // FR-03-equivalent for admins: tokens issued before a revocation are dead. Compare at SECOND
-  // granularity (iat is seconds, floored) rather than iat*1000 against a sub-second timestamp —
-  // the latter falsely kills a token minted in the SAME wall-clock second as the revocation
-  // (e.g. a fresh login right after someone else's password is reset via setPassword), because
-  // the revocation's own sub-second component almost always sorts after iat's floored-to-:00
-  // value even though the token was actually minted after the revoking write committed.
-  if (row.sessions_revoked_at && payload.iat < Math.floor(new Date(row.sessions_revoked_at).getTime() / 1000)) {
-    return null;
-  }
+  // FR-03-equivalent for admins: tokens issued before a revocation are dead, judged to the
+  // millisecond via the token's iatMs claim (see tokenRevoked in userService.js).
+  if (tokenRevoked(payload, row.sessions_revoked_at)) return null;
   return { id: row.id, email: row.email, role: row.role, practiceIds: normalizePracticeIds(row.practice_ids) };
 }
 
@@ -277,19 +284,66 @@ export async function setPassword({ id, password, actorId }) {
   // spelling of the same uuid) and for audit-log consistency — the events row should record the
   // same canonical id regardless of how the caller cased the URL param.
   const normalizedId = String(id).toLowerCase();
+  const isSelf = normalizedId === String(actorId).toLowerCase();
 
   const parsed = adminPasswordSchema.safeParse(password);
   if (!parsed.success) throw httpError('weak_password', 422);
 
-  const { rows } = await db.query(`select id from admin_users where id = $1`, [normalizedId]);
-  if (!rows[0]) throw httpError('not_found', 404);
+  const { rows } = await db.query(`select id, role from admin_users where id = $1`, [normalizedId]);
+  const row = rows[0];
+  if (!row) throw httpError('not_found', 404);
 
   const passwordHash = await hashPassword(parsed.data);
-  await db.query(
-    `update admin_users set password_hash = $1, sessions_revoked_at = now() where id = $2`,
+  const { rows: updated } = await db.query(
+    `update admin_users set password_hash = $1, sessions_revoked_at = now()
+     where id = $2 returning sessions_revoked_at`,
     [passwordHash, normalizedId],
   );
-  await logEvent(db, { actorId, entityType: 'admin_user', entityId: normalizedId, action: 'password_set' });
+  await logEvent(db, {
+    actorId, actorKind: 'admin', entityType: 'admin_user', entityId: normalizedId, action: 'password_set',
+  });
+
+  // Targeting yourself is allowed but revokes YOUR sessions too — hand back a replacement token
+  // pinned to the revocation instant, exactly as changeOwnPassword does, so the caller isn't
+  // logged out by their own click. (The dashboard hides this control on your own row and points
+  // at "Change password" instead; this keeps every other caller of the route honest.)
+  if (isSelf) {
+    const token = issueAdminToken(
+      { id: row.id, role: row.role },
+      { iatMs: new Date(updated[0].sessions_revoked_at).getTime() },
+    );
+    return { ok: true, token };
+  }
+  return { ok: true };
+}
+
+// Move a manager to a different practice. Admin-only (the manager fence in middleware/auth.js
+// keeps managers off every /admin/team* route), and the practice must pass the same
+// active-practice check createAdmin applies. Nothing else about the account moves: no password
+// reset, no revocation — loadAdminForToken re-reads practice_ids on every request, so the new
+// scope is live on the manager's very next call.
+export async function setPractice({ id, practiceId, actorId }) {
+  const normalizedId = String(id).toLowerCase();
+
+  const parsed = z.string().uuid().safeParse(practiceId);
+  if (!parsed.success) throw httpError('validation', 422); // same code createAdmin gives a bad uuid
+
+  const { rows } = await db.query(`select id, role, practice_ids from admin_users where id = $1`, [normalizedId]);
+  const row = rows[0];
+  if (!row) throw httpError('not_found', 404);
+  // An admin covers every practice by construction (createAdmin refuses to give one a practice
+  // id at all), so there is no scope to move.
+  if (row.role !== 'manager') throw httpError('validation', 422);
+
+  const { rows: activeRows } = await db.query(`select id from practices where id = $1 and active`, [parsed.data]);
+  if (!activeRows[0]) throw httpError('practice_required', 422);
+
+  const from = normalizePracticeIds(row.practice_ids)[0] ?? null;
+  await db.query(`update admin_users set practice_ids = $2::uuid[] where id = $1`, [normalizedId, `{${parsed.data}}`]);
+  await logEvent(db, {
+    actorId, actorKind: 'admin', entityType: 'admin_user', entityId: normalizedId,
+    action: 'practice_changed', fromValue: from, toValue: parsed.data,
+  });
   return { ok: true };
 }
 
@@ -349,7 +403,7 @@ export async function setActive({ id, active, actorId }) {
   });
 
   await logEvent(db, {
-    actorId, entityType: 'admin_user', entityId: normalizedId,
+    actorId, actorKind: 'admin', entityType: 'admin_user', entityId: normalizedId,
     action: active ? 'activated' : 'deactivated',
   });
   return { ok: true };
@@ -371,17 +425,11 @@ export async function changeOwnPassword({ admin, currentPassword, newPassword })
      where id = $2 returning sessions_revoked_at`,
     [passwordHash, admin.id],
   );
-  await logEvent(db, { actorId: admin.id, entityType: 'admin_user', entityId: admin.id, action: 'password_changed' });
+  await logEvent(db, { actorId: admin.id, actorKind: 'admin', entityType: 'admin_user', entityId: admin.id, action: 'password_changed' });
 
-  // A token minted "now" floors its `iat` to the START of the current second; that can read
-  // as strictly BEFORE the sessions_revoked_at just written (sub-second precision) if both
-  // land in the same wall-clock second — the same race admin-auth.test.js's sleep(1100)
-  // calls dodge for a *separate* re-login there. Ceil this token's iat to the next whole
-  // second at/after the DB's own revocation instant so the token handed back here is never
-  // immediately dead.
-  const revokedAtMs = new Date(updated[0].sessions_revoked_at).getTime();
-  const iat = Math.ceil(revokedAtMs / 1000);
-  const token = issueAdminToken(admin, { iat });
+  // Pin the replacement token's iatMs to the revocation instant this call just wrote, so it
+  // reads as "not before" its own revocation however the clocks round.
+  const token = issueAdminToken(admin, { iatMs: new Date(updated[0].sessions_revoked_at).getTime() });
 
   return { ok: true, token };
 }

@@ -331,11 +331,11 @@ GET  /admin/proposals             POST /admin/proposals/:id/confirm|reject
 GET  /admin/referrals             PATCH /admin/referrals/:id/status
 GET  /admin/payouts               POST /admin/payouts/:id/mark-paid { amountPennies } | :id/cancel
 GET  /admin/reports/funnel|liability|top-referrers|aging
-POST /admin/users/:id/revoke-sessions   admin/owner: revoke a patient user's sessions (FR-03)
+POST /admin/users/:id/revoke-sessions   admin: revoke a patient user's sessions (FR-03)
 -- Phase 2 (MVP stand-ins per FR-26/FR-27: Supabase dashboard queries + SAR runbook) --
-GET  /admin/exports               owner: CSV ledger/referrals by date range
-POST /admin/sar/:userId/export    owner: subject-access export
-POST /admin/sar/:userId/anonymize owner: pseudonymize per FR-27
+GET  /admin/exports               admin: CSV ledger/referrals by date range
+POST /admin/sar/:userId/export    admin: subject-access export
+POST /admin/sar/:userId/anonymize admin: pseudonymize per FR-27
 POST /webhooks/dentally           optional inbound events (HMAC-verified); sync worker itself
                                   runs in-process on a cron schedule, no public trigger endpoint
 ```

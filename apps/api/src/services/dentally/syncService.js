@@ -183,6 +183,7 @@ async function processCompletedPage(client, appointments) {
       if (inserted[0]) {
         created += 1;
         await logEvent(db, {
+          actorKind: 'system', // the sync worker, not a person
           entityType: 'proposal',
           entityId: inserted[0].id,
           action: 'created',
@@ -239,6 +240,7 @@ async function processBookedPage(client, appointments) {
       referral.status = 'booked';
       referral.appointment_dentally_id = `appointment-${appointment.id}`;
       await logEvent(db, {
+        actorKind: 'system',
         entityType: 'referral', entityId: referral.id, action: 'status_changed',
         fromValue: fromStatus, toValue: 'booked', reason: `dentally appointment-${appointment.id}`,
       });
@@ -281,6 +283,7 @@ async function retryPendingVerifications() {
       [user.id, match.dentallyPatientId, match.practiceId],
     );
     await logEvent(db, {
+      actorKind: 'system',
       entityType: 'user',
       entityId: user.id,
       action: 'verification_auto_resolved',

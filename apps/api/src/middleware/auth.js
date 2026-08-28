@@ -1,4 +1,4 @@
-import { verifyToken, getUser } from '../services/userService.js';
+import { verifyToken, getUser, tokenRevoked } from '../services/userService.js';
 import { loadAdminForToken } from '../services/adminService.js';
 
 export async function requireUser(req, res, next) {
@@ -9,8 +9,9 @@ export async function requireUser(req, res, next) {
     const payload = verifyToken(token);
     const user = await getUser(payload.sub);
     if (!user) return res.status(401).json({ error: 'unauthorized' });
-    // FR-03: tokens issued before an admin revocation are dead (iat is in seconds).
-    if (user.sessions_revoked_at && payload.iat * 1000 < new Date(user.sessions_revoked_at).getTime()) {
+    // FR-03: tokens issued before an admin revocation are dead (see tokenRevoked — exact for
+    // tokens carrying iatMs, second-granularity for older ones).
+    if (tokenRevoked(payload, user.sessions_revoked_at)) {
       return res.status(401).json({ error: 'unauthorized' });
     }
     req.user = user;

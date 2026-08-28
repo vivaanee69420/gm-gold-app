@@ -152,6 +152,8 @@ describe('App', () => {
     expect(screen.queryByRole('link', { name: /reports & setup/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument();
     // A manager's `loadAll` must never fire — only the two routes ManagerPage itself needs.
-    expect(calls.map((c) => c.path).sort()).toEqual(['/admin/me', '/admin/payouts']);
+    // Waited on rather than asserted once: /admin/payouts is fired by an effect that runs
+    // after /admin/me resolves, so a bare assertion races the second fetch.
+    await vi.waitFor(() => expect(calls.map((c) => c.path).sort()).toEqual(['/admin/me', '/admin/payouts']));
   });
 });

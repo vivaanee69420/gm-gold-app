@@ -89,17 +89,17 @@ export async function confirmProposal(proposalId, adminId) {
       ],
     );
     await logEvent(client, {
-      actorId: adminId, entityType: 'proposal', entityId: proposalId, action: 'confirmed', toValue: referral.id,
+      actorId: adminId, actorKind: 'admin', entityType: 'proposal', entityId: proposalId, action: 'confirmed', toValue: referral.id,
     });
     if (transitioned[0]) {
       await logEvent(client, {
-        actorId: adminId, entityType: 'referral', entityId: referral.id, action: 'status_changed',
+        actorId: adminId, actorKind: 'admin', entityType: 'referral', entityId: referral.id, action: 'status_changed',
         fromValue: referral.status, toValue: 'treatment_completed',
         reason: `privileged (dentally proposal, skipped from ${referral.status})`,
       });
     }
     await logEvent(client, {
-      actorId: adminId, entityType: 'wallet', entityId: referral.referrer_id,
+      actorId: adminId, actorKind: 'admin', entityType: 'wallet', entityId: referral.referrer_id,
       action: 'credit', toValue: String(rule.amount_pennies), reason: `proposal ${proposalId}`,
     });
     return { ok: true, credit: { amountPennies: credit.amount_pennies } };
@@ -114,7 +114,7 @@ export async function rejectProposal(proposalId, adminId, reason) {
     [proposalId, adminId, reason],
   );
   if (!rows[0]) throw httpError('proposal_not_open', 409);
-  await logEvent(db, { actorId: adminId, entityType: 'proposal', entityId: proposalId, action: 'rejected', reason });
+  await logEvent(db, { actorId: adminId, actorKind: 'admin', entityType: 'proposal', entityId: proposalId, action: 'rejected', reason });
   return { ok: true };
 }
 
@@ -149,7 +149,7 @@ export async function decideVerification(userId, adminId, { approve, dentallyPat
     [userId, approve ? 'verification_approved' : 'verification_rejected'],
   );
   await logEvent(db, {
-    actorId: adminId, entityType: 'user', entityId: userId,
+    actorId: adminId, actorKind: 'admin', entityType: 'user', entityId: userId,
     action: approve ? 'verification_approved' : 'verification_rejected',
   });
   return { ok: true };

@@ -55,13 +55,13 @@ export async function submitReferral({ code, fullName, email, phone, treatmentIn
       ],
     );
     await client.query(`insert into analytics_events (user_id, name) values ($1,'referral_submitted')`, [referredUser.id]);
-    await logEvent(client, { actorId: referredUser.id, entityType: 'referral', entityId: referral.id, action: 'created' });
+    await logEvent(client, { actorId: referredUser.id, actorKind: 'user', entityType: 'referral', entityId: referral.id, action: 'created' });
     return referral;
   });
 }
 
 /** Adjacent-only transitions, 409 otherwise; lost needs a reason; completion credits (FR-12/FR-17). */
-export async function updateStatus({ referralId, status, lostReason, actorId, privilegedComplete = false }) {
+export async function updateStatus({ referralId, status, lostReason, actorId, actorKind = null, privilegedComplete = false }) {
   const { rows } = await db.query(`select * from referrals where id=$1`, [referralId]);
   const referral = rows[0];
   if (!referral) throw Object.assign(new Error('not_found'), { status: 404 });
@@ -85,7 +85,7 @@ export async function updateStatus({ referralId, status, lostReason, actorId, pr
 
   await db.query(`update referrals set status=$2, lost_reason=$3 where id=$1`, [referralId, status, lostReason ?? null]);
   await logEvent(db, {
-    actorId, entityType: 'referral', entityId: referralId, action: 'status_changed',
+    actorId, actorKind, entityType: 'referral', entityId: referralId, action: 'status_changed',
     fromValue: from, toValue: status,
     reason: privilegedComplete && status === 'treatment_completed' ? `privileged (skipped from ${from})` : lostReason ?? null,
   });
@@ -104,6 +104,7 @@ export async function updateStatus({ referralId, status, lostReason, actorId, pr
       referral,
       practiceId: referral.preferred_practice_id,
       actorId,
+      actorKind,
       reason: 'treatment completed (admin confirmed)',
     });
   }
@@ -144,6 +145,7 @@ export async function expireUnbookedReferrals() {
   );
   for (const r of rows) {
     await logEvent(db, {
+      actorKind: 'system', // the booking-window sweep, not a person
       entityType: 'referral',
       entityId: r.id,
       action: 'status_changed',

@@ -12,14 +12,12 @@ process.env.PGLITE_MEMORY = '1';
 let app;
 let db;
 let practiceId;
+let otherPracticeId;
 
 const auth = (token) => ({ Authorization: `Bearer ${token}` });
-// loadAdminForToken compares iat (seconds, floored) to sessions_revoked_at (sub-second) at
-// SECOND granularity — deliberately, so a fresh token minted in the same wall-clock second as a
-// revocation isn't falsely rejected. That means "this earlier token must now be dead" is only
-// deterministic once the revocation lands in a strictly LATER second than the token's issuance;
-// sleep past a second boundary first, same convention as admin-auth.test.js.
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// No sleeps here: tokens carry an `iatMs` claim (milliseconds at issue), so "issued before this
+// revocation" is exact and a token minted a millisecond earlier is already unambiguously dead.
+// See the iatMs describe in admin-auth.test.js for that compare on its own.
 
 beforeAll(async () => {
   const dbModule = await import('../src/db.js');
@@ -28,8 +26,9 @@ beforeAll(async () => {
   const { buildApp } = await import('../src/app.js');
   app = buildApp();
 
-  const practices = await db.query(`select id from practices where active order by name limit 1`);
+  const practices = await db.query(`select id from practices where active order by name limit 2`);
   practiceId = practices.rows[0].id;
+  otherPracticeId = practices.rows[1].id;
 });
 
 describe('GET /admin/team', () => {
@@ -140,11 +139,6 @@ describe('POST /admin/team/:id/password', () => {
 
     expect((await request(app).get('/admin/me').set(auth(managerToken))).status).toBe(200);
 
-    // The "old token is now dead" check below is only deterministic once the revocation below
-    // lands in a strictly later SECOND than managerToken's iat (loadAdminForToken compares at
-    // second granularity — see the sleep() comment up top).
-    await sleep(1100);
-
     const res = await request(app).post(`/admin/team/${managerAdmin.id}/password`).set(auth(adminToken))
       .send({ password: 'brand-new-strong-password' });
     expect(res.status).toBe(200);
@@ -163,6 +157,24 @@ describe('POST /admin/team/:id/password', () => {
       [managerAdmin.id],
     );
     expect(ev.rows[0]).toMatchObject({ action: 'password_set', actor_id: adminAdmin.id });
+  });
+
+  // I3 (final review): setting your OWN password through this route is still allowed, but it
+  // revokes your own sessions too — so it must hand back a replacement token the same way
+  // /admin/me/password does, or the caller logs themselves out mid-click. The dashboard hides
+  // the control on your own row; this is the API staying honest for every other caller.
+  it('setting your OWN password hands back a fresh token: the old one dies, the new one works at once', async () => {
+    const { token, admin } = await adminSession(app, { email: 'self-setpw@gmdental.co.uk', password: 'correct-horse-battery' });
+
+    const res = await request(app).post(`/admin/team/${admin.id}/password`).set(auth(token))
+      .send({ password: 'a-brand-new-self-password' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.token).toBeTruthy();
+    expect(res.body.token).not.toBe(token);
+
+    expect((await request(app).get('/admin/me').set(auth(token))).status).toBe(401);
+    expect((await request(app).get('/admin/me').set(auth(res.body.token))).status).toBe(200);
   });
 
   it('a weak password -> 422 weak_password', async () => {
@@ -206,9 +218,8 @@ describe('POST /admin/team/:id/password', () => {
       .send({ password: 'brand-new-immediate-password' });
     expect(setRes.status).toBe(200);
 
-    // Deliberately no sleep here — this is the exact race: a fresh login minted in the SAME
-    // wall-clock second as the sessions_revoked_at bump above must not be treated as issued
-    // "before" that revocation just because its floored `iat` reads earlier at ms precision.
+    // The exact race this guards: a fresh login minted in the SAME wall-clock second as the
+    // sessions_revoked_at bump above must not be treated as issued "before" that revocation.
     const login = await request(app).post('/auth/admin/login')
       .send({ email: 'pw-immediate-target@gmdental.co.uk', password: 'brand-new-immediate-password' });
     expect(login.status).toBe(200);
@@ -312,6 +323,90 @@ describe('POST /admin/team/:id/active', () => {
   });
 });
 
+// I4 (final review): a manager who moves branch had no path but "deactivate and re-create",
+// which loses their audit trail and their password. Re-scoping is a first-class, admin-only
+// operation — the same active-practice rule as createAdmin, and nothing else about the account
+// moves (no revocation: loadAdminForToken re-reads practice_ids on every request anyway).
+describe('POST /admin/team/:id/practice', () => {
+  it('re-scopes a manager and logs practice_changed', async () => {
+    const { token: adminToken, admin: actor } = await adminSession(app, { email: 'rescope-setter@gmdental.co.uk' });
+    const { admin: manager } = await adminSession(app, {
+      email: 'rescope-target@gmdental.co.uk', role: 'manager', practiceIds: [practiceId],
+    });
+
+    const res = await request(app).post(`/admin/team/${manager.id}/practice`).set(auth(adminToken))
+      .send({ practiceId: otherPracticeId });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+
+    const team = await request(app).get('/admin/team').set(auth(adminToken));
+    const row = team.body.team.find((m) => m.id === manager.id);
+    expect(row.practices.map((p) => p.id)).toEqual([otherPracticeId]);
+
+    const ev = await db.query(
+      `select action, actor_id, from_value, to_value from events
+       where entity_type='admin_user' and entity_id=$1 order by created_at desc limit 1`,
+      [manager.id],
+    );
+    expect(ev.rows[0]).toMatchObject({
+      action: 'practice_changed', actor_id: actor.id, from_value: practiceId, to_value: otherPracticeId,
+    });
+  });
+
+  it('an admin target -> 422 validation (an admin already covers every practice)', async () => {
+    const { token: adminToken } = await adminSession(app, { email: 'rescope-setter-2@gmdental.co.uk' });
+    const { admin: target } = await adminSession(app, { email: 'rescope-admin-target@gmdental.co.uk' });
+    const res = await request(app).post(`/admin/team/${target.id}/practice`).set(auth(adminToken))
+      .send({ practiceId: otherPracticeId });
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe('validation');
+  });
+
+  it('an unknown practice -> 422 practice_required', async () => {
+    const { token: adminToken } = await adminSession(app, { email: 'rescope-setter-3@gmdental.co.uk' });
+    const { admin: manager } = await adminSession(app, {
+      email: 'rescope-unknown-practice@gmdental.co.uk', role: 'manager', practiceIds: [practiceId],
+    });
+    const res = await request(app).post(`/admin/team/${manager.id}/practice`).set(auth(adminToken))
+      .send({ practiceId: crypto.randomUUID() });
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe('practice_required');
+  });
+
+  it('a malformed practiceId -> 422 validation, never a raw Postgres error', async () => {
+    const { token: adminToken } = await adminSession(app, { email: 'rescope-setter-4@gmdental.co.uk' });
+    const { admin: manager } = await adminSession(app, {
+      email: 'rescope-bad-practice@gmdental.co.uk', role: 'manager', practiceIds: [practiceId],
+    });
+    const res = await request(app).post(`/admin/team/${manager.id}/practice`).set(auth(adminToken))
+      .send({ practiceId: 'not-a-uuid' });
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe('validation');
+    expect(JSON.stringify(res.body)).not.toMatch(/invalid input syntax|22P02/i);
+  });
+
+  it('an unknown id -> 404 not_found', async () => {
+    const { token: adminToken } = await adminSession(app, { email: 'rescope-setter-5@gmdental.co.uk' });
+    const res = await request(app).post(`/admin/team/${crypto.randomUUID()}/practice`).set(auth(adminToken))
+      .send({ practiceId: otherPracticeId });
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('not_found');
+  });
+
+  it('a manager -> 403 forbidden', async () => {
+    const { token: managerToken } = await adminSession(app, {
+      email: 'team-fence-practice@gmdental.co.uk', role: 'manager', practiceIds: [practiceId],
+    });
+    const { admin: target } = await adminSession(app, {
+      email: 'rescope-fence-target@gmdental.co.uk', role: 'manager', practiceIds: [practiceId],
+    });
+    const res = await request(app).post(`/admin/team/${target.id}/practice`).set(auth(managerToken))
+      .send({ practiceId: otherPracticeId });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('forbidden');
+  });
+});
+
 describe('POST /admin/me/password (both roles)', () => {
   it('wrong current password -> 401 wrong_password', async () => {
     const { token } = await adminSession(app, { email: 'selfpw-wrong@gmdental.co.uk', password: 'correct-horse-battery' });
@@ -332,11 +427,6 @@ describe('POST /admin/me/password (both roles)', () => {
   it('right current password: old token dies (once unambiguous), the returned token works with ZERO extra wait', async () => {
     const { token, admin } = await adminSession(app, { email: 'selfpw-right@gmdental.co.uk', password: 'correct-horse-battery' });
     expect((await request(app).get('/admin/me').set(auth(token))).status).toBe(200);
-
-    // Only for the "old token is dead" half of this test — the same second-granularity reason
-    // as the setPassword test above. The point of the fix under test is the OTHER half: no sleep
-    // between minting the replacement token below and using it — that stays sleep-free.
-    await sleep(1100);
 
     const res = await request(app).post('/admin/me/password').set(auth(token))
       .send({ currentPassword: 'correct-horse-battery', newPassword: 'another-strong-password-2' });

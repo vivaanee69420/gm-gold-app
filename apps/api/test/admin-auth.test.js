@@ -3,7 +3,8 @@
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { beforeAll, describe, expect, it } from 'vitest';
+import jwt from 'jsonwebtoken';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { adminSession } from './helpers/admin.js';
 
@@ -32,6 +33,14 @@ beforeAll(async () => {
 
   const practices = await db.query(`select id from practices where active order by name limit 1`);
   practiceId = practices.rows[0].id;
+});
+
+// Every test in this file shares one process and one loopback IP, so login failures accumulate
+// across tests. Reset the counters between them rather than relying on each test staying under
+// the remaining headroom — that headroom silently shrinks every time a test is added.
+beforeEach(async () => {
+  const { __resetLimitersForTests } = await import('../src/services/adminService.js');
+  __resetLimitersForTests();
 });
 
 describe('POST /auth/admin/login', () => {
@@ -115,6 +124,23 @@ describe('login rate limit: per-IP + window expiry', () => {
       await expect(authenticate(`ip-flood-${i}@gmdental.co.uk`, 'wrong', { ip })).rejects.toMatchObject({ status: 401 });
     }
     await expect(authenticate('ip-flood-overflow@gmdental.co.uk', 'wrong', { ip })).rejects.toMatchObject({ status: 429 });
+  });
+
+  // I2 (final review): the strict 5-per-15-minutes counter is keyed on email + IP, not email
+  // alone. Keyed on email alone, anyone who knows an address could burn its five attempts and
+  // lock the real owner out of their own dashboard from their own network — a one-request
+  // denial of service per account. The coarse 30-per-IP limit above still fronts all of this.
+  it('5 failures for one email from IP A -> 429 for A, while the same email from IP B is still 401', async () => {
+    const { authenticate } = await import('../src/services/adminService.js');
+    const email = 'email-plus-ip@gmdental.co.uk';
+    const ipA = 'test-only-198.51.100.1';
+    const ipB = 'test-only-198.51.100.2';
+
+    for (let i = 0; i < 5; i += 1) {
+      await expect(authenticate(email, 'wrong', { ip: ipA })).rejects.toMatchObject({ status: 401 });
+    }
+    await expect(authenticate(email, 'wrong', { ip: ipA })).rejects.toMatchObject({ status: 429 });
+    await expect(authenticate(email, 'wrong', { ip: ipB })).rejects.toMatchObject({ status: 401 });
   });
 
   it('failures older than the 15-minute window are pruned and stop counting', async () => {
@@ -208,11 +234,69 @@ describe('requireAdmin', () => {
   });
 });
 
+// I5 (final review): `iat` is whole seconds, so a token minted in the same second as a
+// revocation was indistinguishable from one minted before it — the compare had to be coarsened
+// to second granularity, which left a token up to a second of life past its own revocation.
+// An `iatMs` claim (milliseconds, set at issue) closes that window without reopening the
+// false-rejection bug; tokens minted before the claim existed keep the coarse fallback.
+describe('sub-second revocation (iatMs)', () => {
+  it('a token minted 1 ms before the revocation is dead; one minted at that instant is alive', async () => {
+    const { issueAdminToken } = await import('../src/services/adminService.js');
+    const { admin } = await adminSession(app, { email: 'iatms-admin@gmdental.co.uk' });
+
+    const { rows } = await db.query(
+      `update admin_users set sessions_revoked_at = now() where id = $1 returning sessions_revoked_at`,
+      [admin.id],
+    );
+    const revokedMs = new Date(rows[0].sessions_revoked_at).getTime();
+
+    const before = issueAdminToken({ id: admin.id, role: 'admin' }, { iatMs: revokedMs - 1 });
+    const at = issueAdminToken({ id: admin.id, role: 'admin' }, { iatMs: revokedMs });
+
+    expect((await request(app).get('/admin/me').set(auth(before))).status).toBe(401);
+    expect((await request(app).get('/admin/me').set(auth(at))).status).toBe(200);
+  });
+
+  it('a legacy token with no iatMs is still evaluated, at second granularity', async () => {
+    const { config } = await import('../src/config.js');
+    const { admin } = await adminSession(app, { email: 'legacy-token@gmdental.co.uk' });
+
+    // Exactly the shape every admin token had before this fix: no iatMs claim at all.
+    const legacy = jwt.sign({ sub: admin.id, kind: 'admin', role: 'admin' }, config.jwtSecret, { expiresIn: '12h' });
+    const { iat } = jwt.decode(legacy);
+
+    // Revoked inside the SAME wall-clock second it was minted: the coarse fallback keeps it
+    // alive, which is what stops a fresh login dying to the revocation that preceded it.
+    await db.query(
+      `update admin_users set sessions_revoked_at = to_timestamp($2::float8) + interval '400 milliseconds' where id = $1`,
+      [admin.id, iat],
+    );
+    expect((await request(app).get('/admin/me').set(auth(legacy))).status).toBe(200);
+
+    // Revoked in a strictly later second: dead.
+    await db.query(
+      `update admin_users set sessions_revoked_at = to_timestamp($2::float8) where id = $1`,
+      [admin.id, iat + 1],
+    );
+    expect((await request(app).get('/admin/me').set(auth(legacy))).status).toBe(401);
+  });
+});
+
 describe('createAdmin validation', () => {
   it('manager without a practice -> 422 practice_required', async () => {
     const { createAdmin } = await import('../src/services/adminService.js');
     await expect(createAdmin({ email: 'manager-no-practice@gmdental.co.uk', password: 'correct-horse-battery', role: 'manager', practiceIds: [] }))
       .rejects.toMatchObject({ message: 'practice_required', status: 422 });
+  });
+
+  // Distinct from practice_required (a manager MISSING a practice): an admin is unscoped by
+  // construction, so a practice id on one is a different mistake and deserves its own message.
+  it('an admin WITH a practice -> 422 practice_not_allowed', async () => {
+    const { createAdmin } = await import('../src/services/adminService.js');
+    await expect(createAdmin({
+      email: 'admin-with-practice@gmdental.co.uk', password: 'correct-horse-battery',
+      role: 'admin', practiceIds: [practiceId],
+    })).rejects.toMatchObject({ message: 'practice_not_allowed', status: 422 });
   });
 
   it('duplicate email -> 409 email_taken', async () => {
@@ -287,8 +371,40 @@ describe('config boot guard', () => {
   it('does not throw outside production even without API_JWT_SECRET (dev/test unaffected)', () => {
     const result = spawnSync(
       process.execPath,
-      ['-e', `delete process.env.API_JWT_SECRET; ${importConfig}`],
+      // DATABASE_URL is deleted explicitly: the embedded-PGlite case is exactly what this
+      // test is about, and the guard below now also fires on a real database URL.
+      ['-e', `delete process.env.API_JWT_SECRET; delete process.env.DATABASE_URL; ${importConfig}`],
       { cwd: apiRoot, env: { ...process.env, NODE_ENV: 'test' }, timeout: 10000 },
+    );
+    expect(result.status).toBe(0);
+  });
+
+  // Controller ruling C1 (final review): the guard must not depend on NODE_ENV at all. The
+  // deployed image boots with NODE_ENV=development while pointing at a real database, so the
+  // production-only check above would have let it sign real sessions with the public default
+  // secret. A DATABASE_URL is the honest signal that this process talks to a real database.
+  it('throws when DATABASE_URL is set and API_JWT_SECRET is unset, whatever NODE_ENV says', () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `delete process.env.NODE_ENV; delete process.env.API_JWT_SECRET;` +
+          ` process.env.DATABASE_URL='postgres://u:p@example.invalid:5432/db'; ${importConfig}`,
+      ],
+      { cwd: apiRoot, timeout: 10000 },
+    );
+    expect(result.status).toBe(2);
+  });
+
+  it('boots with a DATABASE_URL when API_JWT_SECRET is set too', () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `delete process.env.NODE_ENV; process.env.API_JWT_SECRET='a-real-secret';` +
+          ` process.env.DATABASE_URL='postgres://u:p@example.invalid:5432/db'; ${importConfig}`,
+      ],
+      { cwd: apiRoot, timeout: 10000 },
     );
     expect(result.status).toBe(0);
   });

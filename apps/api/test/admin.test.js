@@ -1,7 +1,7 @@
 // Admin dashboard surfaces (FR-25 review queue + reports, FR-28 funnel/tripwire,
 // FR-21 admin payout cancel, FR-03 session revocation, FR-24 admin_users scoping).
 // Runs on in-memory PGlite like api.test.js.
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { adminSession } from './helpers/admin.js';
 
@@ -240,6 +240,30 @@ describe('session revocation (FR-03)', () => {
     expect((await request(app).get('/me').set(auth(again.token))).status).toBe(200);
   });
 
+  // I5 (final review): requireUser used to compare `iat * 1000` against a sub-second
+  // sessions_revoked_at, so a token minted in the very second of the revocation that preceded
+  // it read as "issued before" and died. Tokens now carry iatMs (exact); tokens minted before
+  // that claim existed fall back to a second-granularity compare.
+  it('a legacy patient token with no iatMs is judged at second granularity', async () => {
+    const { config } = await import('../src/config.js');
+    const { default: jwt } = await import('jsonwebtoken');
+    const { user } = await signIn('07700 900806');
+
+    const legacy = jwt.sign({ sub: user.id, phone: user.phone }, config.jwtSecret, { expiresIn: '90d' });
+    const { iat } = jwt.decode(legacy);
+
+    // Revoked inside the same wall-clock second it was minted -> still alive.
+    await db.query(
+      `update users set sessions_revoked_at = to_timestamp($2::float8) + interval '400 milliseconds' where id=$1`,
+      [user.id, iat],
+    );
+    expect((await request(app).get('/me').set(auth(legacy))).status).toBe(200);
+
+    // Revoked in a strictly later second -> dead.
+    await db.query(`update users set sessions_revoked_at = to_timestamp($2::float8) where id=$1`, [user.id, iat + 1]);
+    expect((await request(app).get('/me').set(auth(legacy))).status).toBe(401);
+  });
+
   it('404s for an unknown user', async () => {
     const res = await request(app)
       .post('/admin/users/00000000-0000-0000-0000-000000000000/revoke-sessions')
@@ -268,5 +292,39 @@ describe('admin_users practice scoping (FR-24)', () => {
 
     const all = await request(app).get('/admin/payouts').set(auth(agents.admin));
     expect(all.body.payouts.length).toBeGreaterThan(0); // an unscoped admin sees every practice
+  });
+});
+
+// A 5xx is always OUR bug, never something a caller can act on — and a raw Postgres message
+// carries table/column names and sometimes parameter values. The boundary must answer every
+// 5xx with the same opaque code while still logging the real error for us (I1, final review).
+describe('error boundary', () => {
+  it('a server-side failure responds with exactly { error: "internal" } and still logs the real error', async () => {
+    const dbModule = await import('../src/db.js');
+    const realQuery = dbModule.db.query;
+    const boom = new Error('relation "app_settings" does not exist at character 42');
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const query = vi.spyOn(dbModule.db, 'query').mockImplementation((text, params) =>
+      String(text).includes('app_settings') ? Promise.reject(boom) : realQuery(text, params));
+
+    try {
+      const res = await request(app).get('/admin/settings').set(auth(agents.admin));
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ error: 'internal' });
+      expect(JSON.stringify(res.body)).not.toMatch(/relation|does not exist|character 42/i);
+      expect(consoleError).toHaveBeenCalledWith('[api]', boom);
+    } finally {
+      query.mockRestore();
+      consoleError.mockRestore();
+    }
+  });
+
+  it('a 4xx thrown by a service still carries its own error code', async () => {
+    const res = await request(app)
+      .patch('/admin/referrals/00000000-0000-0000-0000-000000000000/status')
+      .set(auth(agents.admin))
+      .send({ status: 'contacted' });
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'not_found' });
   });
 });

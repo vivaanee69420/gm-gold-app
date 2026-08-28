@@ -29,7 +29,7 @@ export default function ReportsPage({ data, loadAll, notify, me }) {
             notify={notify}
           />
           <DentallyCard status={data.dentally} onChanged={loadAll} notify={notify} />
-          {me?.role === 'admin' && <TeamCard practices={me.practices} notify={notify} />}
+          {me?.role === 'admin' && <TeamCard practices={me.practices} meId={me.id} notify={notify} />}
         </div>
       </Zone>
     </>

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import TeamCard from '../src/components/TeamCard.jsx';
-import { clearToken, setToken } from '../src/api/client.js';
+import { clearToken, getToken, setToken } from '../src/api/client.js';
 import { stubFetchRoutes } from './helpers.js';
 
 const practices = [{ id: 'pr-sidcup', name: 'Sidcup' }, { id: 'pr-ashford', name: 'Ashford' }];
@@ -103,7 +103,7 @@ describe('TeamCard', () => {
     const managerRow = within((await screen.findByText('manager@gmdental.co.uk')).closest('tr'));
 
     await userEvent.type(managerRow.getByLabelText(/new password/i), 'anothersafepassword');
-    await userEvent.click(managerRow.getByRole('button', { name: /save/i }));
+    await userEvent.click(managerRow.getByRole('button', { name: /save password/i }));
 
     const posted = calls.find((c) => c.method === 'POST' && c.path === '/admin/team/ad-2/password');
     expect(posted.body).toEqual({ password: 'anothersafepassword' });
@@ -135,6 +135,91 @@ describe('TeamCard', () => {
 
     const posted = calls.find((c) => c.method === 'POST' && c.path === '/admin/team/ad-2/active');
     expect(posted.body).toEqual({ active: true });
+  });
+
+  // I3 (final review): setting your own password here logs you out mid-click, and deactivating
+  // yourself is a 409 the API refuses anyway. Don't offer either on your own row — say which
+  // row is you, and point at the header control that actually works.
+  it('the caller\'s own row says "(you)" and offers no password or deactivate control', async () => {
+    stubFetchRoutes([{ method: 'GET', path: '/admin/team', body: { team } }]);
+    render(<TeamCard practices={practices} meId="ad-1" notify={vi.fn()} />);
+
+    const ownerRow = within((await screen.findByText('owner@gmdental.co.uk')).closest('tr'));
+    expect(ownerRow.getByText(/\(you\)/)).toBeInTheDocument();
+    expect(ownerRow.queryByLabelText(/new password/i)).not.toBeInTheDocument();
+    expect(ownerRow.queryByRole('button', { name: /save password/i })).not.toBeInTheDocument();
+    expect(ownerRow.queryByRole('button', { name: /deactivate/i })).not.toBeInTheDocument();
+    expect(ownerRow.getByText(/change password/i)).toBeInTheDocument(); // points at the header
+
+    // Everyone else's row is untouched.
+    const managerRow = within(screen.getByText('manager@gmdental.co.uk').closest('tr'));
+    expect(managerRow.getByRole('button', { name: /save password/i })).toBeInTheDocument();
+    expect(managerRow.getByRole('button', { name: /reactivate/i })).toBeInTheDocument();
+  });
+
+  it('stores the fresh token when a set-password response carries one', async () => {
+    stubFetchRoutes([
+      { method: 'GET', path: '/admin/team', body: { team } },
+      { method: 'POST', path: '/admin/team/ad-2/password', body: { ok: true, token: 'rotated-tok' } },
+    ]);
+    render(<TeamCard practices={practices} notify={vi.fn()} />);
+    const managerRow = within((await screen.findByText('manager@gmdental.co.uk')).closest('tr'));
+
+    await userEvent.type(managerRow.getByLabelText(/new password/i), 'anothersafepassword');
+    await userEvent.click(managerRow.getByRole('button', { name: /save password/i }));
+
+    await vi.waitFor(() => expect(getToken()).toBe('rotated-tok'));
+  });
+
+  // I4 (final review): a manager who moves branch is re-scoped in place.
+  it('re-scopes a manager: the practice select starts on their practice and Save posts practiceId', async () => {
+    const calls = stubFetchRoutes([
+      { method: 'GET', path: '/admin/team', body: { team } },
+      { method: 'POST', path: '/admin/team/ad-2/practice', body: { ok: true } },
+    ]);
+    render(<TeamCard practices={practices} notify={vi.fn()} />);
+    const managerRow = within((await screen.findByText('manager@gmdental.co.uk')).closest('tr'));
+
+    const select = managerRow.getByLabelText(/practice/i);
+    expect(select).toHaveValue('pr-sidcup');
+    await userEvent.selectOptions(select, 'pr-ashford');
+    await userEvent.click(managerRow.getByRole('button', { name: /save practice/i }));
+
+    const posted = calls.find((c) => c.method === 'POST' && c.path === '/admin/team/ad-2/practice');
+    expect(posted.body).toEqual({ practiceId: 'pr-ashford' });
+  });
+
+  it('an admin row has no practice select — an admin covers every practice', async () => {
+    stubFetchRoutes([{ method: 'GET', path: '/admin/team', body: { team } }]);
+    render(<TeamCard practices={practices} notify={vi.fn()} />);
+    const ownerRow = within((await screen.findByText('owner@gmdental.co.uk')).closest('tr'));
+    expect(ownerRow.queryByLabelText(/practice/i)).not.toBeInTheDocument();
+  });
+
+  it('reveals the temporary password with the Show toggle', async () => {
+    stubFetchRoutes([{ method: 'GET', path: '/admin/team', body: { team: [] } }]);
+    render(<TeamCard practices={practices} notify={vi.fn()} />);
+    const field = await screen.findByLabelText(/temporary password/i);
+
+    expect(field).toHaveAttribute('type', 'password');
+    await userEvent.click(screen.getByRole('button', { name: /^show$/i }));
+    expect(field).toHaveAttribute('type', 'text');
+    await userEvent.click(screen.getByRole('button', { name: /^hide$/i }));
+    expect(field).toHaveAttribute('type', 'password');
+  });
+
+  it('confirms a successful mutation instead of going silent', async () => {
+    stubFetchRoutes([
+      { method: 'GET', path: '/admin/team', body: { team } },
+      { method: 'POST', path: '/admin/team/ad-1/active', body: { ok: true } },
+    ]);
+    const notify = vi.fn();
+    render(<TeamCard practices={practices} notify={notify} />);
+    const ownerRow = within((await screen.findByText('owner@gmdental.co.uk')).closest('tr'));
+
+    await userEvent.click(ownerRow.getByRole('button', { name: /deactivate/i }));
+
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledWith('team_saved'));
   });
 
   it('notifies with the error code when deactivating fails', async () => {

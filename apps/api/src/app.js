@@ -31,6 +31,7 @@ import {
   listAdmins,
   setPassword,
   setActive,
+  setPractice,
   changeOwnPassword,
   normalizePracticeIds,
 } from './services/adminService.js';
@@ -271,6 +272,12 @@ export function buildApp() {
     res.json(await setPassword({ id: req.params.id, password: req.body?.password, actorId: req.admin.id }));
   }));
 
+  // { practiceId } — move a manager to another practice (FR-24). Admin-only like the rest of
+  // /admin/team*; an admin target is a 422, since an admin isn't practice-scoped at all.
+  app.post('/admin/team/:id/practice', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
+    res.json(await setPractice({ id: req.params.id, practiceId: req.body?.practiceId, actorId: req.admin.id }));
+  }));
+
   // { active: boolean } — 409 cannot_deactivate_self / last_admin guard which admins this can
   // touch; deactivating also bumps sessions_revoked_at. `active` must be a real JSON boolean —
   // a missing/malformed value (e.g. the string "true", or an absent field) previously fell
@@ -321,6 +328,7 @@ export function buildApp() {
       status: req.data.status,
       lostReason: req.data.lostReason,
       actorId: req.admin.id,
+      actorKind: 'admin',
       privilegedComplete: true,
     });
     res.json(out);
@@ -517,7 +525,7 @@ export function buildApp() {
       );
     }
     await logEvent(db, {
-      actorId: req.admin.id, entityType: 'referral', entityId: req.params.id,
+      actorId: req.admin.id, actorKind: 'admin', entityType: 'referral', entityId: req.params.id,
       action: 'review_decided', fromValue: 'existing_patient_suspect', toValue: decision,
     });
     res.json({ ok: true, decision });
@@ -578,7 +586,7 @@ export function buildApp() {
       [req.params.id],
     );
     if (!rows[0]) return res.status(404).json({ error: 'not_found' });
-    await logEvent(db, { actorId: req.admin.id, entityType: 'user', entityId: req.params.id, action: 'sessions_revoked' });
+    await logEvent(db, { actorId: req.admin.id, actorKind: 'admin', entityType: 'user', entityId: req.params.id, action: 'sessions_revoked' });
     res.json({ ok: true });
   }));
 
@@ -651,8 +659,15 @@ export function buildApp() {
   // eslint-disable-next-line no-unused-vars
   app.use((err, _req, res, _next) => {
     const status = err.status ?? 500;
-    if (status >= 500) console.error('[api]', err);
-    res.status(status).json({ error: err.message ?? 'internal' });
+    // A 5xx is our bug, not something the caller can act on, and `err.message` there is
+    // whatever threw — typically raw Postgres text carrying table/column names and sometimes
+    // parameter values. Log the real error, answer with one opaque code. 4xx errors are
+    // deliberate, thrown with a code as their message, and keep carrying it.
+    if (status >= 500) {
+      console.error('[api]', err);
+      return res.status(status).json({ error: 'internal' });
+    }
+    return res.status(status).json({ error: err.message ?? 'internal' });
   });
 
   return app;
