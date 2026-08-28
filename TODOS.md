@@ -3,6 +3,8 @@
 Index of parked work and external waits. Details live in the linked docs; this file is pointers, not copies.
 Created by /plan-eng-review on 2026-08-14.
 
+**Concrete build list (2026-08-28 audit): see `todo.md`** — security blockers, manager verification, admin dashboard gaps, email auth, DB/lock bugs, system design.
+
 ## External waits (Stage 0 — all four emails should be sent today)
 
 - [x] **Dentally data — LIVE via Dental Os (2026-08-21, decision by Ruhith)**: the sync reads the central Dental Os DB (fed by Dentally webhooks) through read-only role `gm_referral_reader`; ~16k patients indexed on first backfill; `gmref_doorbell` triggers on Dental Os ping `/webhooks/dentally` for second-level latency. Real practices seeded (migration 0006). Direct-Dentally OAuth + token paths remain as built fallbacks (spike script kept). **The Dentally-credentials email is now OPTIONAL** — only needed if we ever switch to direct mode.
