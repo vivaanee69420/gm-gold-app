@@ -3,6 +3,8 @@
 const ERRORS = {
   invalid_transition: "That status move isn't allowed from where the referral is now.",
   payout_not_open: 'This payout request is no longer open.',
+  amount_required: 'Type the cash amount handed over before marking paid.',
+  amount_mismatch: "That amount doesn't match the request — check the cash and try again.",
   insufficient_balance: "The member's balance no longer covers this payout.",
   already_credited: 'This referral has already been credited.',
   no_active_rule: 'No commission amount is set — save one in Reward levers first.',

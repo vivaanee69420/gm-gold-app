@@ -138,9 +138,13 @@ client queries Postgres directly.
 
 ### Admin
 - **FR-24** Admin web dashboard (React/Vite) with Supabase email auth and roles: `admin` (practice-scoped
-  levers + queues) and `owner` (all practices, manual adjustments, exports, SAR handling). Admins are
-  modeled in the dedicated `admin_users` table (auth uid, email, role, practice_ids) — separate from patient
-  `users`; practice scoping of queues and levers reads `practice_ids`.
+  levers + queues), `owner` (all practices, manual adjustments, exports, SAR handling), and `manager`
+  (2026-08-28 decision — one practice, payouts only: fenced server-side to `GET /admin/me` and
+  `/admin/payouts*`; every other `/admin/*` route 403s). Admins are modeled in the dedicated `admin_users`
+  table (auth uid, email, role, practice_ids) — separate from patient `users`; practice scoping of queues
+  and levers reads `practice_ids`. An empty `practice_ids` means different things by role: for `admin` it
+  is the documented all-practice default; for `manager` it means no practice is assigned yet, so that
+  account sees and can act on nothing until an owner grants one (`scripts/grant-admin.js`).
 - **FR-25** Dashboard surfaces: levers (rules + app settings), verification review queue, referral review
   list (referrals only, `existing_patient_suspect`; decisions: *clear* → `review_status='cleared'`, or
   *confirm existing patient* → referral `lost` with reason `existing_patient`, never creditable),
@@ -295,13 +299,16 @@ GET  /wallet                      balance, threshold, ledger
 POST /payouts                     create payout request (balance >= threshold)
 DELETE /payouts/:id               referrer cancels own open request
 -- admin (role-gated) --
+GET  /admin/me                    role + practices this account can see (manager: their one practice;
+                                   owner/unscoped admin: all). A `manager` role reaches ONLY this route
+                                   and /admin/payouts*; every other /admin/* route 403s `forbidden` for it.
 GET/PUT /admin/rules              commission rules (overlap-checked on save)
 GET/PUT /admin/settings           payout threshold, payout expiry days
 GET  /admin/verification-queue    POST /admin/verification-queue/:id/decide
 GET  /admin/referral-review      POST /admin/referral-review/:id/decide
 GET  /admin/proposals             POST /admin/proposals/:id/confirm|reject
 GET  /admin/referrals             PATCH /admin/referrals/:id/status
-GET  /admin/payouts               POST /admin/payouts/:id/mark-paid|cancel
+GET  /admin/payouts               POST /admin/payouts/:id/mark-paid { amountPennies } | :id/cancel
 GET  /admin/reports/funnel|liability|top-referrers|aging
 POST /admin/users/:id/revoke-sessions   admin/owner: revoke a patient user's sessions (FR-03)
 -- Phase 2 (MVP stand-ins per FR-26/FR-27: Supabase dashboard queries + SAR runbook) --

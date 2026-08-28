@@ -13,6 +13,7 @@ afterEach(() => {
 
 function stubDashboardRoutes() {
   return stubFetchRoutes([
+    { method: 'GET', path: '/admin/me', body: { role: 'owner', practices: [] } },
     { method: 'GET', path: '/admin/settings', body: { settings: { payout_threshold_pennies: '10000', payout_expiry_days: '90' } } },
     { method: 'GET', path: '/admin/stats', body: { stats: { commissionPennies: 2000, liabilityPennies: 46000, referralCounts: { new: 2, booked: 1 } } } },
     { method: 'GET', path: '/admin/payouts', body: { payouts: [] } },
@@ -113,5 +114,21 @@ describe('App', () => {
     expect(await screen.findByRole('heading', { name: /^dentally$/i })).toBeInTheDocument();
     expect(window.location.pathname).toBe('/reports');
     expect(window.location.search).toBe('');
+  });
+
+  it('renders the manager payout screen for a practice-scoped manager, with no top nav', async () => {
+    setToken('tok');
+    const calls = stubFetchRoutes([
+      { method: 'GET', path: '/admin/me', body: { role: 'manager', practices: [{ id: 'pr-sidcup', name: 'Sidcup' }] } },
+      { method: 'GET', path: '/admin/payouts', body: { payouts: [] } },
+    ]);
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: /sidcup · payouts/i })).toBeInTheDocument();
+    expect(screen.queryByRole('navigation')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /reports & setup/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument();
+    // A manager's `loadAll` must never fire — only the two routes ManagerPage itself needs.
+    expect(calls.map((c) => c.path).sort()).toEqual(['/admin/me', '/admin/payouts']);
   });
 });

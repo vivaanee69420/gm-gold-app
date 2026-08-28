@@ -135,18 +135,45 @@ export async function requestPayout(userId, practiceId) {
   });
 }
 
-export async function markPayoutPaid(payoutId, adminId) {
-  const { rows } = await db.query(`select * from payout_requests where id=$1`, [payoutId]);
+/** Find which user owns a payout, without locking — just enough to pick the wallet lock key. */
+async function ownerOf(payoutId) {
+  const { rows } = await db.query(`select user_id from payout_requests where id=$1`, [payoutId]);
+  return rows[0]?.user_id ?? null;
+}
+
+/** Re-read and row-lock the payout inside the wallet-lock transaction; 409 unless still open. */
+async function lockOpenPayout(client, payoutId) {
+  const { rows } = await client.query(`select * from payout_requests where id=$1 for update`, [payoutId]);
   const payout = rows[0];
   if (!payout || payout.status !== 'open') throw Object.assign(new Error('payout_not_open'), { status: 409 });
+  return payout;
+}
 
-  return withWalletLock(payout.user_id, async (client) => {
+/** FR-24: a practice-scoped manager/admin may only touch payouts at their own practice(s). */
+function assertInScope(practiceIds, payout) {
+  if (practiceIds && !practiceIds.includes(payout.practice_id)) {
+    throw Object.assign(new Error('forbidden'), { status: 403 });
+  }
+}
+
+export async function markPayoutPaid(payoutId, adminId, { amountPennies, practiceIds = null } = {}) {
+  const userId = await ownerOf(payoutId);
+  if (!userId) throw Object.assign(new Error('payout_not_open'), { status: 409 });
+
+  return withWalletLock(userId, async (client) => {
+    const payout = await lockOpenPayout(client, payoutId);
+    // Scope before amount: a manager must never learn another practice's amount by probing.
+    assertInScope(practiceIds, payout);
+    if (amountPennies !== payout.amount_pennies) {
+      throw Object.assign(new Error('amount_mismatch'), { status: 409 });
+    }
     const balance = await balanceOf(client, payout.user_id);
     if (balance - payout.amount_pennies < 0) throw Object.assign(new Error('insufficient_balance'), { status: 409 });
-    await client.query(
-      `update payout_requests set status='paid', paid_by=$2, paid_at=now() where id=$1`,
+    const { rows: updated } = await client.query(
+      `update payout_requests set status='paid', paid_by=$2, paid_at=now() where id=$1 and status='open' returning id`,
       [payoutId, adminId],
     );
+    if (!updated[0]) throw Object.assign(new Error('payout_not_open'), { status: 409 });
     await client.query(
       `insert into wallet_ledger (user_id, kind, amount_pennies, payout_id, created_by)
        values ($1,'debit',$2,$3,$4)`,
@@ -164,21 +191,33 @@ export async function markPayoutPaid(payoutId, adminId) {
   });
 }
 
-export async function cancelPayout(payoutId, actorId, byAdmin = false, reason = null) {
-  const { rows } = await db.query(
-    `update payout_requests set status='cancelled', cancelled_by=$2 where id=$1 and status='open' returning *`,
-    [payoutId, actorId],
-  );
-  if (!rows[0]) throw Object.assign(new Error('payout_not_open'), { status: 409 });
-  if (byAdmin) {
-    // FR-21: an admin cancel carries a reason and the member hears about it — their
-    // balance is intact and they can re-request, so the message says exactly that.
-    await db.query(
-      `insert into notification_outbox (recipient_kind, recipient_id, template, payload)
-       values ('user',$1,'payout_cancelled',$2)`,
-      [rows[0].user_id, JSON.stringify({ amountPennies: rows[0].amount_pennies, reason })],
+export async function cancelPayout(payoutId, actorId, { byAdmin = false, reason = null, practiceIds = null } = {}) {
+  const userId = await ownerOf(payoutId);
+  if (!userId) throw Object.assign(new Error('payout_not_open'), { status: 409 });
+
+  return withWalletLock(userId, async (client) => {
+    const payout = await lockOpenPayout(client, payoutId);
+    // A member cancelling their own request is fine; anyone else's open request looks
+    // "not open" to them (no ownership leak). An admin cancel instead checks practice scope.
+    if (!byAdmin && payout.user_id !== actorId) {
+      throw Object.assign(new Error('payout_not_open'), { status: 409 });
+    }
+    if (byAdmin) assertInScope(practiceIds, payout);
+    const { rows: updated } = await client.query(
+      `update payout_requests set status='cancelled', cancelled_by=$2 where id=$1 and status='open' returning *`,
+      [payoutId, actorId],
     );
-  }
-  await logEvent(db, { actorId, entityType: 'payout', entityId: payoutId, action: byAdmin ? 'cancelled_by_admin' : 'cancelled', reason });
-  return { ok: true };
+    if (!updated[0]) throw Object.assign(new Error('payout_not_open'), { status: 409 });
+    if (byAdmin) {
+      // FR-21: an admin cancel carries a reason and the member hears about it — their
+      // balance is intact and they can re-request, so the message says exactly that.
+      await client.query(
+        `insert into notification_outbox (recipient_kind, recipient_id, template, payload)
+         values ('user',$1,'payout_cancelled',$2)`,
+        [updated[0].user_id, JSON.stringify({ amountPennies: updated[0].amount_pennies, reason })],
+      );
+    }
+    await logEvent(client, { actorId, entityType: 'payout', entityId: payoutId, action: byAdmin ? 'cancelled_by_admin' : 'cancelled', reason });
+    return { ok: true };
+  });
 }
