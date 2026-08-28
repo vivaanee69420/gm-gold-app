@@ -118,7 +118,7 @@ describe('App', () => {
 
   it('renders the manager payout screen for a practice-scoped manager, with no top nav', async () => {
     setToken('tok');
-    stubFetchRoutes([
+    const calls = stubFetchRoutes([
       { method: 'GET', path: '/admin/me', body: { role: 'manager', practices: [{ id: 'pr-sidcup', name: 'Sidcup' }] } },
       { method: 'GET', path: '/admin/payouts', body: { payouts: [] } },
     ]);
@@ -128,5 +128,7 @@ describe('App', () => {
     expect(screen.queryByRole('navigation')).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /reports & setup/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument();
+    // A manager's `loadAll` must never fire — only the two routes ManagerPage itself needs.
+    expect(calls.map((c) => c.path).sort()).toEqual(['/admin/me', '/admin/payouts']);
   });
 });

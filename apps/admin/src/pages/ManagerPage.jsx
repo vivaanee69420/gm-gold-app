@@ -7,15 +7,20 @@ import PayoutQueue from '../components/PayoutQueue.jsx';
 // without a manual reload.
 export default function ManagerPage({ me, notify, onSignOut }) {
   const [payouts, setPayouts] = useState(null);
+  // Controller ruling (2026-08-28 final review): a manager with no practice assigned yet
+  // sees/acts on nothing — don't crash on `me.practices[0].name` and don't show a queue
+  // that would (per the API's own empty-scope rule) always come back empty.
+  const hasPractice = me.practices.length > 0;
 
   const reload = useCallback(async () => {
+    if (!hasPractice) return;
     try {
       const out = await api('/admin/payouts');
       setPayouts(out.payouts);
     } catch (err) {
       notify(err.code ?? 'load_failed');
     }
-  }, [notify]);
+  }, [notify, hasPractice]);
 
   useEffect(() => {
     reload();
@@ -27,16 +32,22 @@ export default function ManagerPage({ me, notify, onSignOut }) {
     return () => clearInterval(timer);
   }, [reload]);
 
+  const practiceName = me.practices[0]?.name ?? 'Payouts';
+
   return (
     <div className="dashboard">
       <header className="topbar">
         <p className="wordmark">GM Dental</p>
-        <h1>{me.practices[0].name} · Payouts</h1>
+        <h1>{practiceName}{hasPractice ? ' · Payouts' : ''}</h1>
         <button className="ghost" onClick={onSignOut}>
           Sign out
         </button>
       </header>
-      {!payouts ? (
+      {!hasPractice ? (
+        <main>
+          <p className="empty">No practice is assigned to this account — ask the owner to fix it.</p>
+        </main>
+      ) : !payouts ? (
         <p className="loading">Loading…</p>
       ) : (
         <main>

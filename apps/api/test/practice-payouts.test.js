@@ -213,3 +213,106 @@ describe.skipIf(!process.env.DATABASE_URL)('mark-paid vs cancel race (real Postg
     expect(debits[0].n).toBe(rows[0].status === 'paid' ? 1 : 0);
   });
 });
+
+// Controller ruling (final review, 2026-08-28): an empty practice_ids means opposite things
+// for the two practice-scoped roles. `admin` with `{}` is the documented all-practice
+// default (grant-admin.js) — it must see and be able to act on every practice, same as an
+// owner. `manager` with `{}` has not been assigned a practice yet — it must see and act on
+// NOTHING, not fall through to "all" the way a naive `practiceIds.length ? … : null` would.
+describe('controller ruling: empty practice_ids means "all" for admin, "none" for manager', () => {
+  it('an unscoped admin (practice_ids={}) sees every payout and can mark one paid', async () => {
+    const eve = await referrerWithOpenPayout({ phone: '07700 900930', friendPhone: '07700 900931', name: 'Eve', practiceId: t.b });
+    const admin = await signIn('07700 900932');
+    await db.query(
+      `insert into admin_users (user_id, email, role, practice_ids) values ($1, $2, 'admin', '{}'::uuid[])`,
+      [admin.user.id, 'admin.unscoped@gmdental.co.uk'],
+    );
+
+    const list = await request(app).get('/admin/payouts').set(auth(admin.token));
+    expect(list.status).toBe(200);
+    expect(list.body.payouts.map((p) => p.id)).toContain(eve.payoutId);
+
+    const mark = await request(app)
+      .post(`/admin/payouts/${eve.payoutId}/mark-paid`).set(auth(admin.token)).send({ amountPennies: 10000 });
+    expect(mark.status).toBe(200);
+  });
+
+  it('an unscoped manager (practice_ids={}) sees nothing, and 403s on mark-paid', async () => {
+    const finn = await referrerWithOpenPayout({ phone: '07700 900933', friendPhone: '07700 900934', name: 'Finn', practiceId: t.a });
+    const manager = await signIn('07700 900935');
+    await db.query(
+      `insert into admin_users (user_id, email, role, practice_ids) values ($1, $2, 'manager', '{}'::uuid[])`,
+      [manager.user.id, 'manager.unscoped@gmdental.co.uk'],
+    );
+
+    const me = await request(app).get('/admin/me').set(auth(manager.token));
+    expect(me.status).toBe(200);
+    expect(me.body.practices).toEqual([]);
+
+    const list = await request(app).get('/admin/payouts').set(auth(manager.token));
+    expect(list.status).toBe(200);
+    expect(list.body.payouts).toEqual([]);
+
+    const mark = await request(app)
+      .post(`/admin/payouts/${finn.payoutId}/mark-paid`).set(auth(manager.token)).send({ amountPennies: 10000 });
+    expect(mark.status).toBe(403);
+    expect(mark.body.error).toBe('forbidden');
+    const { rows } = await db.query(`select status from payout_requests where id=$1`, [finn.payoutId]);
+    expect(rows[0].status).toBe('open');
+  });
+});
+
+// A settled payout's balance has already moved; only the OPEN request reception is about
+// to pay out should carry the member's unpaid credits.
+describe('credits behind an open payout exclude anything already paid out', () => {
+  it('a paid payout shows no credits; the next open one shows only the later credit', async () => {
+    const gwen = await signIn('07700 900940');
+    await request(app).post('/me/profile').set(auth(gwen.token)).send({ firstName: 'Gwen', lastName: 'Member', notifyOptIn: false });
+    const role = await request(app).post('/me/role').set(auth(gwen.token)).send({ role: 'referrer' });
+    const code = role.body.user.referralCode;
+
+    // First friend -> first credit -> first payout, paid in full.
+    const friend1 = await signIn('07700 900941');
+    await request(app).post('/me/profile').set(auth(friend1.token)).send({ firstName: 'FriendOne', notifyOptIn: false });
+    await request(app).post('/me/role').set(auth(friend1.token)).send({ role: 'referred' });
+    const sub1 = await request(app).post('/referrals').set(auth(friend1.token)).send({
+      code, fullName: 'Friend One', treatmentInterest: 'implants', preferredPracticeId: t.a,
+      consent: true, consentVersion: 'referred-v1-2026-08',
+    });
+    expect(sub1.status).toBe(200);
+    const done1 = await request(app)
+      .patch(`/admin/referrals/${sub1.body.referral.id}/status`).set(auth(t.owner)).send({ status: 'treatment_completed' });
+    expect(done1.status).toBe(200);
+
+    const payout1 = await request(app).post('/payouts').set(auth(gwen.token)).send({ practiceId: t.a });
+    expect(payout1.status).toBe(200);
+    const paid1 = await request(app)
+      .post(`/admin/payouts/${payout1.body.payout.id}/mark-paid`).set(auth(t.owner)).send({ amountPennies: 10000 });
+    expect(paid1.status).toBe(200);
+
+    // Second friend -> second credit -> second (open) payout.
+    const friend2 = await signIn('07700 900942');
+    await request(app).post('/me/profile').set(auth(friend2.token)).send({ firstName: 'FriendTwo', notifyOptIn: false });
+    await request(app).post('/me/role').set(auth(friend2.token)).send({ role: 'referred' });
+    const sub2 = await request(app).post('/referrals').set(auth(friend2.token)).send({
+      code, fullName: 'Friend Two', treatmentInterest: 'implants', preferredPracticeId: t.a,
+      consent: true, consentVersion: 'referred-v1-2026-08',
+    });
+    expect(sub2.status).toBe(200);
+    const done2 = await request(app)
+      .patch(`/admin/referrals/${sub2.body.referral.id}/status`).set(auth(t.owner)).send({ status: 'treatment_completed' });
+    expect(done2.status).toBe(200);
+
+    const payout2 = await request(app).post('/payouts').set(auth(gwen.token)).send({ practiceId: t.a });
+    expect(payout2.status).toBe(200);
+
+    const list = await request(app).get('/admin/payouts').set(auth(t.owner));
+    const settledRow = list.body.payouts.find((p) => p.id === payout1.body.payout.id);
+    expect(settledRow.credits).toEqual([]);
+
+    const openRow = list.body.payouts.find((p) => p.id === payout2.body.payout.id);
+    expect(openRow.credits).toHaveLength(1);
+    expect(openRow.credits[0].amountPennies).toBe(10000);
+    expect(openRow.credits[0].friend).toMatch(/^Friend/);
+  });
+});

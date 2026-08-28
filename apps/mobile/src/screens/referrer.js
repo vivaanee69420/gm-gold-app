@@ -173,10 +173,11 @@ export function WalletScreen() {
     setCancelling(true);
     try {
       await api.cancelPayout(openPayout.id);
-      await load();
     } catch {
-      // cancel didn't land — leave the button enabled to try again
+      // cancel didn't land (e.g. a manager just marked it paid, 409) — refresh anyway so
+      // a just-paid request shows the up-to-date wallet instead of a stale "open" state
     } finally {
+      await load();
       setCancelling(false);
     }
   };
@@ -258,7 +259,7 @@ export function WalletScreen() {
           <GoldButton
             variant="ghost"
             label="Share my card"
-            onPress={() => shareCard(user?.referralCode)}
+            onPress={() => shareCard(user?.referralCode ?? undefined)}
             style={{ marginTop: space(4) }}
           />
           <Text style={[styles.sectionLabel, { marginTop: space(7) }]}>Activity</Text>

@@ -59,10 +59,28 @@ const validate = (schema) => (req, res, next) => {
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
 
-// FR-24: practice-scoped admins (admin, manager) see only their practices; owners (and dev) see all.
-// Returns a Postgres array literal (cast with ::uuid[] in SQL) so both drivers agree.
-const practiceScope = (req) =>
-  req.admin?.role !== 'owner' && req.admin?.practiceIds.length ? `{${req.admin.practiceIds.join(',')}}` : null;
+// FR-24: practice-scoped admins (admin, manager) see only their practices; owners (and dev)
+// see all. Controller ruling (2026-08-28 final review): an `admin` with an EMPTY practice_ids
+// is the documented all-practice default (grant-admin.js) — treated as unscoped, same as an
+// owner. A `manager` with an EMPTY practice_ids has not been assigned a practice yet and must
+// see/act on NOTHING, so it gets an explicit empty scope rather than falling through to "all".
+//
+// practiceScope: for reads — a Postgres array literal (cast with ::uuid[] in SQL), or null
+// for "no filter" (owner / unscoped admin). '{}' for an unscoped manager matches no rows.
+const practiceScope = (req) => {
+  if (!req.admin || req.admin.role === 'owner') return null;
+  if (req.admin.role === 'manager') return `{${req.admin.practiceIds.join(',')}}`;
+  return req.admin.practiceIds.length ? `{${req.admin.practiceIds.join(',')}}` : null;
+};
+
+// actionScope: for writes (mark-paid/cancel) — null means unrestricted (owner / unscoped
+// admin); otherwise the ids array is handed to assertInScope in walletService.js, which
+// rejects anything outside it — so an unscoped manager's `[]` rejects every practice.
+const actionScope = (req) => {
+  if (!req.admin || req.admin.role === 'owner') return null;
+  if (req.admin.role === 'manager') return req.admin.practiceIds;
+  return req.admin.practiceIds.length ? req.admin.practiceIds : null;
+};
 
 export function buildApp() {
   const app = express();
@@ -246,9 +264,11 @@ export function buildApp() {
       scope ? [scope] : [],
     );
 
-    const userIds = [...new Set(rows.map((r) => r.user_id))];
+    // Credits are only meaningful behind an OPEN request (what reception is about to pay
+    // out); a settled row's balance has already moved, so it always gets credits: [].
+    const openUserIds = [...new Set(rows.filter((r) => r.status === 'open').map((r) => r.user_id))];
     const creditsByUser = new Map();
-    if (userIds.length) {
+    if (openUserIds.length) {
       const { rows: creditRows } = await db.query(
         `select wl.user_id, wl.amount_pennies, wl.created_at::date::text as at, r.referred_name
          from wallet_ledger wl
@@ -259,7 +279,7 @@ export function buildApp() {
              '-infinity'::timestamptz
            )
          order by wl.created_at`,
-        [`{${userIds.join(',')}}`],
+        [`{${openUserIds.join(',')}}`],
       );
       for (const c of creditRows) {
         const list = creditsByUser.get(c.user_id) ?? [];
@@ -273,7 +293,10 @@ export function buildApp() {
     }
 
     res.json({
-      payouts: rows.map(({ user_id, ...row }) => ({ ...row, credits: creditsByUser.get(user_id) ?? [] })),
+      payouts: rows.map(({ user_id, ...row }) => ({
+        ...row,
+        credits: row.status === 'open' ? (creditsByUser.get(user_id) ?? []) : [],
+      })),
     });
   }));
 
@@ -284,16 +307,14 @@ export function buildApp() {
     if (!Number.isInteger(amountPennies) || amountPennies <= 0) {
       return res.status(422).json({ error: 'amount_required' });
     }
-    const practiceIds = req.admin.role === 'owner' ? null : req.admin.practiceIds;
-    res.json(await markPayoutPaid(req.params.id, req.user.id, { amountPennies, practiceIds }));
+    res.json(await markPayoutPaid(req.params.id, req.user.id, { amountPennies, practiceIds: actionScope(req) }));
   }));
 
   // FR-21: admin cancel needs a reason; the member keeps their balance and is notified.
   app.post('/admin/payouts/:id/cancel', requireUser, requireAdmin, wrap(async (req, res) => {
     const reason = String(req.body?.reason ?? '').trim();
     if (!reason) return res.status(422).json({ error: 'reason_required' });
-    const practiceIds = req.admin.role === 'owner' ? null : req.admin.practiceIds;
-    res.json(await cancelPayout(req.params.id, req.user.id, { byAdmin: true, reason, practiceIds }));
+    res.json(await cancelPayout(req.params.id, req.user.id, { byAdmin: true, reason, practiceIds: actionScope(req) }));
   }));
 
   app.get('/admin/settings', requireUser, requireAdmin, wrap(async (_req, res) => {
