@@ -36,7 +36,7 @@ export async function resolveRule(practiceId) {
 }
 
 /** Credit a completed referral (FR-17/FR-18 manual path). One credit per referral, enforced twice. */
-export async function creditReferral({ referral, practiceId, actorId, idempotencyKey = null, reason = null }) {
+export async function creditReferral({ referral, practiceId, actorId, actorKind = null, idempotencyKey = null, reason = null }) {
   const rule = await resolveRule(practiceId);
   if (!rule) throw Object.assign(new Error('no_active_rule'), { status: 409 });
 
@@ -53,7 +53,7 @@ export async function creditReferral({ referral, practiceId, actorId, idempotenc
         [referral.referrer_id, JSON.stringify({ amountPennies: rule.amount_pennies, referralId: referral.id })],
       );
       await logEvent(client, {
-        actorId, entityType: 'wallet', entityId: referral.referrer_id,
+        actorId, actorKind, entityType: 'wallet', entityId: referral.referrer_id,
         action: 'credit', toValue: String(rule.amount_pennies), reason,
       });
       return rows[0];
@@ -130,7 +130,7 @@ export async function requestPayout(userId, practiceId) {
       }
       throw err;
     });
-    await logEvent(client, { actorId: userId, entityType: 'payout', entityId: rows[0].id, action: 'requested', toValue: String(balance) });
+    await logEvent(client, { actorId: userId, actorKind: 'user', entityType: 'payout', entityId: rows[0].id, action: 'requested', toValue: String(balance) });
     return rows[0];
   });
 }
@@ -186,7 +186,7 @@ export async function markPayoutPaid(payoutId, adminId, { amountPennies, practic
        values ('user',$1,'payout_receipt',$2)`,
       [payout.user_id, JSON.stringify({ amountPennies: payout.amount_pennies })],
     );
-    await logEvent(client, { actorId: adminId, entityType: 'payout', entityId: payoutId, action: 'paid', toValue: String(payout.amount_pennies) });
+    await logEvent(client, { actorId: adminId, actorKind: 'admin', entityType: 'payout', entityId: payoutId, action: 'paid', toValue: String(payout.amount_pennies) });
     return { ok: true };
   });
 }
@@ -217,7 +217,11 @@ export async function cancelPayout(payoutId, actorId, { byAdmin = false, reason 
         [updated[0].user_id, JSON.stringify({ amountPennies: updated[0].amount_pennies, reason })],
       );
     }
-    await logEvent(client, { actorId, entityType: 'payout', entityId: payoutId, action: byAdmin ? 'cancelled_by_admin' : 'cancelled', reason });
+    // Same route, two actors: `byAdmin` already distinguishes them, so nothing is guessed here.
+    await logEvent(client, {
+      actorId, actorKind: byAdmin ? 'admin' : 'user', entityType: 'payout', entityId: payoutId,
+      action: byAdmin ? 'cancelled_by_admin' : 'cancelled', reason,
+    });
     return { ok: true };
   });
 }

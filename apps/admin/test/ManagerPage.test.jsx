@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import ManagerPage from '../src/pages/ManagerPage.jsx';
-import { clearToken, setToken } from '../src/api/client.js';
+import { clearToken, getToken, setToken } from '../src/api/client.js';
 import { stubFetchRoutes } from './helpers.js';
 
 beforeEach(() => {
@@ -33,5 +34,25 @@ describe('ManagerPage', () => {
 
     expect(await screen.findByRole('heading', { name: /sidcup · payouts/i })).toBeInTheDocument();
     expect(screen.queryByText(/no practice is assigned/i)).not.toBeInTheDocument();
+  });
+
+  it('toggles the change password form from the header ghost button and stores the new token', async () => {
+    stubFetchRoutes([
+      { method: 'GET', path: '/admin/payouts', body: { payouts: [] } },
+      { method: 'POST', path: '/admin/me/password', body: { ok: true, token: 'new-tok' } },
+    ]);
+    render(<ManagerPage me={{ role: 'manager', practices: [{ id: 'pr-1', name: 'Sidcup' }] }} notify={vi.fn()} onSignOut={vi.fn()} />);
+    await screen.findByRole('heading', { name: /sidcup · payouts/i });
+
+    expect(screen.queryByRole('heading', { name: /change password/i })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /change password/i }));
+    expect(screen.getByRole('heading', { name: /change password/i })).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText(/current password/i), 'oldpassword1');
+    await userEvent.type(screen.getByLabelText(/new password/i), 'brandnewpassword1');
+    await userEvent.click(screen.getByRole('button', { name: /save password/i }));
+
+    await vi.waitFor(() => expect(getToken()).toBe('new-tok'));
+    expect(screen.queryByRole('heading', { name: /change password/i })).not.toBeInTheDocument();
   });
 });

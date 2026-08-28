@@ -45,10 +45,11 @@ beforeAll(async () => {
   const { buildApp } = await import('../src/app.js');
   app = buildApp();
 
-  const send = await request(app).post('/auth/otp/send').send({ phone: '+447700920001' });
-  const code = send.body.devHint.match(/(\d{6})/)[1];
-  const verify = await request(app).post('/auth/otp/verify').send({ phone: '+447700920001', code });
-  agents.admin = verify.body.token;
+  // Dynamic import: a static one would pull in config.js (via adminService.js) before the
+  // DENTALLY_CLIENT_ID/SECRET env vars above are set, since ES module imports are hoisted
+  // ahead of them.
+  const { adminSession } = await import('./helpers/admin.js');
+  agents.admin = (await adminSession(app)).token;
 });
 
 const auth = () => ({ Authorization: `Bearer ${agents.admin}` });

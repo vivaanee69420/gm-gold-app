@@ -152,14 +152,14 @@ export async function handleOauthCallback({ code, state }) {
     redirect_uri: config.dentally.redirectUri,
   });
   await saveTokens(tokens, payload.sub);
-  await logEvent(db, { actorId: payload.sub, entityType: 'dentally', entityId: 'oauth', action: 'connected', toValue: tokens.scope ?? null });
+  await logEvent(db, { actorId: payload.sub, actorKind: 'admin', entityType: 'dentally', entityId: 'oauth', action: 'connected', toValue: tokens.scope ?? null });
   return { ok: true };
 }
 
 export async function disconnect(adminId) {
   await db.query(`delete from dentally_oauth where id`);
   invalidateConnectionCache();
-  await logEvent(db, { actorId: adminId, entityType: 'dentally', entityId: 'oauth', action: 'disconnected' });
+  await logEvent(db, { actorId: adminId, actorKind: 'admin', entityType: 'dentally', entityId: 'oauth', action: 'disconnected' });
   return { ok: true };
 }
 

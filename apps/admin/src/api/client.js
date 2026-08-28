@@ -33,7 +33,12 @@ export async function api(path, { method = 'GET', body } = {}) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    if (res.status === 401) {
+    // A 401 means session loss ONLY when the server says so explicitly
+    // (error: 'unauthorized' — an expired/invalid/revoked token). Other 401s
+    // (e.g. wrong_password on a change-password attempt, invalid_credentials
+    // on login) are just a rejected request — the current session, if any,
+    // stays intact and the component renders its own inline copy for the code.
+    if (res.status === 401 && data.error === 'unauthorized') {
       clearToken();
       unauthorizedHandler?.();
     }

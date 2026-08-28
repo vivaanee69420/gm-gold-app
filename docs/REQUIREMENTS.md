@@ -137,14 +137,23 @@ client queries Postgres directly.
   net liability is computed, because payouts can be collected at any practice.
 
 ### Admin
-- **FR-24** Admin web dashboard (React/Vite) with Supabase email auth and roles: `admin` (practice-scoped
-  levers + queues), `owner` (all practices, manual adjustments, exports, SAR handling), and `manager`
-  (2026-08-28 decision — one practice, payouts only: fenced server-side to `GET /admin/me` and
-  `/admin/payouts*`; every other `/admin/*` route 403s). Admins are modeled in the dedicated `admin_users`
-  table (auth uid, email, role, practice_ids) — separate from patient `users`; practice scoping of queues
-  and levers reads `practice_ids`. An empty `practice_ids` means different things by role: for `admin` it
-  is the documented all-practice default; for `manager` it means no practice is assigned yet, so that
-  account sees and can act on nothing until an owner grants one (`scripts/grant-admin.js`).
+- **FR-24** Admin web dashboard (React/Vite) is its own email + password identity (2026-08-28 rework —
+  `admin_users` is no longer keyed off Supabase auth or a patient `users` row), with two roles: `admin`
+  (every practice, every lever/queue, plus team management) and `manager` (2026-08-28 decision — one
+  practice, payouts only: fenced server-side to `GET /admin/me`, `/admin/payouts*`, and
+  `POST /admin/me/password`; every other `/admin/*` route 403s). Passwords are scrypt-hashed
+  server-side (never Supabase); a JWT (`POST /auth/admin/login`) carries the session, with server-side
+  revocation (`sessions_revoked_at`) on password change/reset and on deactivation. Admins manage the
+  team themselves — `admin`s create and deactivate/reactivate other `admin`s and `manager`s and reset
+  their passwords (`/admin/team*`, always logging an `events` row); every account can change its own
+  password (`POST /admin/me/password`). Deactivating the last active `admin` is refused (`last_admin`),
+  as is deactivating yourself (`cannot_deactivate_self`) — the team can never lock itself out. There is
+  no in-dashboard sign-up: the very first `admin` account is bootstrapped from the command line with
+  `scripts/create-admin.js` (see README's "Dashboard accounts" section) right after a fresh deploy, since
+  migration 0011 deactivates every pre-existing (pre-password) `admin_users` row. Practice scoping of
+  queues and levers reads `practice_ids`, which means different things by role: for `admin` it's always
+  empty (unconditional all-practice access, not just an empty-means-all default); for `manager` it holds
+  exactly the one practice they were created with.
 - **FR-25** Dashboard surfaces: levers (rules + app settings), verification review queue, referral review
   list (referrals only, `existing_patient_suspect`; decisions: *clear* → `review_status='cleared'`, or
   *confirm existing patient* → referral `lost` with reason `existing_patient`, never creditable),
@@ -261,9 +270,11 @@ notification_outbox  id, recipient_kind ('user'|'practice_contact'), recipient_i
                  template, payload jsonb, channel_resolved, status, attempts,
                  created_at, sent_at   (written in the SAME transaction as the
                  triggering event; drained with retry — restarts lose nothing)
-admin_users      id (auth uid), email (unique), role ('admin'|'owner'),
-                 practice_ids uuid[], active, created_at   (separate from patient
-                 `users`; queue and lever scoping reads practice_ids)
+admin_users      id, email (unique), password_hash, role ('admin'|'manager'),
+                 practice_ids uuid[], active, last_login_at, sessions_revoked_at,
+                 created_at   (own email+password identity, 2026-08-28 — separate
+                 from patient `users` and from Supabase auth; queue and lever
+                 scoping reads practice_ids)
 sync_state       key, watermark, updated_at   (Dentally updated_since cursor)
 dentally_patient_index  dentally_patient_id (unique), phone (E.164, indexed),
                  practice_id, refreshed_at   (read model for matching + verification)
@@ -298,10 +309,20 @@ GET  /referrals/mine              referrer's list with stages
 GET  /wallet                      balance, threshold, ledger
 POST /payouts                     create payout request (balance >= threshold)
 DELETE /payouts/:id               referrer cancels own open request
--- admin (role-gated) --
+-- admin (own email+password identity in admin_users, role-gated — see FR-24) --
+POST /auth/admin/login            email + password -> { token, admin }; scrypt-verified, rate-limited
+                                   per email and per IP
 GET  /admin/me                    role + practices this account can see (manager: their one practice;
-                                   owner/unscoped admin: all). A `manager` role reaches ONLY this route
-                                   and /admin/payouts*; every other /admin/* route 403s `forbidden` for it.
+                                   admin: all). A `manager` role reaches ONLY this route,
+                                   /admin/payouts*, and POST /admin/me/password; every other /admin/*
+                                   route 403s `forbidden` for it.
+GET  /admin/team                  POST /admin/team { email, password, role, practiceId? } create a
+                                   teammate; POST /admin/team/:id/password { password } reset one's
+                                   password (kills their existing sessions); POST /admin/team/:id/active
+                                   { active } deactivate/reactivate (409 cannot_deactivate_self /
+                                   last_admin). admin-only; every mutation logs an events row.
+POST /admin/me/password           { currentPassword, newPassword } — either role; 401 wrong_password,
+                                   422 weak_password; re-issues a token (own sessions_revoked_at bumps too)
 GET/PUT /admin/rules              commission rules (overlap-checked on save)
 GET/PUT /admin/settings           payout threshold, payout expiry days
 GET  /admin/verification-queue    POST /admin/verification-queue/:id/decide
@@ -310,11 +331,11 @@ GET  /admin/proposals             POST /admin/proposals/:id/confirm|reject
 GET  /admin/referrals             PATCH /admin/referrals/:id/status
 GET  /admin/payouts               POST /admin/payouts/:id/mark-paid { amountPennies } | :id/cancel
 GET  /admin/reports/funnel|liability|top-referrers|aging
-POST /admin/users/:id/revoke-sessions   admin/owner: revoke a patient user's sessions (FR-03)
+POST /admin/users/:id/revoke-sessions   admin: revoke a patient user's sessions (FR-03)
 -- Phase 2 (MVP stand-ins per FR-26/FR-27: Supabase dashboard queries + SAR runbook) --
-GET  /admin/exports               owner: CSV ledger/referrals by date range
-POST /admin/sar/:userId/export    owner: subject-access export
-POST /admin/sar/:userId/anonymize owner: pseudonymize per FR-27
+GET  /admin/exports               admin: CSV ledger/referrals by date range
+POST /admin/sar/:userId/export    admin: subject-access export
+POST /admin/sar/:userId/anonymize admin: pseudonymize per FR-27
 POST /webhooks/dentally           optional inbound events (HMAC-verified); sync worker itself
                                   runs in-process on a cron schedule, no public trigger endpoint
 ```

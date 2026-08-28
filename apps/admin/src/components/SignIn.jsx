@@ -1,32 +1,23 @@
 import { useState } from 'react';
-import { sendOtp, verifyOtp } from '../api/auth.js';
+import { signIn } from '../api/auth.js';
+import { errorMessage } from '../copy.js';
 
 export default function SignIn({ onSignedIn }) {
-  const [phone, setPhone] = useState('');
-  const [sent, setSent] = useState(false);
-  const [devHint, setDevHint] = useState(null);
-  const [code, setCode] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  const send = async (e) => {
+  const submit = async (e) => {
     e.preventDefault();
     setError(null);
+    setSubmitting(true);
     try {
-      const out = await sendOtp(phone);
-      setSent(true);
-      setDevHint(out.devHint ?? null);
+      onSignedIn(await signIn(email, password));
     } catch (err) {
-      setError(err.code ?? 'send_failed');
-    }
-  };
-
-  const verify = async (e) => {
-    e.preventDefault();
-    setError(null);
-    try {
-      onSignedIn(await verifyOtp(phone, code));
-    } catch (err) {
-      setError(err.code ?? 'verify_failed');
+      setError(err.code ?? 'sign_in_failed');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -35,33 +26,26 @@ export default function SignIn({ onSignedIn }) {
       <div className="signin-card">
         <p className="wordmark">GM Dental</p>
         <h1>Referral Admin</h1>
-        <form onSubmit={send}>
-          <label htmlFor="signin-phone">Mobile number</label>
+        <form onSubmit={submit}>
+          <label htmlFor="signin-email">Email</label>
           <input
-            id="signin-phone"
-            type="tel"
-            autoComplete="tel"
-            placeholder="07700 900123"
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
+            id="signin-email"
+            type="email"
+            autoComplete="username"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
           />
-          <button type="submit">{sent ? 'Resend code' : 'Send code'}</button>
+          <label htmlFor="signin-password">Password</label>
+          <input
+            id="signin-password"
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          <button type="submit" disabled={submitting}>Sign in</button>
         </form>
-        {sent && (
-          <form onSubmit={verify}>
-            <label htmlFor="signin-code">6-digit code</label>
-            <input
-              id="signin-code"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-            />
-            <button type="submit">Sign in</button>
-          </form>
-        )}
-        {devHint && <p className="devhint">{devHint}</p>}
-        {error && <p role="alert" className="error">{error}</p>}
+        {error && <p role="alert" className="error">{errorMessage(error)}</p>}
       </div>
     </div>
   );

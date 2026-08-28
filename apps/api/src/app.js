@@ -2,6 +2,7 @@
 import crypto from 'node:crypto';
 import express from 'express';
 import cors from 'cors';
+import { z } from 'zod';
 import {
   otpSendSchema,
   otpVerifySchema,
@@ -10,6 +11,7 @@ import {
   referralSubmitSchema,
   statusUpdateSchema,
   payoutRequestSchema,
+  adminLoginSchema,
 } from '@gm-referral/shared/schemas';
 import { db, logEvent } from './db.js';
 import { sendOtp, verifyOtp } from './services/otpService.js';
@@ -21,6 +23,18 @@ import {
   publicUser,
   publicUserWithCode,
 } from './services/userService.js';
+import {
+  authenticate,
+  publicAdmin,
+  practicesForAdmin,
+  createAdmin,
+  listAdmins,
+  setPassword,
+  setActive,
+  setPractice,
+  changeOwnPassword,
+  normalizePracticeIds,
+} from './services/adminService.js';
 import {
   submitReferral,
   updateStatus,
@@ -48,42 +62,61 @@ import {
 import { requireUser, requireAdmin } from './middleware/auth.js';
 import { config, isDev } from './config.js';
 
+// Shared 422 envelope for every zod rejection in this file — {error, details: [message, ...]}
+// — so a body-shape failure (validate) and a route-param-shape failure (requireUuidParam) come
+// back looking identical to a caller, not two different ad hoc shapes.
+const validationError = (zodError) => ({ error: 'validation', details: zodError.issues.map((i) => i.message) });
+
 const validate = (schema) => (req, res, next) => {
   const parsed = schema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(422).json({ error: 'validation', details: parsed.error.issues.map((i) => i.message) });
-  }
+  if (!parsed.success) return res.status(422).json(validationError(parsed.error));
   req.data = parsed.data;
   return next();
 };
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
 
-// FR-24: practice-scoped admins (admin, manager) see only their practices; owners (and dev)
-// see all. Controller ruling (2026-08-28 final review): an `admin` with an EMPTY practice_ids
-// is the documented all-practice default (grant-admin.js) — treated as unscoped, same as an
-// owner. A `manager` with an EMPTY practice_ids has not been assigned a practice yet and must
-// see/act on NOTHING, so it gets an explicit empty scope rather than falling through to "all".
-//
-// practiceScope: for reads — a Postgres array literal (cast with ::uuid[] in SQL), or null
-// for "no filter" (owner / unscoped admin). '{}' for an unscoped manager matches no rows.
-const practiceScope = (req) => {
-  if (!req.admin || req.admin.role === 'owner') return null;
-  if (req.admin.role === 'manager') return `{${req.admin.practiceIds.join(',')}}`;
-  return req.admin.practiceIds.length ? `{${req.admin.practiceIds.join(',')}}` : null;
+// A malformed :id (e.g. "not-a-uuid") reaching a raw `where id = $1` against a uuid column is a
+// Postgres 22P02 (invalid input syntax for type uuid) — an uncaught error with no .status, so the
+// global error boundary would 500 it verbatim, leaking raw DB text. Reject the shape at the route
+// instead, before it ever reaches a query; a well-formed-but-unknown id still 404s downstream.
+const uuidParamSchema = z.string().uuid({ message: 'must be a uuid' });
+const requireUuidParam = (name) => (req, res, next) => {
+  const parsed = uuidParamSchema.safeParse(req.params[name]);
+  if (!parsed.success) return res.status(422).json(validationError(parsed.error));
+  return next();
 };
 
-// actionScope: for writes (mark-paid/cancel) — null means unrestricted (owner / unscoped
-// admin); otherwise the ids array is handed to assertInScope in walletService.js, which
-// rejects anything outside it — so an unscoped manager's `[]` rejects every practice.
+// FR-24: two roles now — `admin` sees/acts on every practice (createAdmin never lets an
+// admin carry practice ids, so this is unconditional, not just "empty means all"); `manager`
+// is scoped to exactly one practice. A manager row with an empty practiceIds (shouldn't arise
+// through createAdmin, but the fence still holds defensively) sees/acts on NOTHING rather than
+// falling through to "all".
+//
+// practiceScope: for reads — a Postgres array literal (cast with ::uuid[] in SQL), or null
+// for "no filter" (admin). '{}' for a scopeless manager matches no rows.
+const practiceScope = (req) => {
+  if (!req.admin) return '{}'; // fail closed: no admin context on the request means no access
+  if (req.admin.role === 'admin') return null;
+  return `{${req.admin.practiceIds.join(',')}}`;
+};
+
+// actionScope: for writes (mark-paid/cancel) — null means unrestricted (admin); otherwise
+// the ids array is handed to assertInScope in walletService.js, which rejects anything
+// outside it — so a scopeless manager's `[]` (and a missing req.admin's `[]`) rejects every
+// practice, never falling through to "all".
 const actionScope = (req) => {
-  if (!req.admin || req.admin.role === 'owner') return null;
-  if (req.admin.role === 'manager') return req.admin.practiceIds;
-  return req.admin.practiceIds.length ? req.admin.practiceIds : null;
+  if (!req.admin) return []; // fail closed
+  if (req.admin.role === 'admin') return null;
+  return req.admin.practiceIds;
 };
 
 export function buildApp() {
   const app = express();
+  // One hop: Railway's edge. Without this, req.ip (used by the admin login rate limiter)
+  // is the same internal proxy address for every request, collapsing the per-IP bucket into
+  // one shared global one — 30 bad logins from anyone would 429 every admin for 15 minutes.
+  app.set('trust proxy', 1);
   app.use(cors());
 
   // Dentally webhook (FR-16d): a doorbell, not an ingestion path — the body is never
@@ -124,6 +157,13 @@ export function buildApp() {
     await verifyOtp(req.data.phone, req.data.code);
     const user = await getOrCreateUserByPhone(req.data.phone);
     res.json({ ok: true, token: issueToken(user), user: await publicUserWithCode(user) });
+  }));
+
+  // Dashboard accounts: email + password, its own identity table (admin_users), not a
+  // patient session. See middleware/auth.js requireAdmin / services/adminService.js.
+  app.post('/auth/admin/login', validate(adminLoginSchema), wrap(async (req, res) => {
+    const { token, admin } = await authenticate(req.data.email, req.data.password, { ip: req.ip });
+    res.json({ token, admin });
   }));
 
   // ---- me ----
@@ -179,7 +219,7 @@ export function buildApp() {
     res.json({ ok: true, payout: { id: payout.id, amountPennies: payout.amount_pennies, practiceName: rows[0]?.name, status: payout.status } });
   }));
 
-  app.delete('/payouts/:id', requireUser, wrap(async (req, res) => {
+  app.delete('/payouts/:id', requireUser, requireUuidParam('id'), wrap(async (req, res) => {
     res.json(await cancelPayout(req.params.id, req.user.id));
   }));
 
@@ -195,19 +235,70 @@ export function buildApp() {
     res.json({ ok: true });
   }));
 
-  // ---- admin (gate reads admin_users; open in dev — see middleware/auth.js) ----
+  // ---- admin (gate reads admin_users; email+password identity — see middleware/auth.js) ----
   // FR-24: what the dashboard uses to pick a view — a manager's single practice vs. an
-  // owner/admin's full (or scoped) list.
-  app.get('/admin/me', requireUser, requireAdmin, wrap(async (req, res) => {
-    const scope = practiceScope(req);
-    const { rows } = await db.query(
-      `select id, name from practices where active ${scope ? 'and id = any($1::uuid[])' : ''} order by name`,
-      scope ? [scope] : [],
-    );
-    res.json({ role: req.admin.role, practices: rows });
+  // admin's full practice list.
+  app.get('/admin/me', requireAdmin, wrap(async (req, res) => {
+    const practices = await practicesForAdmin(req.admin);
+    res.json(publicAdmin(req.admin, practices));
   }));
 
-  app.get('/admin/referrals', requireUser, requireAdmin, wrap(async (req, res) => {
+  // ---- team management (FR-24): admin-only — the manager fence in middleware/auth.js
+  // (MANAGER_ALLOWED) blocks every /admin/team* route before it reaches here. Every
+  // mutation logs an events row (entity_type 'admin_user') so who-changed-what is auditable.
+  app.get('/admin/team', requireAdmin, wrap(async (_req, res) => {
+    res.json({ team: await listAdmins() });
+  }));
+
+  // Validation lives entirely in createAdmin() (adminCreateSchema + its own weak_password /
+  // practice_required / email_taken checks) — kept as the single source of truth rather than
+  // re-validating here, so the error code a bad request gets back never depends on which
+  // caller (this route, scripts/create-admin.js, a test) reached it.
+  app.post('/admin/team', requireAdmin, wrap(async (req, res) => {
+    const row = await createAdmin({
+      email: req.body?.email,
+      password: req.body?.password,
+      role: req.body?.role,
+      practiceIds: req.body?.practiceId ? [req.body.practiceId] : [],
+      createdBy: req.admin.id,
+    });
+    const practices = await practicesForAdmin({ role: row.role, practiceIds: normalizePracticeIds(row.practice_ids) });
+    res.json({ admin: publicAdmin(row, practices) });
+  }));
+
+  // { password } — sets a new hash for :id and bumps its sessions_revoked_at, so every token
+  // issued before this call dies.
+  app.post('/admin/team/:id/password', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
+    res.json(await setPassword({ id: req.params.id, password: req.body?.password, actorId: req.admin.id }));
+  }));
+
+  // { practiceId } — move a manager to another practice (FR-24). Admin-only like the rest of
+  // /admin/team*; an admin target is a 422, since an admin isn't practice-scoped at all.
+  app.post('/admin/team/:id/practice', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
+    res.json(await setPractice({ id: req.params.id, practiceId: req.body?.practiceId, actorId: req.admin.id }));
+  }));
+
+  // { active: boolean } — 409 cannot_deactivate_self / last_admin guard which admins this can
+  // touch; deactivating also bumps sessions_revoked_at. `active` must be a real JSON boolean —
+  // a missing/malformed value (e.g. the string "true", or an absent field) previously fell
+  // through `=== true` to `false` and silently deactivated the target instead of rejecting.
+  app.post('/admin/team/:id/active', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
+    if (typeof req.body?.active !== 'boolean') return res.status(422).json({ error: 'validation' });
+    res.json(await setActive({ id: req.params.id, active: req.body.active, actorId: req.admin.id }));
+  }));
+
+  // Both roles reach this one (see MANAGER_ALLOWED): { currentPassword, newPassword } — wrong
+  // current -> 401 wrong_password; on success, sessions_revoked_at is bumped for THIS admin
+  // too, so the response carries a fresh token in the same breath.
+  app.post('/admin/me/password', requireAdmin, wrap(async (req, res) => {
+    res.json(await changeOwnPassword({
+      admin: req.admin,
+      currentPassword: req.body?.currentPassword,
+      newPassword: req.body?.newPassword,
+    }));
+  }));
+
+  app.get('/admin/referrals', requireAdmin, wrap(async (req, res) => {
     const scope = practiceScope(req);
     const { rows } = await db.query(
       `select r.id, r.referred_name, r.referred_phone, r.referred_email, r.status, r.treatment_interest,
@@ -231,12 +322,13 @@ export function buildApp() {
     res.json({ referrals: rows });
   }));
 
-  app.patch('/admin/referrals/:id/status', requireUser, requireAdmin, validate(statusUpdateSchema), wrap(async (req, res) => {
+  app.patch('/admin/referrals/:id/status', requireAdmin, requireUuidParam('id'), validate(statusUpdateSchema), wrap(async (req, res) => {
     const out = await updateStatus({
       referralId: req.params.id,
       status: req.data.status,
       lostReason: req.data.lostReason,
-      actorId: req.user.id,
+      actorId: req.admin.id,
+      actorKind: 'admin',
       privilegedComplete: true,
     });
     res.json(out);
@@ -245,7 +337,7 @@ export function buildApp() {
   // Reception needs enough to verify identity and see the credits behind the balance:
   // the member's phone, their active referral code, and their unpaid credits (a second
   // query keyed by user id, since it's a one-to-many the main row can't carry cleanly).
-  app.get('/admin/payouts', requireUser, requireAdmin, wrap(async (req, res) => {
+  app.get('/admin/payouts', requireAdmin, wrap(async (req, res) => {
     const scope = practiceScope(req);
     const { rows } = await db.query(
       `select pr.id, pr.user_id, pr.amount_pennies, pr.status, pr.requested_at, p.name as practice,
@@ -302,27 +394,27 @@ export function buildApp() {
 
   // Mark-paid requires the manager/admin to type the amount they physically handed over —
   // it must match the request exactly, not just be trusted from the row (FR-24).
-  app.post('/admin/payouts/:id/mark-paid', requireUser, requireAdmin, wrap(async (req, res) => {
+  app.post('/admin/payouts/:id/mark-paid', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
     const amountPennies = req.body?.amountPennies;
     if (!Number.isInteger(amountPennies) || amountPennies <= 0) {
       return res.status(422).json({ error: 'amount_required' });
     }
-    res.json(await markPayoutPaid(req.params.id, req.user.id, { amountPennies, practiceIds: actionScope(req) }));
+    res.json(await markPayoutPaid(req.params.id, req.admin.id, { amountPennies, practiceIds: actionScope(req) }));
   }));
 
   // FR-21: admin cancel needs a reason; the member keeps their balance and is notified.
-  app.post('/admin/payouts/:id/cancel', requireUser, requireAdmin, wrap(async (req, res) => {
+  app.post('/admin/payouts/:id/cancel', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
     const reason = String(req.body?.reason ?? '').trim();
     if (!reason) return res.status(422).json({ error: 'reason_required' });
-    res.json(await cancelPayout(req.params.id, req.user.id, { byAdmin: true, reason, practiceIds: actionScope(req) }));
+    res.json(await cancelPayout(req.params.id, req.admin.id, { byAdmin: true, reason, practiceIds: actionScope(req) }));
   }));
 
-  app.get('/admin/settings', requireUser, requireAdmin, wrap(async (_req, res) => {
+  app.get('/admin/settings', requireAdmin, wrap(async (_req, res) => {
     const { rows } = await db.query('select key, value from app_settings order by key');
     res.json({ settings: Object.fromEntries(rows.map((r) => [r.key, r.value])) });
   }));
 
-  app.put('/admin/settings', requireUser, requireAdmin, wrap(async (req, res) => {
+  app.put('/admin/settings', requireAdmin, wrap(async (req, res) => {
     const entries = Object.entries(req.body ?? {}).filter(([k]) =>
       // invite_sent_manual_count: FR-28's hand-entered GHL campaign count (CSV upload is Phase 2).
       ['payout_threshold_pennies', 'payout_expiry_days', 'otp_channel_mode', 'invite_sent_manual_count'].includes(k),
@@ -331,13 +423,13 @@ export function buildApp() {
       await db.query(
         `insert into app_settings (key, value, updated_by) values ($1,$2,$3)
          on conflict (key) do update set value=$2, updated_by=$3, updated_at=now()`,
-        [key, String(value), req.user.id],
+        [key, String(value), req.admin.id],
       );
     }
     res.json({ ok: true, updated: entries.map(([k]) => k) });
   }));
 
-  app.get('/admin/stats', requireUser, requireAdmin, wrap(async (_req, res) => {
+  app.get('/admin/stats', requireAdmin, wrap(async (_req, res) => {
     const rule = await resolveRule(null);
     const liability = await db.query(
       `select coalesce(sum(balance),0)::int as total from
@@ -354,52 +446,52 @@ export function buildApp() {
     });
   }));
 
-  app.put('/admin/reward-amount', requireUser, requireAdmin, wrap(async (req, res) => {
+  app.put('/admin/reward-amount', requireAdmin, wrap(async (req, res) => {
     const amount = Number(req.body?.amountPennies);
     if (!Number.isSafeInteger(amount) || amount <= 0) return res.status(422).json({ error: 'validation' });
     await db.query(
       `insert into reward_rules (practice_id, type, amount_pennies, created_by) values (null,'fixed',$1,$2)`,
-      [amount, req.user.id],
+      [amount, req.admin.id],
     );
     res.json({ ok: true, amountPennies: amount });
   }));
 
   // ---- dentally: proposals, verifications, aging, sync (FR-16/17/25 admin surfaces) ----
-  app.get('/admin/proposals', requireUser, requireAdmin, wrap(async (_req, res) => {
+  app.get('/admin/proposals', requireAdmin, wrap(async (_req, res) => {
     res.json({ proposals: await openProposals() });
   }));
 
-  app.post('/admin/proposals/:id/confirm', requireUser, requireAdmin, wrap(async (req, res) => {
-    res.json(await confirmProposal(req.params.id, req.user.id));
+  app.post('/admin/proposals/:id/confirm', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
+    res.json(await confirmProposal(req.params.id, req.admin.id));
   }));
 
-  app.post('/admin/proposals/:id/reject', requireUser, requireAdmin, wrap(async (req, res) => {
-    res.json(await rejectProposal(req.params.id, req.user.id, req.body?.reason));
+  app.post('/admin/proposals/:id/reject', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
+    res.json(await rejectProposal(req.params.id, req.admin.id, req.body?.reason));
   }));
 
-  app.get('/admin/verifications', requireUser, requireAdmin, wrap(async (_req, res) => {
+  app.get('/admin/verifications', requireAdmin, wrap(async (_req, res) => {
     res.json({ verifications: await pendingVerifications() });
   }));
 
-  app.post('/admin/verifications/:id/approve', requireUser, requireAdmin, wrap(async (req, res) => {
-    res.json(await decideVerification(req.params.id, req.user.id, { approve: true, dentallyPatientId: req.body?.dentallyPatientId }));
+  app.post('/admin/verifications/:id/approve', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
+    res.json(await decideVerification(req.params.id, req.admin.id, { approve: true, dentallyPatientId: req.body?.dentallyPatientId }));
   }));
 
-  app.post('/admin/verifications/:id/reject', requireUser, requireAdmin, wrap(async (req, res) => {
-    res.json(await decideVerification(req.params.id, req.user.id, { approve: false }));
+  app.post('/admin/verifications/:id/reject', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
+    res.json(await decideVerification(req.params.id, req.admin.id, { approve: false }));
   }));
 
-  app.get('/admin/aging', requireUser, requireAdmin, wrap(async (req, res) => {
+  app.get('/admin/aging', requireAdmin, wrap(async (req, res) => {
     const days = Number.isSafeInteger(Number(req.query.days)) && Number(req.query.days) > 0 ? Number(req.query.days) : 7;
     res.json({ aging: await agingReport(days), days });
   }));
 
-  app.post('/admin/sync/run', requireUser, requireAdmin, wrap(async (_req, res) => {
+  app.post('/admin/sync/run', requireAdmin, wrap(async (_req, res) => {
     res.json(await runSync('admin'));
   }));
 
   // ---- referral review (FR-25): existing-patient suspects ----
-  app.get('/admin/referral-review', requireUser, requireAdmin, wrap(async (req, res) => {
+  app.get('/admin/referral-review', requireAdmin, wrap(async (req, res) => {
     const scope = practiceScope(req);
     const { rows } = await db.query(
       `select r.id, r.referred_name, r.referred_phone, r.status, r.created_at, p.name as practice,
@@ -415,7 +507,7 @@ export function buildApp() {
     res.json({ reviews: rows });
   }));
 
-  app.post('/admin/referral-review/:id/decide', requireUser, requireAdmin, wrap(async (req, res) => {
+  app.post('/admin/referral-review/:id/decide', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
     const decision = req.body?.decision;
     if (!['clear', 'existing_patient'].includes(decision)) return res.status(422).json({ error: 'validation' });
     const { rows } = await db.query(
@@ -433,14 +525,14 @@ export function buildApp() {
       );
     }
     await logEvent(db, {
-      actorId: req.user.id, entityType: 'referral', entityId: req.params.id,
+      actorId: req.admin.id, actorKind: 'admin', entityType: 'referral', entityId: req.params.id,
       action: 'review_decided', fromValue: 'existing_patient_suspect', toValue: decision,
     });
     res.json({ ok: true, decision });
   }));
 
   // ---- reports (FR-25 funnel + top referrers, FR-28 tripwire) ----
-  app.get('/admin/reports/funnel', requireUser, requireAdmin, wrap(async (_req, res) => {
+  app.get('/admin/reports/funnel', requireAdmin, wrap(async (_req, res) => {
     const { rows: events } = await db.query(`select name, count(*)::int as n from analytics_events group by name`);
     const byName = Object.fromEntries(events.map((e) => [e.name, e.n]));
     const { rows: statuses } = await db.query(`select status, count(*)::int as n from referrals group by status`);
@@ -471,7 +563,7 @@ export function buildApp() {
     });
   }));
 
-  app.get('/admin/reports/top-referrers', requireUser, requireAdmin, wrap(async (_req, res) => {
+  app.get('/admin/reports/top-referrers', requireAdmin, wrap(async (_req, res) => {
     const { rows } = await db.query(
       `select u.id, u.first_name || ' ' || coalesce(u.last_name,'') as name,
               count(distinct r.id)::int as referrals,
@@ -488,27 +580,27 @@ export function buildApp() {
   }));
 
   // FR-03: "sign out everywhere" for a compromised or offboarded patient account.
-  app.post('/admin/users/:id/revoke-sessions', requireUser, requireAdmin, wrap(async (req, res) => {
+  app.post('/admin/users/:id/revoke-sessions', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
     const { rows } = await db.query(
       `update users set sessions_revoked_at=now() where id=$1 returning id`,
       [req.params.id],
     );
     if (!rows[0]) return res.status(404).json({ error: 'not_found' });
-    await logEvent(db, { actorId: req.user.id, entityType: 'user', entityId: req.params.id, action: 'sessions_revoked' });
+    await logEvent(db, { actorId: req.admin.id, actorKind: 'admin', entityType: 'user', entityId: req.params.id, action: 'sessions_revoked' });
     res.json({ ok: true });
   }));
 
   // ---- dentally OAuth (admin "Connect Dentally" button) ----
-  app.get('/admin/dentally/status', requireUser, requireAdmin, wrap(async (_req, res) => {
+  app.get('/admin/dentally/status', requireAdmin, wrap(async (_req, res) => {
     res.json(await connectionStatus());
   }));
 
-  app.post('/admin/dentally/connect', requireUser, requireAdmin, wrap(async (req, res) => {
-    res.json({ url: buildAuthorizeUrl(req.user.id) });
+  app.post('/admin/dentally/connect', requireAdmin, wrap(async (req, res) => {
+    res.json({ url: buildAuthorizeUrl(req.admin.id) });
   }));
 
-  app.post('/admin/dentally/disconnect', requireUser, requireAdmin, wrap(async (req, res) => {
-    res.json(await disconnectDentally(req.user.id));
+  app.post('/admin/dentally/disconnect', requireAdmin, wrap(async (req, res) => {
+    res.json(await disconnectDentally(req.admin.id));
   }));
 
   // Dentally redirects the practice owner's browser here after they approve access.
@@ -567,8 +659,15 @@ export function buildApp() {
   // eslint-disable-next-line no-unused-vars
   app.use((err, _req, res, _next) => {
     const status = err.status ?? 500;
-    if (status >= 500) console.error('[api]', err);
-    res.status(status).json({ error: err.message ?? 'internal' });
+    // A 5xx is our bug, not something the caller can act on, and `err.message` there is
+    // whatever threw — typically raw Postgres text carrying table/column names and sometimes
+    // parameter values. Log the real error, answer with one opaque code. 4xx errors are
+    // deliberate, thrown with a code as their message, and keep carrying it.
+    if (status >= 500) {
+      console.error('[api]', err);
+      return res.status(status).json({ error: 'internal' });
+    }
+    return res.status(status).json({ error: err.message ?? 'internal' });
   });
 
   return app;

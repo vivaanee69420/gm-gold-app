@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from '../src/App.jsx';
-import { clearToken, setToken } from '../src/api/client.js';
+import { clearToken, getToken, setToken } from '../src/api/client.js';
 import { stubFetchRoutes } from './helpers.js';
 
 beforeEach(() => clearToken());
@@ -13,7 +13,8 @@ afterEach(() => {
 
 function stubDashboardRoutes() {
   return stubFetchRoutes([
-    { method: 'GET', path: '/admin/me', body: { role: 'owner', practices: [] } },
+    { method: 'GET', path: '/admin/me', body: { role: 'admin', practices: [] } },
+    { method: 'GET', path: '/admin/team', body: { team: [] } },
     { method: 'GET', path: '/admin/settings', body: { settings: { payout_threshold_pennies: '10000', payout_expiry_days: '90' } } },
     { method: 'GET', path: '/admin/stats', body: { stats: { commissionPennies: 2000, liabilityPennies: 46000, referralCounts: { new: 2, booked: 1 } } } },
     { method: 'GET', path: '/admin/payouts', body: { payouts: [] } },
@@ -42,7 +43,7 @@ describe('App', () => {
   it('shows the sign-in screen when signed out', () => {
     stubFetchRoutes([]);
     render(<App />);
-    expect(screen.getByLabelText(/mobile number/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
   });
 
   it('shows the operations page by default when signed in', async () => {
@@ -75,8 +76,30 @@ describe('App', () => {
     expect(screen.getByRole('heading', { name: /reward levers/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /top referrers/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^dentally$/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^team$/i })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /payout requests/i })).not.toBeInTheDocument();
     expect(window.location.pathname).toBe('/reports');
+  });
+
+  it('toggles the change password form from the header ghost button and stores the new token', async () => {
+    setToken('tok');
+    stubDashboardRoutes();
+    render(<App />);
+    await screen.findByText('£460.00');
+
+    expect(screen.queryByRole('heading', { name: /change password/i })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /change password/i }));
+    expect(screen.getByRole('heading', { name: /change password/i })).toBeInTheDocument();
+
+    stubFetchRoutes([
+      { method: 'POST', path: '/admin/me/password', body: { ok: true, token: 'new-tok' } },
+    ]);
+    await userEvent.type(screen.getByLabelText(/current password/i), 'oldpassword1');
+    await userEvent.type(screen.getByLabelText(/new password/i), 'brandnewpassword1');
+    await userEvent.click(screen.getByRole('button', { name: /save password/i }));
+
+    await vi.waitFor(() => expect(getToken()).toBe('new-tok'));
+    expect(screen.queryByRole('heading', { name: /change password/i })).not.toBeInTheDocument();
   });
 
   it('returns to the operations page when the browser goes back', async () => {
@@ -129,6 +152,8 @@ describe('App', () => {
     expect(screen.queryByRole('link', { name: /reports & setup/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument();
     // A manager's `loadAll` must never fire — only the two routes ManagerPage itself needs.
-    expect(calls.map((c) => c.path).sort()).toEqual(['/admin/me', '/admin/payouts']);
+    // Waited on rather than asserted once: /admin/payouts is fired by an effect that runs
+    // after /admin/me resolves, so a bare assertion races the second fetch.
+    await vi.waitFor(() => expect(calls.map((c) => c.path).sort()).toEqual(['/admin/me', '/admin/payouts']));
   });
 });

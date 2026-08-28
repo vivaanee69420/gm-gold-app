@@ -3,6 +3,7 @@ import { api, onUnauthorized } from './api/client.js';
 import { isSignedIn, signOut } from './api/auth.js';
 import { errorMessage } from './copy.js';
 import SignIn from './components/SignIn.jsx';
+import ChangePassword from './components/ChangePassword.jsx';
 import ManagerPage from './pages/ManagerPage.jsx';
 import OperationsPage from './pages/OperationsPage.jsx';
 import ReportsPage from './pages/ReportsPage.jsx';
@@ -18,6 +19,7 @@ export default function App() {
   const [data, setData] = useState(null);
   const [toast, setToast] = useState(null);
   const [route, setRoute] = useState(window.location.pathname);
+  const [showChangePassword, setShowChangePassword] = useState(false);
 
   const notify = useCallback((message) => setToast(errorMessage(message)), []);
 
@@ -149,16 +151,24 @@ export default function App() {
             </a>
           ))}
         </nav>
+        <button className="ghost" onClick={() => setShowChangePassword((v) => !v)}>
+          Change password
+        </button>
         <button className="ghost" onClick={signOutNow}>
           Sign out
         </button>
       </header>
       {toastEl}
+      {showChangePassword && (
+        <div className="inline-panel">
+          <ChangePassword notify={notify} onDone={() => setShowChangePassword(false)} />
+        </div>
+      )}
       {!data ? (
         <p className="loading">Loading…</p>
       ) : (
         <main>
-          <Page data={data} loadAll={loadAll} notify={notify} />
+          <Page data={data} loadAll={loadAll} notify={notify} me={me} />
         </main>
       )}
     </div>

@@ -2,9 +2,10 @@ import Levers from '../components/Levers.jsx';
 import DentallyCard from '../components/DentallyCard.jsx';
 import FunnelReport from '../components/FunnelReport.jsx';
 import TopReferrers from '../components/TopReferrers.jsx';
+import TeamCard from '../components/TeamCard.jsx';
 import { Zone } from '../components/ui.jsx';
 
-export default function ReportsPage({ data, loadAll, notify }) {
+export default function ReportsPage({ data, loadAll, notify, me }) {
   return (
     <>
       <Zone label="Reports">
@@ -28,6 +29,7 @@ export default function ReportsPage({ data, loadAll, notify }) {
             notify={notify}
           />
           <DentallyCard status={data.dentally} onChanged={loadAll} notify={notify} />
+          {me?.role === 'admin' && <TeamCard practices={me.practices} meId={me.id} notify={notify} />}
         </div>
       </Zone>
     </>

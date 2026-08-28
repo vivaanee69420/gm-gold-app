@@ -16,10 +16,29 @@ const ERRORS = {
   dentally_not_connected: 'Dentally is not connected yet.',
   dentally_not_stub: 'Dev stub actions only work while Dentally is in demo (stub) mode.',
   not_in_review: 'This referral is no longer waiting for review (maybe a colleague decided it).',
-  forbidden: "This account doesn't have dashboard access — ask an owner to grant it.",
+  forbidden: "This account doesn't have dashboard access — ask an admin to grant it.",
   unauthorized: 'Your session ended — sign in again.',
+  not_found: 'That account no longer exists.',
   validation: "Some of those values didn't validate — check and try again.",
   load_failed: "Couldn't reach the API — is it running?",
+  // The four codes a component invents when a request never landed at all (fetch threw, or the
+  // response carried no error code). They all mean the same thing to the person at the desk.
+  sign_in_failed: "Couldn't reach the API — check your connection and try again.",
+  save_failed: "Couldn't reach the API — check your connection and try again.",
+  create_failed: "Couldn't reach the API — check your connection and try again.",
+  request_failed: "Couldn't reach the API — check your connection and try again.",
+  invalid_credentials: 'Email or password is wrong.',
+  rate_limited: 'Too many attempts — wait 15 minutes and try again.',
+  email_taken: 'An account with that email already exists.',
+  weak_password: 'Passwords need at least 10 characters.',
+  practice_required: 'A manager needs exactly one practice.',
+  cannot_deactivate_self: "You can't deactivate your own account.",
+  last_admin: 'There must be at least one active admin.',
+  wrong_password: 'Your current password is wrong.',
+  practice_not_allowed: 'Admins cover every practice — leave the practice blank.',
+  // Not an error: the Team card notifies through the same channel, and a bare "Saved." is
+  // clearer than silence after a password reset or a re-scope.
+  team_saved: 'Saved.',
 };
 
 export const errorMessage = (code) => ERRORS[code] ?? code;

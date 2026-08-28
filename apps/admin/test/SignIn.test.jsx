@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import SignIn from '../src/components/SignIn.jsx';
 import { clearToken, getToken } from '../src/api/client.js';
@@ -9,38 +9,49 @@ beforeEach(() => clearToken());
 afterEach(() => vi.unstubAllGlobals());
 
 describe('SignIn', () => {
-  it('walks phone → dev-hinted code → signed in', async () => {
+  it('posts email + password and signs in', async () => {
     stubFetchRoutes([
-      { method: 'POST', path: '/auth/otp/send', body: { ok: true, devHint: 'dev code: 111222' } },
-      { method: 'POST', path: '/auth/otp/verify', body: { token: 'tok-1', user: { firstName: 'Sam' } } },
+      {
+        method: 'POST',
+        path: '/auth/admin/login',
+        body: { token: 'tok-1', admin: { id: 'a1', email: 'sam@gmdental.co.uk', role: 'admin', practices: [] } },
+      },
     ]);
     const onSignedIn = vi.fn();
     render(<SignIn onSignedIn={onSignedIn} />);
 
-    await userEvent.type(screen.getByLabelText(/mobile number/i), '07700 900123');
-    await userEvent.click(screen.getByRole('button', { name: /send code/i }));
-
-    expect(await screen.findByText(/111222/)).toBeInTheDocument();
-
-    await userEvent.type(screen.getByLabelText(/6-digit code/i), '111222');
+    await userEvent.type(screen.getByLabelText(/email/i), 'sam@gmdental.co.uk');
+    await userEvent.type(screen.getByLabelText(/password/i), 'correcthorsebattery');
     await userEvent.click(screen.getByRole('button', { name: /sign in/i }));
 
-    expect(onSignedIn).toHaveBeenCalledWith({ firstName: 'Sam' });
+    // The click only kicks off the request; onSignedIn lands a microtask or two later.
+    await waitFor(() =>
+      expect(onSignedIn).toHaveBeenCalledWith({ id: 'a1', email: 'sam@gmdental.co.uk', role: 'admin', practices: [] }));
     expect(getToken()).toBe('tok-1');
   });
 
-  it('surfaces a failed code check', async () => {
+  it('shows the invalid_credentials copy on a 401', async () => {
     stubFetchRoutes([
-      { method: 'POST', path: '/auth/otp/send', body: { ok: true, devHint: 'dev code: 111222' } },
-      { method: 'POST', path: '/auth/otp/verify', body: { error: 'invalid_code' }, status: 401 },
+      { method: 'POST', path: '/auth/admin/login', body: { error: 'invalid_credentials' }, status: 401 },
     ]);
     render(<SignIn onSignedIn={vi.fn()} />);
 
-    await userEvent.type(screen.getByLabelText(/mobile number/i), '07700 900123');
-    await userEvent.click(screen.getByRole('button', { name: /send code/i }));
-    await userEvent.type(await screen.findByLabelText(/6-digit code/i), '000000');
+    await userEvent.type(screen.getByLabelText(/email/i), 'sam@gmdental.co.uk');
+    await userEvent.type(screen.getByLabelText(/password/i), 'wrongpassword');
     await userEvent.click(screen.getByRole('button', { name: /sign in/i }));
 
-    expect(await screen.findByText(/invalid_code/)).toBeInTheDocument();
+    expect(await screen.findByText('Email or password is wrong.')).toBeInTheDocument();
+  });
+
+  it('has the right input types and autocomplete hints', () => {
+    stubFetchRoutes([]);
+    render(<SignIn onSignedIn={vi.fn()} />);
+
+    const email = screen.getByLabelText(/email/i);
+    const password = screen.getByLabelText(/password/i);
+    expect(email).toHaveAttribute('type', 'email');
+    expect(email).toHaveAttribute('autoComplete', 'username');
+    expect(password).toHaveAttribute('type', 'password');
+    expect(password).toHaveAttribute('autoComplete', 'current-password');
   });
 });

@@ -1,6 +1,19 @@
 const env = process.env.NODE_ENV ?? 'development';
 const dev = env !== 'production';
 
+// Boot guard: the default JWT secret below is public (it's in this repo). Never let a
+// production boot silently sign admin/patient sessions with it.
+if (env === 'production' && !process.env.API_JWT_SECRET) {
+  throw new Error('API_JWT_SECRET is required in production');
+}
+// The same guard, independent of NODE_ENV (controller ruling C1): the deployed image boots
+// with NODE_ENV=development, so the check above alone would never fire there. A DATABASE_URL
+// is the honest signal that this process is talking to a real database with real accounts —
+// refuse to sign anything for it with the public default secret.
+if (process.env.DATABASE_URL && !process.env.API_JWT_SECRET) {
+  throw new Error('API_JWT_SECRET is required when DATABASE_URL is set');
+}
+
 export const config = {
   port: Number(process.env.PORT ?? 4000),
   env,

@@ -80,3 +80,21 @@ export const statusUpdateSchema = z.object({
 export const payoutRequestSchema = z.object({
   practiceId: z.string().uuid(),
 });
+
+// ---- admin accounts (email + password, two roles: admin | manager) ----
+// The 256-character ceiling is a cost bound, not a policy: passwords are hashed with scrypt,
+// whose work scales with the input, so an unbounded field lets one request burn arbitrary CPU
+// on an unauthenticated route.
+export const adminLoginSchema = z.object({
+  email: z.string().trim().toLowerCase().email(),
+  password: z.string().min(1).max(256),
+});
+
+export const adminPasswordSchema = z.string().min(10).max(256);
+
+export const adminCreateSchema = z.object({
+  email: z.string().trim().toLowerCase().email(),
+  password: adminPasswordSchema,
+  role: z.enum(['admin', 'manager']),
+  practiceId: z.string().uuid().optional(),
+});
