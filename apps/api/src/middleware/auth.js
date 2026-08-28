@@ -36,6 +36,10 @@ export async function requireAdmin(req, res, next) {
         ? raw
         : String(raw ?? '{}').replace(/[{}"]/g, '').split(',').filter(Boolean);
       req.admin = { role: rows[0].role, practiceIds };
+      // Managers get a payouts-only dashboard (2026-08-28 decision): everything else 403s.
+      if (rows[0].role === 'manager' && !/^\/admin\/(me|payouts)(\/|$)/.test(req.path)) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
       return next();
     }
     if (isDev) {

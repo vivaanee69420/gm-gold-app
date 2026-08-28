@@ -26,6 +26,7 @@ import {
   updateStatus,
   referralsForReferrer,
   referredStatusFor,
+  firstNameInitial,
 } from './services/referralService.js';
 import { walletFor, requestPayout, markPayoutPaid, cancelPayout, getSetting, resolveRule } from './services/walletService.js';
 import { runSync, agingReport } from './services/dentally/syncService.js';
@@ -58,10 +59,10 @@ const validate = (schema) => (req, res, next) => {
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
 
-// FR-24: practice-scoped admins see only their practices; owners (and dev) see all.
+// FR-24: practice-scoped admins (admin, manager) see only their practices; owners (and dev) see all.
 // Returns a Postgres array literal (cast with ::uuid[] in SQL) so both drivers agree.
 const practiceScope = (req) =>
-  req.admin?.role === 'admin' && req.admin.practiceIds.length ? `{${req.admin.practiceIds.join(',')}}` : null;
+  req.admin?.role !== 'owner' && req.admin?.practiceIds.length ? `{${req.admin.practiceIds.join(',')}}` : null;
 
 export function buildApp() {
   const app = express();
@@ -177,6 +178,17 @@ export function buildApp() {
   }));
 
   // ---- admin (gate reads admin_users; open in dev — see middleware/auth.js) ----
+  // FR-24: what the dashboard uses to pick a view — a manager's single practice vs. an
+  // owner/admin's full (or scoped) list.
+  app.get('/admin/me', requireUser, requireAdmin, wrap(async (req, res) => {
+    const scope = practiceScope(req);
+    const { rows } = await db.query(
+      `select id, name from practices where active ${scope ? 'and id = any($1::uuid[])' : ''} order by name`,
+      scope ? [scope] : [],
+    );
+    res.json({ role: req.admin.role, practices: rows });
+  }));
+
   app.get('/admin/referrals', requireUser, requireAdmin, wrap(async (req, res) => {
     const scope = practiceScope(req);
     const { rows } = await db.query(
@@ -212,19 +224,57 @@ export function buildApp() {
     res.json(out);
   }));
 
+  // Reception needs enough to verify identity and see the credits behind the balance:
+  // the member's phone, their active referral code, and their unpaid credits (a second
+  // query keyed by user id, since it's a one-to-many the main row can't carry cleanly).
   app.get('/admin/payouts', requireUser, requireAdmin, wrap(async (req, res) => {
     const scope = practiceScope(req);
     const { rows } = await db.query(
-      `select pr.id, pr.amount_pennies, pr.status, pr.requested_at, p.name as practice,
-              u.first_name || ' ' || coalesce(u.last_name,'') as member
+      `select pr.id, pr.user_id, pr.amount_pennies, pr.status, pr.requested_at, p.name as practice,
+              u.first_name || ' ' || coalesce(u.last_name,'') as member, u.phone,
+              rc.code as referral_code
        from payout_requests pr
        join practices p on p.id = pr.practice_id
        join users u on u.id = pr.user_id
+       left join lateral (
+         select code from referral_codes
+         where user_id = pr.user_id and active
+         order by created_at desc limit 1
+       ) rc on true
        ${scope ? 'where pr.practice_id = any($1::uuid[])' : ''}
        order by pr.requested_at desc`,
       scope ? [scope] : [],
     );
-    res.json({ payouts: rows });
+
+    const userIds = [...new Set(rows.map((r) => r.user_id))];
+    const creditsByUser = new Map();
+    if (userIds.length) {
+      const { rows: creditRows } = await db.query(
+        `select wl.user_id, wl.amount_pennies, wl.created_at::date::text as at, r.referred_name
+         from wallet_ledger wl
+         left join referrals r on r.id = wl.referral_id
+         where wl.kind = 'credit' and wl.user_id = any($1::uuid[])
+           and wl.created_at > coalesce(
+             (select max(pr2.paid_at) from payout_requests pr2 where pr2.user_id = wl.user_id and pr2.status = 'paid'),
+             '-infinity'::timestamptz
+           )
+         order by wl.created_at`,
+        [`{${userIds.join(',')}}`],
+      );
+      for (const c of creditRows) {
+        const list = creditsByUser.get(c.user_id) ?? [];
+        list.push({
+          friend: c.referred_name ? firstNameInitial(c.referred_name) : 'Referral',
+          amountPennies: c.amount_pennies,
+          at: c.at,
+        });
+        creditsByUser.set(c.user_id, list);
+      }
+    }
+
+    res.json({
+      payouts: rows.map(({ user_id, ...row }) => ({ ...row, credits: creditsByUser.get(user_id) ?? [] })),
+    });
   }));
 
   app.post('/admin/payouts/:id/mark-paid', requireUser, requireAdmin, wrap(async (req, res) => {
