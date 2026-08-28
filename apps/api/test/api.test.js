@@ -188,7 +188,8 @@ describe('pipeline and money', () => {
 
     const paid = await request(app)
       .post(`/admin/payouts/${payout.body.payout.id}/mark-paid`)
-      .set(auth(agents.referrer));
+      .set(auth(agents.referrer))
+      .send({ amountPennies: 10000 });
     expect(paid.status).toBe(200);
 
     const wallet = await request(app).get('/wallet').set(auth(agents.referrer));

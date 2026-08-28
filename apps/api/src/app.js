@@ -277,15 +277,23 @@ export function buildApp() {
     });
   }));
 
+  // Mark-paid requires the manager/admin to type the amount they physically handed over —
+  // it must match the request exactly, not just be trusted from the row (FR-24).
   app.post('/admin/payouts/:id/mark-paid', requireUser, requireAdmin, wrap(async (req, res) => {
-    res.json(await markPayoutPaid(req.params.id, req.user.id));
+    const amountPennies = req.body?.amountPennies;
+    if (!Number.isInteger(amountPennies) || amountPennies <= 0) {
+      return res.status(422).json({ error: 'amount_required' });
+    }
+    const practiceIds = req.admin.role === 'owner' ? null : req.admin.practiceIds;
+    res.json(await markPayoutPaid(req.params.id, req.user.id, { amountPennies, practiceIds }));
   }));
 
   // FR-21: admin cancel needs a reason; the member keeps their balance and is notified.
   app.post('/admin/payouts/:id/cancel', requireUser, requireAdmin, wrap(async (req, res) => {
     const reason = String(req.body?.reason ?? '').trim();
     if (!reason) return res.status(422).json({ error: 'reason_required' });
-    res.json(await cancelPayout(req.params.id, req.user.id, true, reason));
+    const practiceIds = req.admin.role === 'owner' ? null : req.admin.practiceIds;
+    res.json(await cancelPayout(req.params.id, req.user.id, { byAdmin: true, reason, practiceIds }));
   }));
 
   app.get('/admin/settings', requireUser, requireAdmin, wrap(async (_req, res) => {
