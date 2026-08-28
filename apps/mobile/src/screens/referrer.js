@@ -1,6 +1,6 @@
 // Referrer tabs: Card (hero + share), Referrals (pending kept alive), Wallet (the money).
 import React, { useCallback, useState } from 'react';
-import { FlatList, RefreshControl, Share, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, RefreshControl, Share, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { formatPennies } from '@gm-referral/shared/money';
 import { formatCode } from '@gm-referral/shared/referral-code';
@@ -8,21 +8,23 @@ import { api } from '../api/client';
 import { GoldCard } from '../components/GoldCard';
 import { Body, Eyebrow, GoldButton, GoldSeam, Hairline, Screen, StatusChip, Title } from '../components/ui';
 import BookAppointment from '../components/BookAppointment';
-import { colors, space, type } from '../theme';
+import { colors, radius, space, type } from '../theme';
 import { useAppState } from '../state/AppState';
 
 const STORE_LINKS = 'iPhone: https://apps.apple.com/gb/app/gm-referral · Android: https://play.google.com/store/apps/details?id=uk.co.gmdental.referral';
+
+const shareCard = (code = 'GMRF7K2X') =>
+  Share.share({
+    message:
+      `I get looked after at GM Dental — you'd get a free consultation if you mention me. ` +
+      `Get the GM Referral app and enter my code ${formatCode(code)} when it asks who sent you.\n${STORE_LINKS}`,
+  });
 
 export function CardScreen() {
   const { user, signOut } = useAppState();
   const code = user?.referralCode ?? 'GMRF7K2X';
 
-  const share = () =>
-    Share.share({
-      message:
-        `I get looked after at GM Dental — you'd get a free consultation if you mention me. ` +
-        `Get the GM Referral app and enter my code ${formatCode(code)} when it asks who sent you.\n${STORE_LINKS}`,
-    });
+  const share = () => shareCard(code);
 
   return (
     <Screen>
@@ -105,10 +107,19 @@ export function ReferralsScreen() {
   );
 }
 
+const HOW_IT_WORKS = [
+  { n: '1', title: 'Share your card', detail: 'Friends get a free consultation when they mention you.' },
+  { n: '2', title: 'Your friend completes treatment', detail: 'We confirm it with the practice.' },
+  { n: '3', title: 'Cash lands here', detail: 'Choose a practice and collect at reception.' },
+];
+
 export function WalletScreen() {
+  const { user } = useAppState();
   const [wallet, setWallet] = useState(null);
   const [practices, setPractices] = useState([]);
   const [requesting, setRequesting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [selectedPracticeId, setSelectedPracticeId] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -144,10 +155,11 @@ export function WalletScreen() {
   const unlocked = balancePennies >= thresholdPennies;
 
   const requestPayout = async () => {
+    if (!selectedPracticeId) return;
     setRequesting(true);
     try {
-      // MVP: collect at the first practice; a picker lands with the admin build.
-      await api.requestPayout(practices[0]?.id);
+      await api.requestPayout(selectedPracticeId);
+      setSelectedPracticeId(null);
       await load();
     } catch {
       // request didn't land — leave the button enabled to try again
@@ -156,38 +168,119 @@ export function WalletScreen() {
     }
   };
 
+  const cancelRequest = async () => {
+    if (!openPayout) return;
+    setCancelling(true);
+    try {
+      await api.cancelPayout(openPayout.id);
+      await load();
+    } catch {
+      // cancel didn't land — leave the button enabled to try again
+    } finally {
+      setCancelling(false);
+    }
+  };
+
+  const selectedPractice = practices.find((p) => p.id === selectedPracticeId);
+
   return (
     <Screen>
       <Eyebrow>Wallet</Eyebrow>
-      <Text style={styles.balance}>{formatPennies(balancePennies)}</Text>
-      <GoldSeam ratio={balancePennies / thresholdPennies} />
-      <Body muted style={{ marginTop: space(2), marginBottom: space(5) }}>
-        {openPayout
-          ? `Payout requested — collect ${formatPennies(openPayout.amountPennies)} at ${openPayout.practiceName} reception.`
-          : unlocked
-            ? `Ready to collect at any practice.`
-            : `${formatPennies(toGo)} to go — collect in cash at any practice from ${formatPennies(thresholdPennies)}.`}
-      </Body>
-      {unlocked && !openPayout ? (
-        <GoldButton label="Collect my cash" onPress={requestPayout} disabled={requesting} />
-      ) : null}
+      <View style={styles.balanceCard}>
+        <Text style={styles.balanceLabel}>Balance</Text>
+        <Text style={styles.balance}>{formatPennies(balancePennies)}</Text>
+        <GoldSeam ratio={balancePennies / thresholdPennies} />
+        <Text style={styles.progress}>
+          {formatPennies(balancePennies)} of {formatPennies(thresholdPennies)}
+        </Text>
+        <Body muted={!openPayout && !unlocked} style={{ marginTop: space(3) }}>
+          {openPayout
+            ? `Payout requested — collect ${formatPennies(openPayout.amountPennies)} at ${openPayout.practiceName} reception.`
+            : unlocked
+              ? `Ready to collect in cash — choose a practice below.`
+              : `${formatPennies(toGo)} more to unlock cash collection.`}
+        </Body>
+        {unlocked && !openPayout ? (
+          <>
+            <Text style={[styles.sectionLabel, { marginTop: space(4) }]}>Where will you collect?</Text>
+            {practices.map((practice) => {
+              const selected = practice.id === selectedPracticeId;
+              return (
+                <Pressable
+                  key={practice.id}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected }}
+                  onPress={() => setSelectedPracticeId(practice.id)}
+                  style={[styles.practiceRow, selected && styles.practiceRowSelected]}
+                >
+                  <Text style={styles.practiceName}>{practice.name}</Text>
+                  <View style={[styles.practiceRadio, selected && styles.practiceRadioSelected]}>
+                    {selected ? <View style={styles.practiceRadioDot} /> : null}
+                  </View>
+                </Pressable>
+              );
+            })}
+            <GoldButton
+              label={selectedPractice ? `Collect my cash at ${selectedPractice.name}` : 'Collect my cash'}
+              onPress={requestPayout}
+              disabled={requesting || !selectedPracticeId}
+              style={{ marginTop: space(4) }}
+            />
+          </>
+        ) : null}
+        {openPayout ? (
+          <GoldButton
+            variant="ghost"
+            label="Cancel request"
+            onPress={cancelRequest}
+            disabled={cancelling}
+            style={{ marginTop: space(4) }}
+          />
+        ) : null}
+      </View>
       <View style={styles.lifetimeRow}>
         <Body muted>Lifetime earned</Body>
         <Text style={styles.lifetime}>{formatPennies(lifetimePennies)}</Text>
       </View>
-      <Hairline style={{ marginBottom: space(2) }} />
-      {ledger.map((entry) => (
-        <View key={entry.id} style={styles.row}>
-          <View style={{ flex: 1, paddingRight: space(2) }}>
-            <Text style={styles.friend}>{entry.note}</Text>
-            <Text style={styles.date}>{entry.at}</Text>
-          </View>
-          <Text style={[styles.amount, entry.amountPennies < 0 && { color: colors.mist }]}>
-            {entry.amountPennies > 0 ? '+' : ''}
-            {formatPennies(entry.amountPennies)}
-          </Text>
-        </View>
-      ))}
+      <Hairline style={{ marginBottom: space(4) }} />
+      {ledger.length === 0 ? (
+        <>
+          <Text style={styles.sectionLabel}>How it works</Text>
+          {HOW_IT_WORKS.map((item) => (
+            <View key={item.n} style={styles.step}>
+              <Text style={styles.stepNumber}>{item.n}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.friend}>{item.title}</Text>
+                <Text style={styles.date}>{item.detail}</Text>
+              </View>
+            </View>
+          ))}
+          <GoldButton
+            variant="ghost"
+            label="Share my card"
+            onPress={() => shareCard(user?.referralCode)}
+            style={{ marginTop: space(4) }}
+          />
+          <Text style={[styles.sectionLabel, { marginTop: space(7) }]}>Activity</Text>
+          <Body muted>Your earnings will appear here.</Body>
+        </>
+      ) : (
+        <>
+          <Text style={styles.sectionLabel}>Activity</Text>
+          {ledger.map((entry) => (
+            <View key={entry.id} style={styles.row}>
+              <View style={{ flex: 1, paddingRight: space(2) }}>
+                <Text style={styles.friend}>{entry.note}</Text>
+                <Text style={styles.date}>{entry.at}</Text>
+              </View>
+              <Text style={[styles.amount, entry.amountPennies < 0 && { color: colors.mist }]}>
+                {entry.amountPennies > 0 ? '+' : ''}
+                {formatPennies(entry.amountPennies)}
+              </Text>
+            </View>
+          ))}
+        </>
+      )}
     </Screen>
   );
 }
@@ -201,11 +294,92 @@ const styles = StyleSheet.create({
   },
   friend: { color: colors.ivory, fontSize: 15 },
   date: { color: colors.mist, fontSize: 12, marginTop: 2 },
+  balanceCard: {
+    backgroundColor: colors.cardface,
+    borderRadius: radius.card,
+    borderWidth: 1,
+    borderColor: colors.cardedge,
+    padding: space(5),
+    marginTop: space(2),
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
+  },
+  balanceLabel: {
+    color: colors.mist,
+    fontSize: 11,
+    letterSpacing: 2.2,
+    textTransform: 'uppercase',
+    marginBottom: space(2),
+  },
   balance: {
     fontFamily: type.display,
     color: colors.goldbright,
-    fontSize: 52,
+    fontSize: 46,
+    marginBottom: space(4),
+  },
+  progress: {
+    color: colors.mist,
+    fontSize: 12,
+    marginTop: space(2),
+    fontVariant: ['tabular-nums'],
+  },
+  sectionLabel: {
+    color: colors.mist,
+    fontSize: 11,
+    letterSpacing: 2.2,
+    textTransform: 'uppercase',
     marginBottom: space(3),
+  },
+  step: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: space(2.5),
+  },
+  stepNumber: {
+    fontFamily: type.display,
+    color: colors.gold,
+    fontSize: 18,
+    width: space(7),
+    marginTop: -2,
+  },
+  practiceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: space(3.5),
+    paddingHorizontal: space(4),
+    borderRadius: radius.control,
+    borderWidth: 1,
+    borderColor: colors.cardedge,
+    marginBottom: space(2),
+  },
+  practiceRowSelected: {
+    borderColor: colors.gold,
+  },
+  practiceName: {
+    color: colors.ivory,
+    fontSize: 15,
+  },
+  practiceRadio: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: colors.gold,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  practiceRadioSelected: {
+    borderColor: colors.goldbright,
+  },
+  practiceRadioDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.gold,
   },
   lifetimeRow: {
     flexDirection: 'row',

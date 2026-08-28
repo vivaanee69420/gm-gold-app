@@ -96,6 +96,10 @@ function mockRespond(path, options = {}) {
     mock.wallet.openPayout = { id: 'p1', amountPennies: mock.wallet.balancePennies, practiceName: 'Ashford', status: 'open' };
     return { ok: true, payout: mock.wallet.openPayout };
   }
+  if (path.startsWith('/payouts/') && options.method === 'DELETE') {
+    mock.wallet.openPayout = null;
+    return { ok: true };
+  }
   return { error: 'mock_not_implemented', path };
 }
 
@@ -158,4 +162,5 @@ export const api = {
   submitReferral: (payload) => request('/referrals', { method: 'POST', body: payload }),
   referredStatus: () => request('/referrals/referred-status'),
   requestPayout: (practiceId) => request('/payouts', { method: 'POST', body: { practiceId } }),
+  cancelPayout: (id) => request(`/payouts/${id}`, { method: 'DELETE' }),
 };
