@@ -14,6 +14,12 @@ let db;
 let practiceId;
 
 const auth = (token) => ({ Authorization: `Bearer ${token}` });
+// loadAdminForToken compares iat (seconds, floored) to sessions_revoked_at (sub-second) at
+// SECOND granularity — deliberately, so a fresh token minted in the same wall-clock second as a
+// revocation isn't falsely rejected. That means "this earlier token must now be dead" is only
+// deterministic once the revocation lands in a strictly LATER second than the token's issuance;
+// sleep past a second boundary first, same convention as admin-auth.test.js.
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 beforeAll(async () => {
   const dbModule = await import('../src/db.js');
@@ -117,6 +123,12 @@ describe('POST /admin/team', () => {
     expect(res.status).toBe(403);
     expect(res.body.error).toBe('forbidden');
   });
+
+  it('createAdmin() itself never returns password_hash — defense in depth beyond the route projection', async () => {
+    const { createAdmin } = await import('../src/services/adminService.js');
+    const row = await createAdmin({ email: 'no-hash-in-return@gmdental.co.uk', password: 'correct-horse-battery', role: 'admin' });
+    expect(row).not.toHaveProperty('password_hash');
+  });
 });
 
 describe('POST /admin/team/:id/password', () => {
@@ -127,6 +139,11 @@ describe('POST /admin/team/:id/password', () => {
     });
 
     expect((await request(app).get('/admin/me').set(auth(managerToken))).status).toBe(200);
+
+    // The "old token is now dead" check below is only deterministic once the revocation below
+    // lands in a strictly later SECOND than managerToken's iat (loadAdminForToken compares at
+    // second granularity — see the sleep() comment up top).
+    await sleep(1100);
 
     const res = await request(app).post(`/admin/team/${managerAdmin.id}/password`).set(auth(adminToken))
       .send({ password: 'brand-new-strong-password' });
@@ -164,12 +181,40 @@ describe('POST /admin/team/:id/password', () => {
     expect(res.body.error).toBe('not_found');
   });
 
+  it('a malformed (non-uuid) :id -> 422 validation, never a raw Postgres error', async () => {
+    const { token: adminToken } = await adminSession(app, { email: 'pw-setter-malformed@gmdental.co.uk' });
+    const res = await request(app).post('/admin/team/not-a-uuid/password').set(auth(adminToken))
+      .send({ password: 'correct-horse-battery' });
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe('validation');
+    expect(JSON.stringify(res.body)).not.toMatch(/invalid input syntax|22P02/i);
+  });
+
   it('a manager -> 403 forbidden', async () => {
     const { token: managerToken } = await adminSession(app, { email: 'team-fence-setpw@gmdental.co.uk', role: 'manager', practiceIds: [practiceId] });
     const { admin: target } = await adminSession(app, { email: 'pw-fence-target@gmdental.co.uk' });
     const res = await request(app).post(`/admin/team/${target.id}/password`).set(auth(managerToken)).send({ password: 'correct-horse-battery' });
     expect(res.status).toBe(403);
     expect(res.body.error).toBe('forbidden');
+  });
+
+  it('an immediate fresh login right after this call works on the first try (no false rejection from the same-second revocation)', async () => {
+    const { token: adminToken } = await adminSession(app, { email: 'pw-immediate-setter@gmdental.co.uk' });
+    const { admin: target } = await adminSession(app, { email: 'pw-immediate-target@gmdental.co.uk', password: 'correct-horse-battery' });
+
+    const setRes = await request(app).post(`/admin/team/${target.id}/password`).set(auth(adminToken))
+      .send({ password: 'brand-new-immediate-password' });
+    expect(setRes.status).toBe(200);
+
+    // Deliberately no sleep here — this is the exact race: a fresh login minted in the SAME
+    // wall-clock second as the sessions_revoked_at bump above must not be treated as issued
+    // "before" that revocation just because its floored `iat` reads earlier at ms precision.
+    const login = await request(app).post('/auth/admin/login')
+      .send({ email: 'pw-immediate-target@gmdental.co.uk', password: 'brand-new-immediate-password' });
+    expect(login.status).toBe(200);
+
+    const me = await request(app).get('/admin/me').set(auth(login.body.token));
+    expect(me.status).toBe(200);
   });
 });
 
@@ -179,6 +224,41 @@ describe('POST /admin/team/:id/active', () => {
     const res = await request(app).post(`/admin/team/${admin.id}/active`).set(auth(token)).send({ active: false });
     expect(res.status).toBe(409);
     expect(res.body.error).toBe('cannot_deactivate_self');
+  });
+
+  it('own id spelled in uppercase still triggers cannot_deactivate_self (the self-check is case-insensitive)', async () => {
+    const { token, admin } = await adminSession(app, { email: 'self-deactivate-uc@gmdental.co.uk' });
+    const res = await request(app).post(`/admin/team/${admin.id.toUpperCase()}/active`).set(auth(token)).send({ active: false });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('cannot_deactivate_self');
+  });
+
+  it('active must be a real boolean: missing -> 422 validation, target stays active', async () => {
+    const { token: adminToken } = await adminSession(app, { email: 'active-type-setter-1@gmdental.co.uk' });
+    const { admin: target } = await adminSession(app, { email: 'active-type-target-1@gmdental.co.uk' });
+    const res = await request(app).post(`/admin/team/${target.id}/active`).set(auth(adminToken)).send({});
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe('validation');
+    const row = await db.query(`select active from admin_users where id=$1`, [target.id]);
+    expect(row.rows[0].active).toBe(true);
+  });
+
+  it('active must be a real boolean: the string "true" -> 422 validation, target stays active', async () => {
+    const { token: adminToken } = await adminSession(app, { email: 'active-type-setter-2@gmdental.co.uk' });
+    const { admin: target } = await adminSession(app, { email: 'active-type-target-2@gmdental.co.uk' });
+    const res = await request(app).post(`/admin/team/${target.id}/active`).set(auth(adminToken)).send({ active: 'true' });
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe('validation');
+    const row = await db.query(`select active from admin_users where id=$1`, [target.id]);
+    expect(row.rows[0].active).toBe(true);
+  });
+
+  it('a malformed (non-uuid) :id -> 422 validation, never a raw Postgres error', async () => {
+    const { token } = await adminSession(app, { email: 'active-setter-malformed@gmdental.co.uk' });
+    const res = await request(app).post('/admin/team/not-a-uuid/active').set(auth(token)).send({ active: false });
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe('validation');
+    expect(JSON.stringify(res.body)).not.toMatch(/invalid input syntax|22P02/i);
   });
 
   it('a deactivated manager cannot log in; reactivating restores access (with events logged)', async () => {
@@ -249,9 +329,14 @@ describe('POST /admin/me/password (both roles)', () => {
     expect(res.body.error).toBe('weak_password');
   });
 
-  it('right current password: old token dies, the returned token works immediately (no sleep needed)', async () => {
+  it('right current password: old token dies (once unambiguous), the returned token works with ZERO extra wait', async () => {
     const { token, admin } = await adminSession(app, { email: 'selfpw-right@gmdental.co.uk', password: 'correct-horse-battery' });
     expect((await request(app).get('/admin/me').set(auth(token))).status).toBe(200);
+
+    // Only for the "old token is dead" half of this test — the same second-granularity reason
+    // as the setPassword test above. The point of the fix under test is the OTHER half: no sleep
+    // between minting the replacement token below and using it — that stays sleep-free.
+    await sleep(1100);
 
     const res = await request(app).post('/admin/me/password').set(auth(token))
       .send({ currentPassword: 'correct-horse-battery', newPassword: 'another-strong-password-2' });

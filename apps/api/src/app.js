@@ -2,6 +2,7 @@
 import crypto from 'node:crypto';
 import express from 'express';
 import cors from 'cors';
+import { z } from 'zod';
 import {
   otpSendSchema,
   otpVerifySchema,
@@ -70,6 +71,18 @@ const validate = (schema) => (req, res, next) => {
 };
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
+
+// A malformed :id (e.g. "not-a-uuid") reaching a raw `where id = $1` against a uuid column is a
+// Postgres 22P02 (invalid input syntax for type uuid) — an uncaught error with no .status, so the
+// global error boundary would 500 it verbatim, leaking raw DB text. Reject the shape at the route
+// instead, before it ever reaches a query; a well-formed-but-unknown id still 404s downstream.
+const uuidParamSchema = z.string().uuid();
+const requireUuidParam = (name) => (req, res, next) => {
+  if (!uuidParamSchema.safeParse(req.params[name]).success) {
+    return res.status(422).json({ error: 'validation' });
+  }
+  return next();
+};
 
 // FR-24: two roles now — `admin` sees/acts on every practice (createAdmin never lets an
 // admin carry practice ids, so this is unconditional, not just "empty means all"); `manager`
@@ -252,14 +265,17 @@ export function buildApp() {
 
   // { password } — sets a new hash for :id and bumps its sessions_revoked_at, so every token
   // issued before this call dies.
-  app.post('/admin/team/:id/password', requireAdmin, wrap(async (req, res) => {
+  app.post('/admin/team/:id/password', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
     res.json(await setPassword({ id: req.params.id, password: req.body?.password, actorId: req.admin.id }));
   }));
 
   // { active: boolean } — 409 cannot_deactivate_self / last_admin guard which admins this can
-  // touch; deactivating also bumps sessions_revoked_at.
-  app.post('/admin/team/:id/active', requireAdmin, wrap(async (req, res) => {
-    res.json(await setActive({ id: req.params.id, active: req.body?.active === true, actorId: req.admin.id }));
+  // touch; deactivating also bumps sessions_revoked_at. `active` must be a real JSON boolean —
+  // a missing/malformed value (e.g. the string "true", or an absent field) previously fell
+  // through `=== true` to `false` and silently deactivated the target instead of rejecting.
+  app.post('/admin/team/:id/active', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
+    if (typeof req.body?.active !== 'boolean') return res.status(422).json({ error: 'validation' });
+    res.json(await setActive({ id: req.params.id, active: req.body.active, actorId: req.admin.id }));
   }));
 
   // Both roles reach this one (see MANAGER_ALLOWED): { currentPassword, newPassword } — wrong

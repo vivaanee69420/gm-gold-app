@@ -157,9 +157,13 @@ export async function createAdmin({ email, password, role, practiceIds = [], cre
   const practiceIdsLiteral = `{${practiceIds.join(',')}}`;
   let row;
   try {
+    // Projected columns, not `returning *`: password_hash must never leave this function in
+    // the returned row, even internally — a future caller (script, route, test) that forwards
+    // this object without going through publicAdmin() shouldn't be able to leak it by accident.
     const { rows } = await db.query(
       `insert into admin_users (email, password_hash, role, practice_ids)
-       values ($1,$2,$3,$4::uuid[]) returning *`,
+       values ($1,$2,$3,$4::uuid[])
+       returning id, email, role, practice_ids, active, created_at, last_login_at, sessions_revoked_at`,
       [normalizedEmail, passwordHash, role, practiceIdsLiteral],
     );
     row = rows[0];
@@ -222,8 +226,15 @@ export async function loadAdminForToken(payload) {
   const { rows } = await db.query(`select * from admin_users where id = $1`, [payload.sub]);
   const row = rows[0];
   if (!row || !row.active) return null;
-  // FR-03-equivalent for admins: tokens issued before a revocation are dead (iat is in seconds).
-  if (row.sessions_revoked_at && payload.iat * 1000 < new Date(row.sessions_revoked_at).getTime()) return null;
+  // FR-03-equivalent for admins: tokens issued before a revocation are dead. Compare at SECOND
+  // granularity (iat is seconds, floored) rather than iat*1000 against a sub-second timestamp —
+  // the latter falsely kills a token minted in the SAME wall-clock second as the revocation
+  // (e.g. a fresh login right after someone else's password is reset via setPassword), because
+  // the revocation's own sub-second component almost always sorts after iat's floored-to-:00
+  // value even though the token was actually minted after the revoking write committed.
+  if (row.sessions_revoked_at && payload.iat < Math.floor(new Date(row.sessions_revoked_at).getTime() / 1000)) {
+    return null;
+  }
   return { id: row.id, email: row.email, role: row.role, practiceIds: normalizePracticeIds(row.practice_ids) };
 }
 
@@ -278,30 +289,52 @@ export async function setPassword({ id, password, actorId }) {
 }
 
 export async function setActive({ id, active, actorId }) {
+  // Postgres accepts more than one spelling of the same uuid (case, braces); a raw JS `===`
+  // against a differently-cased-but-identical id would miss that it's really you and let the
+  // self-guard be bypassed by uppercasing your own id in the URL. Normalize once, up front, and
+  // use the normalized form for every comparison/query/log below.
+  const normalizedId = String(id).toLowerCase();
+  const normalizedActorId = String(actorId).toLowerCase();
+
   // Unconditional on the requested value: a self-targeting call never makes sense either way
   // (you can't be the one flipping your own switch, whichever direction).
-  if (id === actorId) throw httpError('cannot_deactivate_self', 409);
+  if (normalizedId === normalizedActorId) throw httpError('cannot_deactivate_self', 409);
 
-  const { rows } = await db.query(`select id, role from admin_users where id = $1`, [id]);
-  const target = rows[0];
-  if (!target) throw httpError('not_found', 404);
+  const { rows } = await db.query(`select id from admin_users where id = $1`, [normalizedId]);
+  if (!rows[0]) throw httpError('not_found', 404);
 
-  if (active === false && target.role === 'admin') {
-    const { rows: remaining } = await db.query(
-      `select count(*)::int as n from admin_users where role = 'admin' and active and id <> $1`,
-      [id],
+  if (active) {
+    await db.query(`update admin_users set active = true where id = $1`, [normalizedId]);
+  } else {
+    // Atomic: the last-admin invariant (at least one OTHER active admin must remain) is folded
+    // into this single UPDATE's WHERE clause instead of being read (a separate SELECT COUNT)
+    // and then written as two statements — two admins deactivating each other at the exact same
+    // instant can't both succeed and leave zero active admins, because Postgres evaluates the
+    // EXISTS subquery against the row lock this statement itself takes, not a count read moments
+    // earlier that could already be stale by the time the write actually happens. A manager
+    // target never carries this constraint — `role <> 'admin'` short-circuits the exists check.
+    // `returning id` + checking `rows.length` rather than `rowCount`: PGlite's driver shim
+    // (db.js) derives rowCount from rows.length, which is only meaningful when the statement
+    // actually returns rows — a bare UPDATE with no RETURNING reads as 0 affected rows on PGlite
+    // regardless of how many rows really changed, which would make this ALWAYS look like the
+    // invariant blocked it. `returning id` makes the affected-row count accurate on both PGlite
+    // and node-postgres. Existence was already confirmed above, so an empty result here can only
+    // mean the invariant blocked it, not a missing row.
+    const { rows: updated } = await db.query(
+      `update admin_users
+       set active = false, sessions_revoked_at = now()
+       where id = $1
+         and (role <> 'admin' or exists (
+           select 1 from admin_users a where a.role = 'admin' and a.active and a.id <> $1
+         ))
+       returning id`,
+      [normalizedId],
     );
-    if (remaining[0].n === 0) throw httpError('last_admin', 409);
+    if (!updated[0]) throw httpError('last_admin', 409);
   }
 
-  await db.query(
-    active === false
-      ? `update admin_users set active = false, sessions_revoked_at = now() where id = $1`
-      : `update admin_users set active = true where id = $1`,
-    [id],
-  );
   await logEvent(db, {
-    actorId, entityType: 'admin_user', entityId: id,
+    actorId, entityType: 'admin_user', entityId: normalizedId,
     action: active ? 'activated' : 'deactivated',
   });
   return { ok: true };

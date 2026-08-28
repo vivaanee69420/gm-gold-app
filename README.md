@@ -67,7 +67,7 @@ curl -X POST localhost:4000/dev/dentally/complete-treatment \
 ## Tests
 
 ```bash
-npm test         # shared (15) + api (11, +1 skipped until DATABASE_URL points at real Postgres)
+npm test         # shared (20) + api (108, +2 skipped until DATABASE_URL points at real Postgres)
 ```
 
 ## Dashboard accounts
