@@ -87,6 +87,10 @@ const actionScope = (req) => {
 
 export function buildApp() {
   const app = express();
+  // One hop: Railway's edge. Without this, req.ip (used by the admin login rate limiter)
+  // is the same internal proxy address for every request, collapsing the per-IP bucket into
+  // one shared global one — 30 bad logins from anyone would 429 every admin for 15 minutes.
+  app.set('trust proxy', 1);
   app.use(cors());
 
   // Dentally webhook (FR-16d): a doorbell, not an ingestion path — the body is never

@@ -118,7 +118,7 @@ describe('login rate limit: per-IP + window expiry', () => {
   });
 
   it('failures older than the 15-minute window are pruned and stop counting', async () => {
-    const { authenticate, __setClockForTests } = await import('../src/services/adminService.js');
+    const { authenticate, __setClockForTests, __resetLimitersForTests } = await import('../src/services/adminService.js');
     let now = Date.now();
     __setClockForTests(() => now);
     try {
@@ -133,7 +133,42 @@ describe('login rate limit: per-IP + window expiry', () => {
       await expect(authenticate(email, 'wrong')).rejects.toMatchObject({ status: 401 }); // pruned, not 429
     } finally {
       __setClockForTests(); // back to the real clock for every other test in this file
+      // A future-dated entry (this test's failures were recorded under the advanced fake
+      // clock) reads as "not yet expired" once the real clock resumes, since its
+      // firstFailureAt is ahead of real Date.now() — clear it explicitly rather than let it
+      // linger until real wall-clock time actually catches up.
+      __resetLimitersForTests();
     }
+  });
+});
+
+describe('per-IP rate limit uses the forwarded client IP (trust proxy)', () => {
+  // app.js sets `trust proxy: 1` (one hop — Railway's edge), so req.ip reads the client IP
+  // out of X-Forwarded-For instead of collapsing every request behind the proxy into one
+  // shared bucket. Two different forwarded IPs must get two independent 30/15min buckets.
+  it('30 failed logins behind one X-Forwarded-For -> the 31st is 429; a different forwarded IP is unaffected', async () => {
+    const floodedIp = '203.0.113.9';
+    for (let i = 0; i < 30; i += 1) {
+      const res = await request(app)
+        .post('/auth/admin/login')
+        .set('X-Forwarded-For', floodedIp)
+        .send({ email: `xff-flood-${i}@gmdental.co.uk`, password: 'wrong' });
+      expect(res.status).toBe(401);
+    }
+    const capped = await request(app)
+      .post('/auth/admin/login')
+      .set('X-Forwarded-For', floodedIp)
+      .send({ email: 'xff-flood-overflow@gmdental.co.uk', password: 'wrong' });
+    expect(capped.status).toBe(429);
+    expect(capped.body.error).toBe('rate_limited');
+
+    const otherIp = '203.0.113.10';
+    const unaffected = await request(app)
+      .post('/auth/admin/login')
+      .set('X-Forwarded-For', otherIp)
+      .send({ email: 'xff-flood-other-ip@gmdental.co.uk', password: 'wrong' }); // fresh email: isolates the IP bucket, not the email one
+    expect(unaffected.status).toBe(401);
+    expect(unaffected.body.error).toBe('invalid_credentials');
   });
 });
 
@@ -235,7 +270,7 @@ describe('config boot guard', () => {
     const result = spawnSync(
       process.execPath,
       ['-e', `process.env.NODE_ENV='production'; delete process.env.API_JWT_SECRET; ${importConfig}`],
-      { cwd: apiRoot },
+      { cwd: apiRoot, timeout: 10000 },
     );
     expect(result.status).toBe(2);
   });
@@ -244,7 +279,7 @@ describe('config boot guard', () => {
     const result = spawnSync(
       process.execPath,
       ['-e', `process.env.NODE_ENV='production'; ${importConfig}`],
-      { cwd: apiRoot, env: { ...process.env, API_JWT_SECRET: 'a-real-production-secret' } },
+      { cwd: apiRoot, env: { ...process.env, API_JWT_SECRET: 'a-real-production-secret' }, timeout: 10000 },
     );
     expect(result.status).toBe(0);
   });
@@ -253,7 +288,7 @@ describe('config boot guard', () => {
     const result = spawnSync(
       process.execPath,
       ['-e', `delete process.env.API_JWT_SECRET; ${importConfig}`],
-      { cwd: apiRoot, env: { ...process.env, NODE_ENV: 'test' } },
+      { cwd: apiRoot, env: { ...process.env, NODE_ENV: 'test' }, timeout: 10000 },
     );
     expect(result.status).toBe(0);
   });

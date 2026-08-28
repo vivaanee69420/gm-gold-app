@@ -111,11 +111,23 @@ function makeLimiter(max) {
     clear(key) {
       byKey.delete(key);
     },
+    reset() {
+      byKey.clear();
+    },
   };
 }
 
 const emailLimiter = makeLimiter(MAX_EMAIL_FAILURES);
 const ipLimiter = makeLimiter(MAX_IP_FAILURES);
+
+// Test-only: wipe both limiters' state. Needed alongside __setClockForTests whenever a test
+// advances the clock into a simulated future — an entry recorded under that fake "now" reads
+// as not-yet-expired once the real clock resumes (its firstFailureAt is ahead of real time),
+// so it would otherwise linger until real wall-clock time actually caught up to it.
+export function __resetLimitersForTests() {
+  emailLimiter.reset();
+  ipLimiter.reset();
+}
 
 // ---- create ----
 export async function createAdmin({ email, password, role, practiceIds = [], createdBy = null }) {
