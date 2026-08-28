@@ -156,6 +156,7 @@ step**, because `PATCH /admin/referrals/:id/status` always passes `privilegedCom
 Design first (30 min), then build. Two distinct audiences:
 
 ### 4a. Admin dashboard — email OTP / magic link
+- [x] **SUPERSEDED 2026-08-29:** dashboard uses **email + password** (decision 2026-08-29): `admin_users` is its own identity table (migration 0011), roles `admin` | `manager`, admins create/deactivate/re-scope accounts and set passwords from the Team card, everyone changes their own password; scrypt, per-email+IP + per-IP login limits, 12h admin JWT, boot guard for `API_JWT_SECRET`. No email sending needed for dashboard auth. First admin: `railway run --service api node apps/api/scripts/create-admin.js <email> <password>`.
 - [ ] `admin_users` becomes email-keyed: `id uuid pk, email unique, role, practice_ids, active,
       last_login_at` (drop `user_id → users` FK; admins are not patients). Migration `0010`.
 - [ ] `POST /auth/admin/otp/send {email}` → only if an active `admin_users` row exists (generic 200
@@ -274,6 +275,7 @@ Phone is the Dentally matching key, so phone must still be captured; the questio
 
 ## 7. Security hardening (beyond §1)
 
+- [ ] **Revocation compare fail-closed** (from 2026-08-29 review): `tokenRevoked` uses `iatMs < revokedMs`; make it `<=` and have the two re-issue paths (`setPassword` on self, `changeOwnPassword`) mint `iatMs = revokedAtMs + 1`; or write `sessions_revoked_at = greatest(now(), to_timestamp($js_now/1000.0))` and use `clock_timestamp()` inside `setActive`'s transaction. Also: 5xx masking hides the two actionable Dentally 502 codes (`dentally_token_*`) — special-case them; TeamCard practice select when the manager's current practice is inactive; `requireAdmin`'s bare catch turns DB errors into 401 (log them). Test infra: cap `poolOptions.forks.maxForks` in `apps/api/vitest.config.js` if CI flakes under parallel PGlite + scrypt.
 - [ ] Param validation on every `:id` route (uuid) — today a bad id becomes a Postgres 22P02 → 500 + leaked message.
 - [ ] `helmet()` on the API; Caddy security headers + CSP on the admin (`apps/admin/Caddyfile`).
 - [ ] Structured logging (pino) with request ids; **no PII in logs** (`[otp] phone → code`,
@@ -346,7 +348,7 @@ front-desk trust**, not throughput. Concrete changes vs. today:
 ## 10. Questions that need answers (blocking or shaping the work above)
 
 Answer inline (edit this file) — "default" means accept the suggested default. Items marked ⛔ block a task.
-**2026-08-28: Q1–Q5, Q7, Q9, Q10, Q12, Q14, Q15, Q16, Q21 answered by Ruhith (Answer column). Still open: Q6, Q8, Q11, Q13, Q17–Q20 (defaults stand unless changed), all of 10b–10d.**
+**2026-08-29: Q3 superseded — admin login is email + password (no OTP), admins create managers.** 2026-08-28: Q1–Q5, Q7, Q9, Q10, Q12, Q14, Q15, Q16, Q21 answered by Ruhith (Answer column). Still open: Q6, Q8, Q11, Q13, Q17–Q20 (defaults stand unless changed), all of 10b–10d.**
 
 ### 10a. Ruhith — product / technical decisions
 
