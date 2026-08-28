@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import jwt from 'jsonwebtoken';
 import { adminCreateSchema, adminPasswordSchema } from '@gm-referral/shared/schemas';
-import { db, logEvent } from '../db.js';
+import { db, logEvent, withTransaction } from '../db.js';
 import { config } from '../config.js';
 
 const httpError = (message, status) => Object.assign(new Error(message), { status });
@@ -273,18 +273,23 @@ export async function listAdmins() {
 }
 
 export async function setPassword({ id, password, actorId }) {
+  // Same normalization as setActive below, for the same reason (Postgres accepts more than one
+  // spelling of the same uuid) and for audit-log consistency — the events row should record the
+  // same canonical id regardless of how the caller cased the URL param.
+  const normalizedId = String(id).toLowerCase();
+
   const parsed = adminPasswordSchema.safeParse(password);
   if (!parsed.success) throw httpError('weak_password', 422);
 
-  const { rows } = await db.query(`select id from admin_users where id = $1`, [id]);
+  const { rows } = await db.query(`select id from admin_users where id = $1`, [normalizedId]);
   if (!rows[0]) throw httpError('not_found', 404);
 
   const passwordHash = await hashPassword(parsed.data);
   await db.query(
     `update admin_users set password_hash = $1, sessions_revoked_at = now() where id = $2`,
-    [passwordHash, id],
+    [passwordHash, normalizedId],
   );
-  await logEvent(db, { actorId, entityType: 'admin_user', entityId: id, action: 'password_set' });
+  await logEvent(db, { actorId, entityType: 'admin_user', entityId: normalizedId, action: 'password_set' });
   return { ok: true };
 }
 
@@ -300,38 +305,48 @@ export async function setActive({ id, active, actorId }) {
   // (you can't be the one flipping your own switch, whichever direction).
   if (normalizedId === normalizedActorId) throw httpError('cannot_deactivate_self', 409);
 
-  const { rows } = await db.query(`select id from admin_users where id = $1`, [normalizedId]);
-  if (!rows[0]) throw httpError('not_found', 404);
+  // Real atomicity, not just a same-statement EXISTS: under READ COMMITTED, an EXISTS subquery
+  // reads its own snapshot at the moment IT runs — two admins deactivating EACH OTHER from two
+  // separate connections can each see "yes, the other one is still active" and both pass, then
+  // both write, leaving zero active admins. A single UPDATE...EXISTS is not a lock; it only helps
+  // against a second statement on the SAME connection. The fix is a session-scoped Postgres
+  // advisory lock (pg_advisory_xact_lock, auto-released at COMMIT/ROLLBACK) taken FIRST, inside
+  // one transaction, on one client: every setActive call serializes behind this one lock, so by
+  // the time a transaction's own existence-check and update run, no other setActive transaction
+  // can be concurrently mutating admin_users — the EXISTS is then evaluating a true, temporarily-
+  // exclusive view of the table, not a race-prone snapshot. (PGlite is single-connection, so this
+  // can't be exercised as a true cross-connection race in this test suite the way it would
+  // against pooled Postgres — the concurrent-dispatch probe used to validate this only proves the
+  // SQL-level guard fires correctly under concurrent JS scheduling, not genuine MVCC contention.)
+  await withTransaction(async (client) => {
+    await client.query(`select pg_advisory_xact_lock(hashtext('admin_users'))`);
 
-  if (active) {
-    await db.query(`update admin_users set active = true where id = $1`, [normalizedId]);
-  } else {
-    // Atomic: the last-admin invariant (at least one OTHER active admin must remain) is folded
-    // into this single UPDATE's WHERE clause instead of being read (a separate SELECT COUNT)
-    // and then written as two statements — two admins deactivating each other at the exact same
-    // instant can't both succeed and leave zero active admins, because Postgres evaluates the
-    // EXISTS subquery against the row lock this statement itself takes, not a count read moments
-    // earlier that could already be stale by the time the write actually happens. A manager
-    // target never carries this constraint — `role <> 'admin'` short-circuits the exists check.
-    // `returning id` + checking `rows.length` rather than `rowCount`: PGlite's driver shim
-    // (db.js) derives rowCount from rows.length, which is only meaningful when the statement
-    // actually returns rows — a bare UPDATE with no RETURNING reads as 0 affected rows on PGlite
-    // regardless of how many rows really changed, which would make this ALWAYS look like the
-    // invariant blocked it. `returning id` makes the affected-row count accurate on both PGlite
-    // and node-postgres. Existence was already confirmed above, so an empty result here can only
-    // mean the invariant blocked it, not a missing row.
-    const { rows: updated } = await db.query(
-      `update admin_users
-       set active = false, sessions_revoked_at = now()
-       where id = $1
-         and (role <> 'admin' or exists (
-           select 1 from admin_users a where a.role = 'admin' and a.active and a.id <> $1
-         ))
-       returning id`,
-      [normalizedId],
-    );
-    if (!updated[0]) throw httpError('last_admin', 409);
-  }
+    const { rows } = await client.query(`select id from admin_users where id = $1`, [normalizedId]);
+    if (!rows[0]) throw httpError('not_found', 404);
+
+    if (active) {
+      await client.query(`update admin_users set active = true where id = $1`, [normalizedId]);
+    } else {
+      // `returning id` + checking rows.length rather than a driver's `rowCount`: PGlite's driver
+      // shim (db.js) derives rowCount from rows.length, which is only meaningful when the
+      // statement actually returns rows — a bare UPDATE with no RETURNING reads as 0 affected
+      // rows on PGlite regardless of how many rows really changed. `returning id` makes the
+      // affected-row count accurate on both PGlite and node-postgres. Existence was already
+      // confirmed above (same transaction, same lock held), so an empty result here can only mean
+      // the last-admin invariant blocked it, not a missing row.
+      const { rows: updated } = await client.query(
+        `update admin_users
+         set active = false, sessions_revoked_at = now()
+         where id = $1
+           and (role <> 'admin' or exists (
+             select 1 from admin_users a where a.role = 'admin' and a.active and a.id <> $1
+           ))
+         returning id`,
+        [normalizedId],
+      );
+      if (!updated[0]) throw httpError('last_admin', 409);
+    }
+  });
 
   await logEvent(db, {
     actorId, entityType: 'admin_user', entityId: normalizedId,

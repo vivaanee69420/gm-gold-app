@@ -326,3 +326,22 @@ describe('credits behind an open payout exclude anything already paid out', () =
     expect(openRow.credits[0].friend).toMatch(/^Friend/);
   });
 });
+
+// Review round 2, item 5: requireUuidParam('id') is now applied to every route that forwards
+// :id into a raw uuid-column query. Two representative routes here — a patient-facing DELETE
+// and an admin-facing POST — cover both requireUser- and requireAdmin-gated call sites; the
+// other newly-guarded admin routes share the exact same middleware, not separate logic.
+describe('malformed :id -> 422 validation, never a raw Postgres error', () => {
+  it('POST /admin/payouts/not-a-uuid/mark-paid and DELETE /payouts/not-a-uuid both 422, with no DB text leaked', async () => {
+    const markPaid = await request(app).post('/admin/payouts/not-a-uuid/mark-paid').set(auth(t.admin)).send({ amountPennies: 100 });
+    expect(markPaid.status).toBe(422);
+    expect(markPaid.body.error).toBe('validation');
+    expect(JSON.stringify(markPaid.body)).not.toMatch(/invalid input syntax|22P02/i);
+
+    const patient = await signIn('07700 900950');
+    const del = await request(app).delete('/payouts/not-a-uuid').set(auth(patient.token));
+    expect(del.status).toBe(422);
+    expect(del.body.error).toBe('validation');
+    expect(JSON.stringify(del.body)).not.toMatch(/invalid input syntax|22P02/i);
+  });
+});

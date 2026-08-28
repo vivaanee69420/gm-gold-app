@@ -371,8 +371,9 @@ describe('POST /admin/me/password (both roles)', () => {
   });
 });
 
-// Kept as the LAST describe block: it forces every other 'admin'-role row inactive to isolate
-// the scenario, which would otherwise pollute state for tests declared after it.
+// No longer required to be last: it forces every other 'admin'-role row inactive to isolate the
+// scenario, but restores them in a `finally` (see below), so a test appended after this block
+// starts from an unaffected admin_users table.
 describe('last_admin protection', () => {
   it('deactivating the sole remaining active admin -> 409 last_admin', async () => {
     // Unreachable over HTTP with a well-formed request: the caller must itself be a live,
@@ -382,12 +383,28 @@ describe('last_admin protection', () => {
     // forcing every OTHER admin row inactive so the target really is the last one standing.
     const { setActive } = await import('../src/services/adminService.js');
     const { admin: lonely } = await adminSession(app, { email: 'lonely-admin@gmdental.co.uk' });
-    await db.query(`update admin_users set active=false where role='admin' and id <> $1`, [lonely.id]);
 
-    await expect(setActive({ id: lonely.id, active: false, actorId: crypto.randomUUID() }))
-      .rejects.toMatchObject({ message: 'last_admin', status: 409 });
+    // Remember exactly who this test is about to deactivate, so it can restore them afterward —
+    // this test used to be required to stay LAST in the file because it otherwise left every
+    // other admin permanently inactive. Restoring in `finally` (runs even if an assertion above
+    // throws) means a test can safely be appended after this one.
+    const { rows: othersToRestore } = await db.query(
+      `select id from admin_users where role='admin' and active and id <> $1`,
+      [lonely.id],
+    );
 
-    const check = await db.query(`select active from admin_users where id=$1`, [lonely.id]);
-    expect(check.rows[0].active).toBe(true); // refused: still active
+    try {
+      await db.query(`update admin_users set active=false where role='admin' and id <> $1`, [lonely.id]);
+
+      await expect(setActive({ id: lonely.id, active: false, actorId: crypto.randomUUID() }))
+        .rejects.toMatchObject({ message: 'last_admin', status: 409 });
+
+      const check = await db.query(`select active from admin_users where id=$1`, [lonely.id]);
+      expect(check.rows[0].active).toBe(true); // refused: still active
+    } finally {
+      await Promise.all(
+        othersToRestore.map((r) => db.query(`update admin_users set active=true where id=$1`, [r.id])),
+      );
+    }
   });
 });

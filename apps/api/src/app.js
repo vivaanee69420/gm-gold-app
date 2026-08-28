@@ -61,11 +61,14 @@ import {
 import { requireUser, requireAdmin } from './middleware/auth.js';
 import { config, isDev } from './config.js';
 
+// Shared 422 envelope for every zod rejection in this file — {error, details: [message, ...]}
+// — so a body-shape failure (validate) and a route-param-shape failure (requireUuidParam) come
+// back looking identical to a caller, not two different ad hoc shapes.
+const validationError = (zodError) => ({ error: 'validation', details: zodError.issues.map((i) => i.message) });
+
 const validate = (schema) => (req, res, next) => {
   const parsed = schema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(422).json({ error: 'validation', details: parsed.error.issues.map((i) => i.message) });
-  }
+  if (!parsed.success) return res.status(422).json(validationError(parsed.error));
   req.data = parsed.data;
   return next();
 };
@@ -76,11 +79,10 @@ const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).catch(nex
 // Postgres 22P02 (invalid input syntax for type uuid) — an uncaught error with no .status, so the
 // global error boundary would 500 it verbatim, leaking raw DB text. Reject the shape at the route
 // instead, before it ever reaches a query; a well-formed-but-unknown id still 404s downstream.
-const uuidParamSchema = z.string().uuid();
+const uuidParamSchema = z.string().uuid({ message: 'must be a uuid' });
 const requireUuidParam = (name) => (req, res, next) => {
-  if (!uuidParamSchema.safeParse(req.params[name]).success) {
-    return res.status(422).json({ error: 'validation' });
-  }
+  const parsed = uuidParamSchema.safeParse(req.params[name]);
+  if (!parsed.success) return res.status(422).json(validationError(parsed.error));
   return next();
 };
 
@@ -216,7 +218,7 @@ export function buildApp() {
     res.json({ ok: true, payout: { id: payout.id, amountPennies: payout.amount_pennies, practiceName: rows[0]?.name, status: payout.status } });
   }));
 
-  app.delete('/payouts/:id', requireUser, wrap(async (req, res) => {
+  app.delete('/payouts/:id', requireUser, requireUuidParam('id'), wrap(async (req, res) => {
     res.json(await cancelPayout(req.params.id, req.user.id));
   }));
 
@@ -313,7 +315,7 @@ export function buildApp() {
     res.json({ referrals: rows });
   }));
 
-  app.patch('/admin/referrals/:id/status', requireAdmin, validate(statusUpdateSchema), wrap(async (req, res) => {
+  app.patch('/admin/referrals/:id/status', requireAdmin, requireUuidParam('id'), validate(statusUpdateSchema), wrap(async (req, res) => {
     const out = await updateStatus({
       referralId: req.params.id,
       status: req.data.status,
@@ -384,7 +386,7 @@ export function buildApp() {
 
   // Mark-paid requires the manager/admin to type the amount they physically handed over —
   // it must match the request exactly, not just be trusted from the row (FR-24).
-  app.post('/admin/payouts/:id/mark-paid', requireAdmin, wrap(async (req, res) => {
+  app.post('/admin/payouts/:id/mark-paid', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
     const amountPennies = req.body?.amountPennies;
     if (!Number.isInteger(amountPennies) || amountPennies <= 0) {
       return res.status(422).json({ error: 'amount_required' });
@@ -393,7 +395,7 @@ export function buildApp() {
   }));
 
   // FR-21: admin cancel needs a reason; the member keeps their balance and is notified.
-  app.post('/admin/payouts/:id/cancel', requireAdmin, wrap(async (req, res) => {
+  app.post('/admin/payouts/:id/cancel', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
     const reason = String(req.body?.reason ?? '').trim();
     if (!reason) return res.status(422).json({ error: 'reason_required' });
     res.json(await cancelPayout(req.params.id, req.admin.id, { byAdmin: true, reason, practiceIds: actionScope(req) }));
@@ -451,11 +453,11 @@ export function buildApp() {
     res.json({ proposals: await openProposals() });
   }));
 
-  app.post('/admin/proposals/:id/confirm', requireAdmin, wrap(async (req, res) => {
+  app.post('/admin/proposals/:id/confirm', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
     res.json(await confirmProposal(req.params.id, req.admin.id));
   }));
 
-  app.post('/admin/proposals/:id/reject', requireAdmin, wrap(async (req, res) => {
+  app.post('/admin/proposals/:id/reject', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
     res.json(await rejectProposal(req.params.id, req.admin.id, req.body?.reason));
   }));
 
@@ -463,11 +465,11 @@ export function buildApp() {
     res.json({ verifications: await pendingVerifications() });
   }));
 
-  app.post('/admin/verifications/:id/approve', requireAdmin, wrap(async (req, res) => {
+  app.post('/admin/verifications/:id/approve', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
     res.json(await decideVerification(req.params.id, req.admin.id, { approve: true, dentallyPatientId: req.body?.dentallyPatientId }));
   }));
 
-  app.post('/admin/verifications/:id/reject', requireAdmin, wrap(async (req, res) => {
+  app.post('/admin/verifications/:id/reject', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
     res.json(await decideVerification(req.params.id, req.admin.id, { approve: false }));
   }));
 
@@ -497,7 +499,7 @@ export function buildApp() {
     res.json({ reviews: rows });
   }));
 
-  app.post('/admin/referral-review/:id/decide', requireAdmin, wrap(async (req, res) => {
+  app.post('/admin/referral-review/:id/decide', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
     const decision = req.body?.decision;
     if (!['clear', 'existing_patient'].includes(decision)) return res.status(422).json({ error: 'validation' });
     const { rows } = await db.query(
@@ -570,7 +572,7 @@ export function buildApp() {
   }));
 
   // FR-03: "sign out everywhere" for a compromised or offboarded patient account.
-  app.post('/admin/users/:id/revoke-sessions', requireAdmin, wrap(async (req, res) => {
+  app.post('/admin/users/:id/revoke-sessions', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
     const { rows } = await db.query(
       `update users set sessions_revoked_at=now() where id=$1 returning id`,
       [req.params.id],
