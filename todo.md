@@ -7,11 +7,31 @@ Legend: **P0** = do before anyone real uses the deployed API · **P1** = this we
 
 ---
 
+## ⚠️ NEXT ACTION (2026-08-29) — bootstrap the first dashboard admin
+
+Deployed to Railway on 2026-08-29 (`main` @ 77a4e49): dashboard login is now **email + password**. Migration
+0011 deactivated every legacy `admin_users` row (there were none on Supabase), so **nobody can sign in to the
+dashboard until the first admin is created**:
+
+```
+cd gm-referral
+railway run --service api node apps/api/scripts/create-admin.js <admin-email> '<temporary-password ≥10 chars>'
+```
+(`railway run` injects DATABASE_URL + API_JWT_SECRET — both are required by the script.) Then sign in at
+https://admin-production-ae73.up.railway.app, change the password via the header "Change password", and create the
+4 practice managers from **Reports & Setup → Team** (role manager, one practice each, share the temp password by hand).
+
+- [ ] Ruhith: provide the admin email (Q13) → run the command above.
+- [ ] Create the 4 managers (Ashford, Barnet, Bexleyheath, Rochester) in the Team card.
+- [ ] Smoke test: admin sees Team card; manager sees payouts only, 403 on `/admin/team`; manager change-password keeps session; admin password reset kills the manager's old token.
+
+---
+
 ## 0. What is already built (and where)
 
 | Area | Status | Where |
 |---|---|---|
-| Phone + OTP login (dev delivery only: code printed to console + returned as `devHint`) | ✅ policy, ❌ delivery | `apps/api/src/services/otpService.js`, `app.js:100-108` |
+| Phone + OTP login — **patient app only** (dev delivery: code printed + returned as `devHint`) | ✅ policy, ❌ delivery | `apps/api/src/services/otpService.js`, `app.js:100-108` |
 | Profile + role picker + referral code generation | ✅ | `services/userService.js` |
 | Referrer verification vs Dentally patient index (auto + admin queue) | ✅ | `services/dentally/syncService.js:299-317`, `proposalService.js:123-156`, admin `VerificationQueue.jsx` |
 | Referral submit: self-referral block, first-code-wins, consent version | ✅ | `services/referralService.js:10-61` |
@@ -21,7 +41,7 @@ Legend: **P0** = do before anyone real uses the deployed API · **P1** = this we
 | Wallet ledger + per-user advisory lock + one-credit-per-referral index | ✅ | `services/walletService.js`, `db.js:67-80`, migration `0001` |
 | Payout request / mark-paid / cancel | ⚠️ race bug (see §5) | `walletService.js:119-184` |
 | Admin: liability stat, pipeline board, referral record (searchable), payout queue, verification queue, existing-patient review, aging report, funnel + tripwire, top referrers, reward levers, Dentally card | ✅ | `apps/admin/src/components/*` |
-| Admin roles + practice scoping (`admin_users`) | ⚠️ inconsistent (see §3) | `middleware/auth.js`, `app.js:63-64` |
+| Admin accounts: email + password, roles `admin`/`manager`, Team management (create/reset/deactivate/re-scope), manager payouts-only screen | ✅ 2026-08-29 | `services/adminService.js`, `middleware/auth.js`, admin `TeamCard.jsx`, `ManagerPage.jsx` |
 | Session revocation endpoint | ✅ API, ❌ no UI | `app.js:412-420` |
 | Notification outbox (written in-tx) | ✅ rows, ❌ sender is `console.log` | `server.js:17-30` |
 | Daily digest | ✅ (to outbox → console) | `services/digestService.js` |
