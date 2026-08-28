@@ -32,7 +32,7 @@ describe('ChangePassword', () => {
     expect(onDone).toHaveBeenCalled();
   });
 
-  it('notifies wrong_password on a 401 and does not store a new token', async () => {
+  it('notifies wrong_password on a 401, keeps the session, and leaves the form up', async () => {
     stubFetchRoutes([
       { method: 'POST', path: '/admin/me/password', body: { error: 'wrong_password' }, status: 401 },
     ]);
@@ -45,10 +45,12 @@ describe('ChangePassword', () => {
     await userEvent.click(screen.getByRole('button', { name: /save password/i }));
 
     await vi.waitFor(() => expect(notify).toHaveBeenCalledWith('wrong_password'));
-    // A 401 (any 401) clears the stored token via the shared api client — it does not
-    // leave the stale token or the (never-issued) new one behind.
-    expect(getToken()).toBe(null);
+    // wrong_password is not a session-loss 401 — the client only treats
+    // error: 'unauthorized' that way — so the existing token is untouched
+    // and the form stays mounted for another attempt.
+    expect(getToken()).toBe('old-tok');
     expect(onDone).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /save password/i })).toBeInTheDocument();
   });
 
   it('notifies weak_password on a 422', async () => {

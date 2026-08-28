@@ -36,7 +36,7 @@ describe('api client', () => {
     });
   });
 
-  it('clears the token and notifies on 401', async () => {
+  it('clears the token and notifies on a session-loss 401 (error: unauthorized)', async () => {
     setToken('stale');
     const handler = vi.fn();
     onUnauthorized(handler);
@@ -45,6 +45,20 @@ describe('api client', () => {
     await expect(api('/admin/payouts')).rejects.toMatchObject({ status: 401 });
     expect(getToken()).toBe(null);
     expect(handler).toHaveBeenCalled();
+  });
+
+  it('keeps the session on a non-session 401 (e.g. wrong_password) — just throws', async () => {
+    setToken('still-good');
+    const handler = vi.fn();
+    onUnauthorized(handler);
+    fetch.mockResolvedValueOnce(jsonResponse({ error: 'wrong_password' }, 401));
+
+    await expect(api('/admin/me/password', { method: 'POST', body: {} })).rejects.toMatchObject({
+      status: 401,
+      code: 'wrong_password',
+    });
+    expect(getToken()).toBe('still-good');
+    expect(handler).not.toHaveBeenCalled();
   });
 });
 
