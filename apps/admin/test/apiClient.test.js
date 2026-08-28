@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, setToken, getToken, clearToken, onUnauthorized } from '../src/api/client.js';
-import { sendOtp, verifyOtp, signOut, isSignedIn } from '../src/api/auth.js';
+import { signIn, signOut, isSignedIn } from '../src/api/auth.js';
 
 const jsonResponse = (body, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -49,28 +49,25 @@ describe('api client', () => {
 });
 
 describe('auth', () => {
-  it('verifyOtp stores the token so later calls carry it', async () => {
-    fetch.mockResolvedValueOnce(jsonResponse({ token: 'fresh-tok', user: { firstName: 'Sam' } }));
+  it('signIn posts email + password, stores the token, and returns the admin', async () => {
+    fetch.mockResolvedValueOnce(
+      jsonResponse({
+        token: 'fresh-tok',
+        admin: { id: 'a1', email: 'sam@gmdental.co.uk', role: 'admin', practices: [] },
+      }),
+    );
 
-    const user = await verifyOtp('07700 900123', '123456');
+    const admin = await signIn('sam@gmdental.co.uk', 'correcthorsebattery');
 
-    expect(user.firstName).toBe('Sam');
+    expect(admin).toEqual({ id: 'a1', email: 'sam@gmdental.co.uk', role: 'admin', practices: [] });
     expect(isSignedIn()).toBe(true);
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe('http://localhost:4000/auth/admin/login');
+    expect(JSON.parse(init.body)).toEqual({ email: 'sam@gmdental.co.uk', password: 'correcthorsebattery' });
 
     fetch.mockResolvedValueOnce(jsonResponse({ settings: {} }));
     await api('/admin/settings');
     expect(fetch.mock.calls[1][1].headers.Authorization).toBe('Bearer fresh-tok');
-  });
-
-  it('sendOtp posts the phone and returns the dev hint', async () => {
-    fetch.mockResolvedValueOnce(jsonResponse({ ok: true, devHint: 'code is 111222' }));
-
-    const out = await sendOtp('07700 900123');
-
-    expect(out.devHint).toBe('code is 111222');
-    const [url, init] = fetch.mock.calls[0];
-    expect(url).toBe('http://localhost:4000/auth/otp/send');
-    expect(JSON.parse(init.body)).toEqual({ phone: '07700 900123' });
   });
 
   it('signOut clears the stored token', async () => {

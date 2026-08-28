@@ -1,11 +1,10 @@
 import { api, setToken, getToken, clearToken } from './client.js';
 
-export const sendOtp = (phone) => api('/auth/otp/send', { method: 'POST', body: { phone } });
-
-export async function verifyOtp(phone, code) {
-  const { token, user } = await api('/auth/otp/verify', { method: 'POST', body: { phone, code } });
+// Dashboard accounts are email + password (admin_users, not the patient/OTP identity).
+export async function signIn(email, password) {
+  const { token, admin } = await api('/auth/admin/login', { method: 'POST', body: { email, password } });
   setToken(token);
-  return user;
+  return admin;
 }
 
 export const signOut = () => clearToken();

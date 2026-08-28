@@ -20,6 +20,14 @@ const ERRORS = {
   unauthorized: 'Your session ended — sign in again.',
   validation: "Some of those values didn't validate — check and try again.",
   load_failed: "Couldn't reach the API — is it running?",
+  invalid_credentials: 'Email or password is wrong.',
+  rate_limited: 'Too many attempts — wait 15 minutes and try again.',
+  email_taken: 'An account with that email already exists.',
+  weak_password: 'Passwords need at least 10 characters.',
+  practice_required: 'A manager needs exactly one practice.',
+  cannot_deactivate_self: "You can't deactivate your own account.",
+  last_admin: 'There must be at least one active admin.',
+  wrong_password: 'Your current password is wrong.',
 };
 
 export const errorMessage = (code) => ERRORS[code] ?? code;

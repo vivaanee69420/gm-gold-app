@@ -466,6 +466,14 @@ button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: de
 .chip-status-treatment_completed { color: var(--success); border-color: rgba(79, 125, 67, 0.4); }
 .chip-status-lost { color: var(--danger); border-color: rgba(176, 80, 56, 0.35); }
 
+/* ---- team: reuses .record-table, just condenses the per-row set-password
+   controls so a label+input+two buttons fits on one line inside a table cell ---- */
+.team-card .record-table td:last-child { white-space: nowrap; }
+.team-card .record-table td:last-child label { display: inline-block; margin: 0 8px 0 0; }
+.team-card .record-table td:last-child input { display: inline-block; width: 140px; margin-right: 8px; }
+.team-card .record-table td:last-child button { margin-right: 6px; }
+.team-add-form { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--hairline-soft); }
+
 /* ---- payouts settled drawer ---- */
 
 .payouts details { margin-top: 12px; }
@@ -478,6 +486,13 @@ button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: de
 
 .payouts .credits-list { margin: 4px 0 0; padding: 0; font-size: 12px; color: var(--mist); }
 .payouts .credits-list li { padding: 1px 0; border: none; }
+
+/* ---- inline panel: change password, dropped directly under either shell's header ---- */
+
+.inline-panel {
+  max-width: 420px;
+  margin: 20px 32px 0;
+}
 
 /* ---- toast ---- */
 
@@ -568,6 +583,7 @@ button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: de
   .topbar { padding: 12px 18px 10px; flex-wrap: wrap; row-gap: 8px; }
   .topnav a { padding: 4px 10px; }
   main { padding: 22px 18px 56px; gap: 30px; }
+  .inline-panel { margin: 16px 18px 0; max-width: none; }
   .stat-value { font-size: 36px; }
   .stat-counts { justify-content: flex-start; }
   .overview { align-items: flex-start; flex-direction: column; gap: 14px; }
