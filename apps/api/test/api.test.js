@@ -4,6 +4,7 @@
 // points at Supabase; see test at bottom.
 import { beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
+import { adminSession } from './helpers/admin.js';
 
 process.env.PGLITE_MEMORY = '1';
 
@@ -26,6 +27,7 @@ beforeAll(async () => {
   await initDb();
   const { buildApp } = await import('../src/app.js');
   app = buildApp();
+  agents.admin = (await adminSession(app)).token;
 });
 
 describe('auth', () => {
@@ -123,7 +125,7 @@ describe('pipeline and money', () => {
   it('rejects a non-adjacent jump', async () => {
     const res = await request(app)
       .patch(`/admin/referrals/${agents.referralId}/status`)
-      .set(auth(agents.referrer))
+      .set(auth(agents.admin))
       .send({ status: 'attended' });
     expect(res.status).toBe(409);
   });
@@ -132,13 +134,13 @@ describe('pipeline and money', () => {
     for (const status of ['contacted', 'booked', 'attended', 'treatment_agreed']) {
       const res = await request(app)
         .patch(`/admin/referrals/${agents.referralId}/status`)
-        .set(auth(agents.referrer))
+        .set(auth(agents.admin))
         .send({ status });
       expect(res.status).toBe(200);
     }
     const done = await request(app)
       .patch(`/admin/referrals/${agents.referralId}/status`)
-      .set(auth(agents.referrer))
+      .set(auth(agents.admin))
       .send({ status: 'treatment_completed' });
     expect(done.status).toBe(200);
     expect(done.body.credit.amount_pennies).toBe(2000);
@@ -148,7 +150,7 @@ describe('pipeline and money', () => {
 
     const again = await request(app)
       .patch(`/admin/referrals/${agents.referralId}/status`)
-      .set(auth(agents.referrer))
+      .set(auth(agents.admin))
       .send({ status: 'treatment_completed' });
     expect(again.status).toBe(409); // terminal status: no double-credit path
   });
@@ -159,7 +161,7 @@ describe('pipeline and money', () => {
     expect(below.body.error).toBe('below_threshold');
 
     // Raise the reward to £80 and complete a second referral -> balance £100 = threshold.
-    await request(app).put('/admin/reward-amount').set(auth(agents.referrer)).send({ amountPennies: 8000 });
+    await request(app).put('/admin/reward-amount').set(auth(agents.admin)).send({ amountPennies: 8000 });
     const { token } = await signIn('07700 900789');
     await request(app).post('/me/profile').set(auth(token)).send({ firstName: 'Tom', lastName: 'Hall', notifyOptIn: false });
     await request(app).post('/me/role').set(auth(token)).send({ role: 'referred' });
@@ -174,7 +176,7 @@ describe('pipeline and money', () => {
     const id2 = sub.body.referral.id;
     const done = await request(app)
       .patch(`/admin/referrals/${id2}/status`)
-      .set(auth(agents.referrer))
+      .set(auth(agents.admin))
       .send({ status: 'treatment_completed' }); // privileged jump from 'new'
     expect(done.status).toBe(200);
     expect(done.body.credit.amount_pennies).toBe(8000);
@@ -188,7 +190,7 @@ describe('pipeline and money', () => {
 
     const paid = await request(app)
       .post(`/admin/payouts/${payout.body.payout.id}/mark-paid`)
-      .set(auth(agents.referrer))
+      .set(auth(agents.admin))
       .send({ amountPennies: 10000 });
     expect(paid.status).toBe(200);
 
@@ -226,10 +228,10 @@ describe('admin stats', () => {
     });
     await request(app)
       .patch(`/admin/referrals/${sub.body.referral.id}/status`)
-      .set(auth(agents.referrer))
+      .set(auth(agents.admin))
       .send({ status: 'treatment_completed' });
 
-    const res = await request(app).get('/admin/stats').set(auth(agents.referrer));
+    const res = await request(app).get('/admin/stats').set(auth(agents.admin));
     expect(res.status).toBe(200);
     expect(res.body.stats.commissionPennies).toBe(8000);
     expect(res.body.stats.liabilityPennies).toBe(8000);

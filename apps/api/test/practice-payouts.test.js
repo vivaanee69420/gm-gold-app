@@ -3,6 +3,8 @@
 // Runs on in-memory PGlite like the other suites; the interleaved race needs real Postgres.
 import { beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
+import { adminSession } from './helpers/admin.js';
+import { createAdmin, hashPassword } from '../src/services/adminService.js';
 
 process.env.PGLITE_MEMORY = '1';
 
@@ -42,7 +44,7 @@ async function referrerWithOpenPayout({ phone, friendPhone, name, practiceId }) 
   expect(sub.status).toBe(200);
   const done = await request(app)
     .patch(`/admin/referrals/${sub.body.referral.id}/status`)
-    .set(auth(t.owner))
+    .set(auth(t.admin))
     .send({ status: 'treatment_completed' });
   expect(done.status).toBe(200);
 
@@ -52,12 +54,9 @@ async function referrerWithOpenPayout({ phone, friendPhone, name, practiceId }) 
 }
 
 async function managerFor(phone, practiceId) {
-  const m = await signIn(phone);
-  await db.query(
-    `insert into admin_users (user_id, email, role, practice_ids) values ($1, $2, 'manager', array[$3::uuid])`,
-    [m.user.id, `${phone.replace(/\s/g, '')}@gmdental.co.uk`, practiceId],
-  );
-  return m.token;
+  const email = `${phone.replace(/\s/g, '')}@gmdental.co.uk`;
+  const { token } = await adminSession(app, { email, role: 'manager', practiceIds: [practiceId] });
+  return token;
 }
 
 beforeAll(async () => {
@@ -67,9 +66,8 @@ beforeAll(async () => {
   const { buildApp } = await import('../src/app.js');
   app = buildApp();
 
-  // Dev fallback makes any signed-in user an owner until an admin_users row exists.
-  t.owner = (await signIn('07700 900900')).token;
-  await request(app).put('/admin/reward-amount').set(auth(t.owner)).send({ amountPennies: 10000 });
+  t.admin = (await adminSession(app)).token;
+  await request(app).put('/admin/reward-amount').set(auth(t.admin)).send({ amountPennies: 10000 });
 
   const practices = (await request(app).get('/practices')).body.practices;
   t.practices = practices;
@@ -96,10 +94,10 @@ describe('GET /admin/me', () => {
     expect(res.body.practices).toEqual([{ id: t.a, name: t.practices[0].name }]);
   });
 
-  it('tells an owner they see every practice', async () => {
-    const res = await request(app).get('/admin/me').set(auth(t.owner));
+  it('tells an admin they see every practice', async () => {
+    const res = await request(app).get('/admin/me').set(auth(t.admin));
     expect(res.status).toBe(200);
-    expect(res.body.role).toBe('owner');
+    expect(res.body.role).toBe('admin');
     expect(res.body.practices.map((p) => p.id).sort()).toEqual(t.practices.map((p) => p.id).sort());
   });
 });
@@ -193,7 +191,7 @@ describe('member cancel', () => {
     const cancel = await request(app).delete(`/payouts/${t.bob.payoutId}`).set(auth(t.bob.token));
     expect(cancel.status).toBe(200);
     const paid = await request(app)
-      .post(`/admin/payouts/${t.bob.payoutId}/mark-paid`).set(auth(t.owner)).send({ amountPennies: 10000 });
+      .post(`/admin/payouts/${t.bob.payoutId}/mark-paid`).set(auth(t.admin)).send({ amountPennies: 10000 });
     expect(paid.status).toBe(409);
     const { rows } = await db.query(`select count(*)::int as n from wallet_ledger where payout_id=$1`, [t.bob.payoutId]);
     expect(rows[0].n).toBe(0);
@@ -204,7 +202,7 @@ describe.skipIf(!process.env.DATABASE_URL)('mark-paid vs cancel race (real Postg
   it('exactly one of a simultaneous mark-paid and cancel wins', async () => {
     const carol = await referrerWithOpenPayout({ phone: '07700 900906', friendPhone: '07700 900907', name: 'Carol', practiceId: t.a });
     const [paid, cancelled] = await Promise.all([
-      request(app).post(`/admin/payouts/${carol.payoutId}/mark-paid`).set(auth(t.owner)).send({ amountPennies: 10000 }),
+      request(app).post(`/admin/payouts/${carol.payoutId}/mark-paid`).set(auth(t.admin)).send({ amountPennies: 10000 }),
       request(app).delete(`/payouts/${carol.payoutId}`).set(auth(carol.token)),
     ]);
     expect([paid.status, cancelled.status].sort()).toEqual([200, 409]);
@@ -222,39 +220,51 @@ describe.skipIf(!process.env.DATABASE_URL)('mark-paid vs cancel race (real Postg
 describe('controller ruling: empty practice_ids means "all" for admin, "none" for manager', () => {
   it('an unscoped admin (practice_ids={}) sees every payout and can mark one paid', async () => {
     const eve = await referrerWithOpenPayout({ phone: '07700 900930', friendPhone: '07700 900931', name: 'Eve', practiceId: t.b });
-    const admin = await signIn('07700 900932');
-    await db.query(
-      `insert into admin_users (user_id, email, role, practice_ids) values ($1, $2, 'admin', '{}'::uuid[])`,
-      [admin.user.id, 'admin.unscoped@gmdental.co.uk'],
-    );
+    const { token: adminToken } = await adminSession(app, { email: 'admin.unscoped@gmdental.co.uk', role: 'admin', practiceIds: [] });
 
-    const list = await request(app).get('/admin/payouts').set(auth(admin.token));
+    const list = await request(app).get('/admin/payouts').set(auth(adminToken));
     expect(list.status).toBe(200);
     expect(list.body.payouts.map((p) => p.id)).toContain(eve.payoutId);
 
     const mark = await request(app)
-      .post(`/admin/payouts/${eve.payoutId}/mark-paid`).set(auth(admin.token)).send({ amountPennies: 10000 });
+      .post(`/admin/payouts/${eve.payoutId}/mark-paid`).set(auth(adminToken)).send({ amountPennies: 10000 });
     expect(mark.status).toBe(200);
   });
 
-  it('an unscoped manager (practice_ids={}) sees nothing, and 403s on mark-paid', async () => {
-    const finn = await referrerWithOpenPayout({ phone: '07700 900933', friendPhone: '07700 900934', name: 'Finn', practiceId: t.a });
-    const manager = await signIn('07700 900935');
-    await db.query(
-      `insert into admin_users (user_id, email, role, practice_ids) values ($1, $2, 'manager', '{}'::uuid[])`,
-      [manager.user.id, 'manager.unscoped@gmdental.co.uk'],
-    );
+  // createAdmin now enforces the invariant at creation time (FR-24 rework, admin-accounts task):
+  // a manager MUST carry exactly one active practice id, so "unscoped manager" can no longer
+  // arise through the public API at all.
+  it('creating a manager with no practice is rejected (practice_required)', async () => {
+    await expect(createAdmin({ email: 'manager.unscoped@gmdental.co.uk', password: 'correct-horse-battery', role: 'manager', practiceIds: [] }))
+      .rejects.toMatchObject({ message: 'practice_required', status: 422 });
+  });
 
-    const me = await request(app).get('/admin/me').set(auth(manager.token));
+  // Defense in depth: if an unscoped manager row ever existed anyway (bypassing createAdmin —
+  // this insert goes straight to the DB, which the invariant above no longer allows via the
+  // service), the practiceScope/actionScope fence in app.js must still degrade to "sees/acts
+  // on nothing", not fall through to "all".
+  it('an unscoped manager row (bypassing createAdmin) sees nothing, and 403s on mark-paid', async () => {
+    const finn = await referrerWithOpenPayout({ phone: '07700 900933', friendPhone: '07700 900934', name: 'Finn', practiceId: t.a });
+    const email = 'manager.unscoped.bypass@gmdental.co.uk';
+    const password = 'correct-horse-battery';
+    await db.query(
+      `insert into admin_users (email, password_hash, role, practice_ids) values ($1,$2,'manager','{}')`,
+      [email, hashPassword(password)],
+    );
+    const login = await request(app).post('/auth/admin/login').send({ email, password });
+    expect(login.status).toBe(200);
+    const managerToken = login.body.token;
+
+    const me = await request(app).get('/admin/me').set(auth(managerToken));
     expect(me.status).toBe(200);
     expect(me.body.practices).toEqual([]);
 
-    const list = await request(app).get('/admin/payouts').set(auth(manager.token));
+    const list = await request(app).get('/admin/payouts').set(auth(managerToken));
     expect(list.status).toBe(200);
     expect(list.body.payouts).toEqual([]);
 
     const mark = await request(app)
-      .post(`/admin/payouts/${finn.payoutId}/mark-paid`).set(auth(manager.token)).send({ amountPennies: 10000 });
+      .post(`/admin/payouts/${finn.payoutId}/mark-paid`).set(auth(managerToken)).send({ amountPennies: 10000 });
     expect(mark.status).toBe(403);
     expect(mark.body.error).toBe('forbidden');
     const { rows } = await db.query(`select status from payout_requests where id=$1`, [finn.payoutId]);
@@ -281,13 +291,13 @@ describe('credits behind an open payout exclude anything already paid out', () =
     });
     expect(sub1.status).toBe(200);
     const done1 = await request(app)
-      .patch(`/admin/referrals/${sub1.body.referral.id}/status`).set(auth(t.owner)).send({ status: 'treatment_completed' });
+      .patch(`/admin/referrals/${sub1.body.referral.id}/status`).set(auth(t.admin)).send({ status: 'treatment_completed' });
     expect(done1.status).toBe(200);
 
     const payout1 = await request(app).post('/payouts').set(auth(gwen.token)).send({ practiceId: t.a });
     expect(payout1.status).toBe(200);
     const paid1 = await request(app)
-      .post(`/admin/payouts/${payout1.body.payout.id}/mark-paid`).set(auth(t.owner)).send({ amountPennies: 10000 });
+      .post(`/admin/payouts/${payout1.body.payout.id}/mark-paid`).set(auth(t.admin)).send({ amountPennies: 10000 });
     expect(paid1.status).toBe(200);
 
     // Second friend -> second credit -> second (open) payout.
@@ -300,13 +310,13 @@ describe('credits behind an open payout exclude anything already paid out', () =
     });
     expect(sub2.status).toBe(200);
     const done2 = await request(app)
-      .patch(`/admin/referrals/${sub2.body.referral.id}/status`).set(auth(t.owner)).send({ status: 'treatment_completed' });
+      .patch(`/admin/referrals/${sub2.body.referral.id}/status`).set(auth(t.admin)).send({ status: 'treatment_completed' });
     expect(done2.status).toBe(200);
 
     const payout2 = await request(app).post('/payouts').set(auth(gwen.token)).send({ practiceId: t.a });
     expect(payout2.status).toBe(200);
 
-    const list = await request(app).get('/admin/payouts').set(auth(t.owner));
+    const list = await request(app).get('/admin/payouts').set(auth(t.admin));
     const settledRow = list.body.payouts.find((p) => p.id === payout1.body.payout.id);
     expect(settledRow.credits).toEqual([]);
 

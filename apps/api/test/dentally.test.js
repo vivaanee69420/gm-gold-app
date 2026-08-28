@@ -48,6 +48,10 @@ beforeAll(async () => {
   stub = await import('../src/services/dentally/client.js');
   const { buildApp } = await import('../src/app.js');
   app = buildApp();
+  // Dynamic import: a static one would pull in config.js (via adminService.js) before the
+  // DENTALLY_* env vars above are set, since ES module imports are hoisted ahead of them.
+  const { adminSession } = await import('./helpers/admin.js');
+  agents.admin = (await adminSession(app)).token;
 
   const practices = await db.query(`select id from practices order by name limit 1`);
   agents.practiceId = practices.rows[0].id;
@@ -74,7 +78,7 @@ describe('FR-05 referrer verification against the patient index', () => {
     expect(role.body.user.verificationStatus).toBe('pending_review');
     agents.pendingUserId = user.id;
 
-    const queue = await request(app).get('/admin/verifications').set(auth(agents.referrer));
+    const queue = await request(app).get('/admin/verifications').set(auth(agents.admin));
     expect(queue.body.verifications.map((v) => v.phone)).toContain('+447700910002');
   });
 
@@ -99,7 +103,7 @@ describe('FR-05 referrer verification against the patient index', () => {
     const role = await request(app).post('/me/role').set(auth(token)).send({ role: 'referrer' });
     expect(role.body.user.verificationStatus).toBe('pending_review');
 
-    const rejected = await request(app).post(`/admin/verifications/${user.id}/reject`).set(auth(agents.referrer));
+    const rejected = await request(app).post(`/admin/verifications/${user.id}/reject`).set(auth(agents.admin));
     expect(rejected.status).toBe(200);
     const { rows } = await db.query(`select active from referral_codes where user_id=$1`, [user.id]);
     expect(rows.every((r) => !r.active)).toBe(true);
@@ -174,17 +178,17 @@ describe('FR-16 sync worker: eligibility, idempotency, cursor', () => {
 describe('FR-17 proposal confirm/reject', () => {
   it('confirm is blocked while the referral is under existing-patient review (row 26)', async () => {
     await db.query(`update referrals set review_status='existing_patient_suspect' where id=$1`, [agents.referralId]);
-    const res = await request(app).post(`/admin/proposals/${agents.proposalId}/confirm`).set(auth(agents.referrer));
+    const res = await request(app).post(`/admin/proposals/${agents.proposalId}/confirm`).set(auth(agents.admin));
     expect(res.status).toBe(409);
     expect(res.body.error).toBe('review_pending');
     await db.query(`update referrals set review_status='cleared' where id=$1`, [agents.referralId]);
   });
 
   it('one click: proposal confirmed + referral completed + £20 credited, atomically', async () => {
-    const queue = await request(app).get('/admin/proposals').set(auth(agents.referrer));
+    const queue = await request(app).get('/admin/proposals').set(auth(agents.admin));
     expect(queue.body.proposals.map((p) => p.id)).toContain(agents.proposalId);
 
-    const res = await request(app).post(`/admin/proposals/${agents.proposalId}/confirm`).set(auth(agents.referrer));
+    const res = await request(app).post(`/admin/proposals/${agents.proposalId}/confirm`).set(auth(agents.admin));
     expect(res.status).toBe(200);
     expect(res.body.credit.amountPennies).toBe(2000);
 
@@ -193,20 +197,20 @@ describe('FR-17 proposal confirm/reject', () => {
     const wallet = await request(app).get('/wallet').set(auth(agents.referrer));
     expect(wallet.body.wallet.balancePennies).toBe(2000);
 
-    const again = await request(app).post(`/admin/proposals/${agents.proposalId}/confirm`).set(auth(agents.referrer));
+    const again = await request(app).post(`/admin/proposals/${agents.proposalId}/confirm`).set(auth(agents.admin));
     expect(again.status).toBe(409); // double-click safe
   });
 
   it('row 26: the second proposal for the same referral can never double-credit', async () => {
-    const res = await request(app).post(`/admin/proposals/${agents.secondProposalId}/confirm`).set(auth(agents.referrer));
+    const res = await request(app).post(`/admin/proposals/${agents.secondProposalId}/confirm`).set(auth(agents.admin));
     expect(res.status).toBe(409);
     expect(res.body.error).toBe('already_credited');
 
-    const noReason = await request(app).post(`/admin/proposals/${agents.secondProposalId}/reject`).set(auth(agents.referrer)).send({});
+    const noReason = await request(app).post(`/admin/proposals/${agents.secondProposalId}/reject`).set(auth(agents.admin)).send({});
     expect(noReason.status).toBe(422);
     const rejected = await request(app)
       .post(`/admin/proposals/${agents.secondProposalId}/reject`)
-      .set(auth(agents.referrer))
+      .set(auth(agents.admin))
       .send({ reason: 'duplicate event — already credited' });
     expect(rejected.status).toBe(200);
 
@@ -220,7 +224,7 @@ describe('FR-25 aging report (row 13)', () => {
     for (const status of ['contacted', 'booked']) {
       await request(app)
         .patch(`/admin/referrals/${agents.unpaidReferralId}/status`)
-        .set(auth(agents.referrer))
+        .set(auth(agents.admin))
         .send({ status });
     }
     // Backdate the status-change trail 10 days.
@@ -230,7 +234,7 @@ describe('FR-25 aging report (row 13)', () => {
       [agents.unpaidReferralId],
     );
 
-    const aging = await request(app).get('/admin/aging?days=7').set(auth(agents.referrer));
+    const aging = await request(app).get('/admin/aging?days=7').set(auth(agents.admin));
     const row = aging.body.aging.find((a) => a.id === agents.unpaidReferralId);
     expect(row).toBeDefined();
     expect(row.days_waiting).toBeGreaterThanOrEqual(10);
@@ -238,7 +242,7 @@ describe('FR-25 aging report (row 13)', () => {
     // The friend finally pays; the sync proposes; the aging row disappears.
     stub.stubAddCompletedTreatment({ phone: '+447700910011', completedAt: ts(), updatedAt: ts() });
     await runSync('test');
-    const after = await request(app).get('/admin/aging?days=7').set(auth(agents.referrer));
+    const after = await request(app).get('/admin/aging?days=7').set(auth(agents.admin));
     expect(after.body.aging.find((a) => a.id === agents.unpaidReferralId)).toBeUndefined();
   });
 });

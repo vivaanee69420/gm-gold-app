@@ -80,3 +80,18 @@ export const statusUpdateSchema = z.object({
 export const payoutRequestSchema = z.object({
   practiceId: z.string().uuid(),
 });
+
+// ---- admin accounts (email + password, two roles: admin | manager) ----
+export const adminLoginSchema = z.object({
+  email: z.string().trim().toLowerCase().email(),
+  password: z.string().min(1),
+});
+
+export const adminPasswordSchema = z.string().min(10);
+
+export const adminCreateSchema = z.object({
+  email: z.string().trim().toLowerCase().email(),
+  password: adminPasswordSchema,
+  role: z.enum(['admin', 'manager']),
+  practiceId: z.string().uuid().optional(),
+});

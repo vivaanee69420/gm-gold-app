@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { normalizePhone, isUkMobile, isE164 } from '../src/phone.js';
 import { normalizeCode, formatCode, generateCode, CODE_ALPHABET } from '../src/referral-code.js';
 import { formatPennies, addPennies, parseGBPToPennies, assertPennies } from '../src/money.js';
-import { referralSubmitSchema, otpVerifySchema, phoneSchema } from '../src/schemas.js';
+import { referralSubmitSchema, otpVerifySchema, phoneSchema, adminLoginSchema, adminCreateSchema } from '../src/schemas.js';
 
 describe('phone normalization', () => {
   it('normalizes UK domestic formats to E.164', () => {
@@ -99,5 +99,34 @@ describe('schemas', () => {
     expect(otpVerifySchema.parse({ phone: '07700 900123', code: '123456' }).phone).toBe('+447700900123');
     expect(() => otpVerifySchema.parse({ phone: '07700 900123', code: '12345' })).toThrow();
     expect(phoneSchema.parse('07700 900123')).toBe('+447700900123');
+  });
+});
+
+describe('admin schemas', () => {
+  it('accepts a valid login and normalizes the email', () => {
+    const parsed = adminLoginSchema.parse({ email: '  Admin@GMDental.co.uk  ', password: 'anything' });
+    expect(parsed.email).toBe('admin@gmdental.co.uk');
+  });
+  it('rejects an invalid email', () => {
+    expect(() => adminLoginSchema.parse({ email: 'not-an-email', password: 'anything' })).toThrow();
+  });
+  it('accepts a valid admin creation payload', () => {
+    const parsed = adminCreateSchema.parse({
+      email: 'manager@gmdental.co.uk',
+      password: 'correct-horse-battery',
+      role: 'manager',
+      practiceId: '5f4c2b1a-0000-4000-8000-000000000001',
+    });
+    expect(parsed.role).toBe('manager');
+  });
+  it('rejects a 9-character password', () => {
+    expect(() =>
+      adminCreateSchema.parse({ email: 'a@gmdental.co.uk', password: '123456789', role: 'admin' }),
+    ).toThrow();
+  });
+  it('rejects an unknown role', () => {
+    expect(() =>
+      adminCreateSchema.parse({ email: 'a@gmdental.co.uk', password: 'correct-horse-battery', role: 'owner' }),
+    ).toThrow();
   });
 });
