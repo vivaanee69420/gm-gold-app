@@ -70,6 +70,27 @@ curl -X POST localhost:4000/dev/dentally/complete-treatment \
 npm test         # shared (15) + api (11, +1 skipped until DATABASE_URL points at real Postgres)
 ```
 
+## Dashboard accounts
+
+The dashboard (`apps/admin`) is its own email + password identity (`admin_users`, separate from
+patient `users` and from Supabase auth), with two roles: `admin` (everything, every practice) and
+`manager` (one practice, payouts only). There's no in-dashboard sign-up — `admin`s create every
+other account from the "Team" screen (`POST /admin/team`) — so the very first `admin` has to be
+bootstrapped from the command line with `scripts/create-admin.js`:
+
+```bash
+# local PGlite (no DATABASE_URL set)
+cd apps/api && node scripts/create-admin.js you@gmdental.co.uk 'a-long-password'
+
+# Railway / Supabase — point DATABASE_URL at the target database
+DATABASE_URL=… node apps/api/scripts/create-admin.js you@gmdental.co.uk 'a-long-password'
+```
+
+Migration `0011_admin_accounts.sql` deactivates every pre-existing (pre-password) `admin_users`
+row, so on a fresh deploy there is no working account until this is run — do it immediately after
+deploying, before anyone tries to sign in. `role` defaults to `admin`; pass `manager <practiceId>`
+to seed a payouts-only account instead (`GET /practices` lists ids).
+
 ## Supabase (provisioned 2026-08-21)
 
 Project **"gm refferal app"** (`xiijsxabqwngeoxlflya`) — ⚠ created in **ap-southeast-2 (Sydney)**;

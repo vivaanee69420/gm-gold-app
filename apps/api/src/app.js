@@ -22,7 +22,17 @@ import {
   publicUser,
   publicUserWithCode,
 } from './services/userService.js';
-import { authenticate, publicAdmin, practicesForAdmin } from './services/adminService.js';
+import {
+  authenticate,
+  publicAdmin,
+  practicesForAdmin,
+  createAdmin,
+  listAdmins,
+  setPassword,
+  setActive,
+  changeOwnPassword,
+  normalizePracticeIds,
+} from './services/adminService.js';
 import {
   submitReferral,
   updateStatus,
@@ -215,6 +225,52 @@ export function buildApp() {
   app.get('/admin/me', requireAdmin, wrap(async (req, res) => {
     const practices = await practicesForAdmin(req.admin);
     res.json(publicAdmin(req.admin, practices));
+  }));
+
+  // ---- team management (FR-24): admin-only — the manager fence in middleware/auth.js
+  // (MANAGER_ALLOWED) blocks every /admin/team* route before it reaches here. Every
+  // mutation logs an events row (entity_type 'admin_user') so who-changed-what is auditable.
+  app.get('/admin/team', requireAdmin, wrap(async (_req, res) => {
+    res.json({ team: await listAdmins() });
+  }));
+
+  // Validation lives entirely in createAdmin() (adminCreateSchema + its own weak_password /
+  // practice_required / email_taken checks) — kept as the single source of truth rather than
+  // re-validating here, so the error code a bad request gets back never depends on which
+  // caller (this route, scripts/create-admin.js, a test) reached it.
+  app.post('/admin/team', requireAdmin, wrap(async (req, res) => {
+    const row = await createAdmin({
+      email: req.body?.email,
+      password: req.body?.password,
+      role: req.body?.role,
+      practiceIds: req.body?.practiceId ? [req.body.practiceId] : [],
+      createdBy: req.admin.id,
+    });
+    const practices = await practicesForAdmin({ role: row.role, practiceIds: normalizePracticeIds(row.practice_ids) });
+    res.json({ admin: publicAdmin(row, practices) });
+  }));
+
+  // { password } — sets a new hash for :id and bumps its sessions_revoked_at, so every token
+  // issued before this call dies.
+  app.post('/admin/team/:id/password', requireAdmin, wrap(async (req, res) => {
+    res.json(await setPassword({ id: req.params.id, password: req.body?.password, actorId: req.admin.id }));
+  }));
+
+  // { active: boolean } — 409 cannot_deactivate_self / last_admin guard which admins this can
+  // touch; deactivating also bumps sessions_revoked_at.
+  app.post('/admin/team/:id/active', requireAdmin, wrap(async (req, res) => {
+    res.json(await setActive({ id: req.params.id, active: req.body?.active === true, actorId: req.admin.id }));
+  }));
+
+  // Both roles reach this one (see MANAGER_ALLOWED): { currentPassword, newPassword } — wrong
+  // current -> 401 wrong_password; on success, sessions_revoked_at is bumped for THIS admin
+  // too, so the response carries a fresh token in the same breath.
+  app.post('/admin/me/password', requireAdmin, wrap(async (req, res) => {
+    res.json(await changeOwnPassword({
+      admin: req.admin,
+      currentPassword: req.body?.currentPassword,
+      newPassword: req.body?.newPassword,
+    }));
   }));
 
   app.get('/admin/referrals', requireAdmin, wrap(async (req, res) => {

@@ -4,7 +4,7 @@
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import jwt from 'jsonwebtoken';
-import { adminCreateSchema } from '@gm-referral/shared/schemas';
+import { adminCreateSchema, adminPasswordSchema } from '@gm-referral/shared/schemas';
 import { db, logEvent } from '../db.js';
 import { config } from '../config.js';
 
@@ -46,7 +46,7 @@ function dummyHash() {
 const normalizeEmail = (email) => String(email ?? '').trim().toLowerCase();
 
 // uuid[] comes back as a JS array from pg, a '{...}' literal from some drivers.
-function normalizePracticeIds(raw) {
+export function normalizePracticeIds(raw) {
   if (Array.isArray(raw)) return raw;
   return String(raw ?? '{}').replace(/[{}"]/g, '').split(',').filter(Boolean);
 }
@@ -208,8 +208,13 @@ export async function authenticate(email, password, { ip = null } = {}) {
 }
 
 // ---- tokens ----
-export function issueAdminToken(admin) {
-  return jwt.sign({ sub: admin.id, kind: 'admin', role: admin.role }, config.jwtSecret, { expiresIn: '12h' });
+// `iat` override: used by changeOwnPassword to hand back a token that's guaranteed valid
+// against the sessions_revoked_at it just wrote (see the comment there — jsonwebtoken keeps
+// a caller-supplied iat instead of overwriting it, per its own sign.js).
+export function issueAdminToken(admin, { iat } = {}) {
+  const payload = { sub: admin.id, kind: 'admin', role: admin.role };
+  if (iat) payload.iat = iat;
+  return jwt.sign(payload, config.jwtSecret, { expiresIn: '12h' });
 }
 
 /** Load the acting admin for a verified `kind: 'admin'` token payload; null if it shouldn't work. */
@@ -230,4 +235,105 @@ export function publicAdmin(row, practices) {
     role: row.role,
     practices: practices.map((p) => ({ id: p.id, name: p.name })),
   };
+}
+
+// ---- team management (admin-only; the manager fence in middleware/auth.js keeps managers
+// off every /admin/team* route before any of this runs) ----
+export async function listAdmins() {
+  const { rows } = await db.query(
+    `select id, email, role, practice_ids, active, last_login_at, created_at
+     from admin_users
+     order by role, email`,
+  );
+  const team = [];
+  for (const row of rows) {
+    const practices = await practicesForAdmin({ role: row.role, practiceIds: normalizePracticeIds(row.practice_ids) });
+    team.push({
+      id: row.id,
+      email: row.email,
+      role: row.role,
+      practices: practices.map((p) => ({ id: p.id, name: p.name })),
+      active: row.active,
+      lastLoginAt: row.last_login_at,
+      createdAt: row.created_at,
+    });
+  }
+  return team;
+}
+
+export async function setPassword({ id, password, actorId }) {
+  const parsed = adminPasswordSchema.safeParse(password);
+  if (!parsed.success) throw httpError('weak_password', 422);
+
+  const { rows } = await db.query(`select id from admin_users where id = $1`, [id]);
+  if (!rows[0]) throw httpError('not_found', 404);
+
+  const passwordHash = await hashPassword(parsed.data);
+  await db.query(
+    `update admin_users set password_hash = $1, sessions_revoked_at = now() where id = $2`,
+    [passwordHash, id],
+  );
+  await logEvent(db, { actorId, entityType: 'admin_user', entityId: id, action: 'password_set' });
+  return { ok: true };
+}
+
+export async function setActive({ id, active, actorId }) {
+  // Unconditional on the requested value: a self-targeting call never makes sense either way
+  // (you can't be the one flipping your own switch, whichever direction).
+  if (id === actorId) throw httpError('cannot_deactivate_self', 409);
+
+  const { rows } = await db.query(`select id, role from admin_users where id = $1`, [id]);
+  const target = rows[0];
+  if (!target) throw httpError('not_found', 404);
+
+  if (active === false && target.role === 'admin') {
+    const { rows: remaining } = await db.query(
+      `select count(*)::int as n from admin_users where role = 'admin' and active and id <> $1`,
+      [id],
+    );
+    if (remaining[0].n === 0) throw httpError('last_admin', 409);
+  }
+
+  await db.query(
+    active === false
+      ? `update admin_users set active = false, sessions_revoked_at = now() where id = $1`
+      : `update admin_users set active = true where id = $1`,
+    [id],
+  );
+  await logEvent(db, {
+    actorId, entityType: 'admin_user', entityId: id,
+    action: active ? 'activated' : 'deactivated',
+  });
+  return { ok: true };
+}
+
+// ---- self password change (both roles) ----
+export async function changeOwnPassword({ admin, currentPassword, newPassword }) {
+  const { rows } = await db.query(`select password_hash from admin_users where id = $1`, [admin.id]);
+  const row = rows[0];
+  const currentOk = await verifyPassword(currentPassword, row?.password_hash);
+  if (!row || !currentOk) throw httpError('wrong_password', 401);
+
+  const parsed = adminPasswordSchema.safeParse(newPassword);
+  if (!parsed.success) throw httpError('weak_password', 422);
+
+  const passwordHash = await hashPassword(parsed.data);
+  const { rows: updated } = await db.query(
+    `update admin_users set password_hash = $1, sessions_revoked_at = now()
+     where id = $2 returning sessions_revoked_at`,
+    [passwordHash, admin.id],
+  );
+  await logEvent(db, { actorId: admin.id, entityType: 'admin_user', entityId: admin.id, action: 'password_changed' });
+
+  // A token minted "now" floors its `iat` to the START of the current second; that can read
+  // as strictly BEFORE the sessions_revoked_at just written (sub-second precision) if both
+  // land in the same wall-clock second — the same race admin-auth.test.js's sleep(1100)
+  // calls dodge for a *separate* re-login there. Ceil this token's iat to the next whole
+  // second at/after the DB's own revocation instant so the token handed back here is never
+  // immediately dead.
+  const revokedAtMs = new Date(updated[0].sessions_revoked_at).getTime();
+  const iat = Math.ceil(revokedAtMs / 1000);
+  const token = issueAdminToken(admin, { iat });
+
+  return { ok: true, token };
 }
