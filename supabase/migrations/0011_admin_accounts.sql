@@ -11,3 +11,6 @@ update admin_users set practice_ids = '{}' where role = 'admin';
 alter table admin_users drop constraint if exists admin_users_role_check;
 alter table admin_users add constraint admin_users_role_check check (role in ('admin','manager'));
 update admin_users set email = lower(trim(email));
+-- Legacy rows carry no password (they predate email+password login) and must not be able to
+-- authenticate; the first real admin is created with create-admin.js.
+update admin_users set active = false where password_hash is null;

@@ -2,40 +2,45 @@
 // manager = one practice/payouts only). Owns hashing, creation, authentication, token
 // issue/load, and the public admin shape — auth.js and app.js stay thin callers of this.
 import crypto from 'node:crypto';
+import { promisify } from 'node:util';
 import jwt from 'jsonwebtoken';
+import { adminCreateSchema } from '@gm-referral/shared/schemas';
 import { db, logEvent } from '../db.js';
 import { config } from '../config.js';
 
 const httpError = (message, status) => Object.assign(new Error(message), { status });
+const scryptAsync = promisify(crypto.scrypt);
 
-// ---- password hashing (node:crypto scrypt) ----
+// ---- password hashing (node:crypto scrypt, async so a login request never blocks the
+// event loop for other in-flight requests) ----
 const SCRYPT_OPTS = { N: 16384, r: 8, p: 1 };
 const KEYLEN = 64;
 const SALT_BYTES = 16;
 
-export function hashPassword(password) {
+export async function hashPassword(password) {
   const salt = crypto.randomBytes(SALT_BYTES);
-  const hash = crypto.scryptSync(String(password), salt, KEYLEN, SCRYPT_OPTS);
+  const hash = await scryptAsync(String(password), salt, KEYLEN, SCRYPT_OPTS);
   return `scrypt$${salt.toString('hex')}$${hash.toString('hex')}`;
 }
 
-export function verifyPassword(password, stored) {
+export async function verifyPassword(password, stored) {
   if (!stored) return false;
   const parts = String(stored).split('$');
   if (parts.length !== 3 || parts[0] !== 'scrypt') return false;
   const [, saltHex, hashHex] = parts;
   const salt = Buffer.from(saltHex, 'hex');
   const expected = Buffer.from(hashHex, 'hex');
-  const actual = crypto.scryptSync(String(password), salt, expected.length, SCRYPT_OPTS);
+  const actual = await scryptAsync(String(password), salt, expected.length, SCRYPT_OPTS);
   return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
 }
 
-// A fixed hash compared against on an unknown email, so a login attempt against a
-// nonexistent account takes the same time as one against a real (wrong-password) one.
-let dummyHashCache = null;
+// A fixed hash compared against whenever there's nothing real to compare against (unknown
+// email, or a legacy/migrated row with no password_hash yet), so none of those cases is
+// distinguishable by timing from a real wrong-password attempt.
+let dummyHashPromise = null;
 function dummyHash() {
-  if (!dummyHashCache) dummyHashCache = hashPassword('dummy-password-for-timing-uniformity-only');
-  return dummyHashCache;
+  if (!dummyHashPromise) dummyHashPromise = hashPassword('dummy-password-for-timing-uniformity-only');
+  return dummyHashPromise;
 }
 
 const normalizeEmail = (email) => String(email ?? '').trim().toLowerCase();
@@ -46,7 +51,7 @@ function normalizePracticeIds(raw) {
   return String(raw ?? '{}').replace(/[{}"]/g, '').split(',').filter(Boolean);
 }
 
-async function practicesForAdmin({ role, practiceIds }) {
+export async function practicesForAdmin({ role, practiceIds }) {
   if (role === 'manager') {
     if (!practiceIds.length) return [];
     const { rows } = await db.query(
@@ -59,35 +64,69 @@ async function practicesForAdmin({ role, practiceIds }) {
   return rows;
 }
 
-// ---- login rate limit: 5 failures / 15 min per email, in-memory (mirrors otpService's pattern) ----
-const MAX_FAILURES = 5;
+// ---- login rate limit ----
+// In-memory, single-replica: counters live in this process only and reset on deploy/restart
+// (no shared store — good enough for the current single-instance API; a DB/Redis-backed
+// limiter is a Phase-2 concern if we ever run more than one replica). Two layers: a tight
+// per-email limit (defends one account against a targeted guesser) and a coarse per-IP limit
+// in front of it (defends the login route itself against one source hammering many emails).
+const MAX_EMAIL_FAILURES = 5;
+const MAX_IP_FAILURES = 30;
 const FAILURE_WINDOW_MS = 15 * 60 * 1000;
-const failuresByEmail = new Map();
 
-function assertNotRateLimited(email) {
-  const entry = failuresByEmail.get(email);
-  if (entry && entry.count >= MAX_FAILURES && Date.now() - entry.firstFailureAt < FAILURE_WINDOW_MS) {
-    throw httpError('rate_limited', 429);
+// Test-only clock seam: swapping Date.now() for a mock lets tests jump the rate-limit window
+// forward without faking timers around real DB/network I/O (which risks hanging on PGlite's
+// or supertest's own timer/microtask use). Never touched outside tests.
+let clockNow = () => Date.now();
+export function __setClockForTests(fn) {
+  clockNow = fn ?? (() => Date.now());
+}
+
+function makeLimiter(max) {
+  const byKey = new Map();
+  function prune(now) {
+    for (const [key, entry] of byKey) {
+      if (now - entry.firstFailureAt >= FAILURE_WINDOW_MS) byKey.delete(key);
+    }
   }
+  return {
+    assertNotLimited(key) {
+      const now = clockNow();
+      prune(now);
+      const entry = byKey.get(key);
+      if (entry && entry.count >= max && now - entry.firstFailureAt < FAILURE_WINDOW_MS) {
+        throw httpError('rate_limited', 429);
+      }
+    },
+    recordFailure(key) {
+      const now = clockNow();
+      prune(now); // sweep expired entries on every write; cheap at this size
+      const entry = byKey.get(key);
+      if (!entry || now - entry.firstFailureAt >= FAILURE_WINDOW_MS) {
+        byKey.set(key, { count: 1, firstFailureAt: now });
+      } else {
+        entry.count += 1;
+      }
+    },
+    clear(key) {
+      byKey.delete(key);
+    },
+  };
 }
 
-function recordFailure(email) {
-  const entry = failuresByEmail.get(email);
-  if (!entry || Date.now() - entry.firstFailureAt >= FAILURE_WINDOW_MS) {
-    failuresByEmail.set(email, { count: 1, firstFailureAt: Date.now() });
-  } else {
-    entry.count += 1;
-  }
-}
-
-function clearFailures(email) {
-  failuresByEmail.delete(email);
-}
+const emailLimiter = makeLimiter(MAX_EMAIL_FAILURES);
+const ipLimiter = makeLimiter(MAX_IP_FAILURES);
 
 // ---- create ----
 export async function createAdmin({ email, password, role, practiceIds = [], createdBy = null }) {
-  const normalizedEmail = normalizeEmail(email);
   if (!password || String(password).length < 10) throw httpError('weak_password', 422);
+
+  // Shape validation (email format, role enum, practiceId a real uuid) — catches a malformed
+  // CLI arg before it reaches a raw DB query (e.g. a garbage practiceId would otherwise crash
+  // with an "invalid input syntax for type uuid" instead of a clean 422).
+  const parsed = adminCreateSchema.safeParse({ email, password, role, practiceId: practiceIds[0] });
+  if (!parsed.success) throw httpError('validation', 422);
+  const normalizedEmail = parsed.data.email;
 
   if (role === 'admin') {
     if (practiceIds.length) throw httpError('practice_required', 422);
@@ -99,10 +138,10 @@ export async function createAdmin({ email, password, role, practiceIds = [], cre
     );
     if (!activeRows[0]) throw httpError('practice_required', 422);
   } else {
-    throw httpError('validation', 422);
+    throw httpError('validation', 422); // unreachable: adminCreateSchema already rejects this
   }
 
-  const passwordHash = hashPassword(password);
+  const passwordHash = await hashPassword(password);
   const practiceIdsLiteral = `{${practiceIds.join(',')}}`;
   let row;
   try {
@@ -125,22 +164,29 @@ export async function createAdmin({ email, password, role, practiceIds = [], cre
 }
 
 // ---- authenticate ----
-export async function authenticate(email, password) {
+export async function authenticate(email, password, { ip = null } = {}) {
   const normalizedEmail = normalizeEmail(email);
-  assertNotRateLimited(normalizedEmail);
+  emailLimiter.assertNotLimited(normalizedEmail);
+  if (ip) ipLimiter.assertNotLimited(ip);
 
   const { rows } = await db.query(`select * from admin_users where email = $1`, [normalizedEmail]);
   const row = rows[0];
-  // Always run a real scrypt compare, even for an unknown email, so timing doesn't leak
-  // whether the account exists.
-  const passwordOk = row ? verifyPassword(password, row.password_hash) : (verifyPassword(password, dummyHash()), false);
+  // Always run a real scrypt compare against SOME hash — the row's own, or the fixed dummy
+  // one when there's no row, or (a migrated legacy row) no password_hash yet — so unknown
+  // email, null hash, wrong password, and inactive all cost exactly one scrypt and land on
+  // the same 401. Never short-circuit on `!row` or `!row.password_hash` before comparing.
+  const compareHash = row?.password_hash || (await dummyHash());
+  const passwordOk = await verifyPassword(password, compareHash);
 
   if (!row || !passwordOk || !row.active) {
-    recordFailure(normalizedEmail);
+    emailLimiter.recordFailure(normalizedEmail);
+    if (ip) ipLimiter.recordFailure(ip);
     throw httpError('invalid_credentials', 401);
   }
 
-  clearFailures(normalizedEmail);
+  emailLimiter.clear(normalizedEmail);
+  // The IP counter is intentionally NOT cleared on success: one correct login shouldn't let
+  // an attacker "launder" a shared IP's budget while still guessing at other accounts on it.
   await db.query(`update admin_users set last_login_at = now() where id = $1`, [row.id]);
 
   const admin = { id: row.id, email: row.email, role: row.role, practiceIds: normalizePracticeIds(row.practice_ids) };

@@ -22,7 +22,7 @@ import {
   publicUser,
   publicUserWithCode,
 } from './services/userService.js';
-import { authenticate, publicAdmin } from './services/adminService.js';
+import { authenticate, publicAdmin, practicesForAdmin } from './services/adminService.js';
 import {
   submitReferral,
   updateStatus,
@@ -70,15 +70,18 @@ const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).catch(nex
 // practiceScope: for reads — a Postgres array literal (cast with ::uuid[] in SQL), or null
 // for "no filter" (admin). '{}' for a scopeless manager matches no rows.
 const practiceScope = (req) => {
-  if (!req.admin || req.admin.role === 'admin') return null;
+  if (!req.admin) return '{}'; // fail closed: no admin context on the request means no access
+  if (req.admin.role === 'admin') return null;
   return `{${req.admin.practiceIds.join(',')}}`;
 };
 
 // actionScope: for writes (mark-paid/cancel) — null means unrestricted (admin); otherwise
 // the ids array is handed to assertInScope in walletService.js, which rejects anything
-// outside it — so a scopeless manager's `[]` rejects every practice.
+// outside it — so a scopeless manager's `[]` (and a missing req.admin's `[]`) rejects every
+// practice, never falling through to "all".
 const actionScope = (req) => {
-  if (!req.admin || req.admin.role === 'admin') return null;
+  if (!req.admin) return []; // fail closed
+  if (req.admin.role === 'admin') return null;
   return req.admin.practiceIds;
 };
 
@@ -129,7 +132,7 @@ export function buildApp() {
   // Dashboard accounts: email + password, its own identity table (admin_users), not a
   // patient session. See middleware/auth.js requireAdmin / services/adminService.js.
   app.post('/auth/admin/login', validate(adminLoginSchema), wrap(async (req, res) => {
-    const { token, admin } = await authenticate(req.data.email, req.data.password);
+    const { token, admin } = await authenticate(req.data.email, req.data.password, { ip: req.ip });
     res.json({ token, admin });
   }));
 
@@ -206,12 +209,8 @@ export function buildApp() {
   // FR-24: what the dashboard uses to pick a view — a manager's single practice vs. an
   // admin's full practice list.
   app.get('/admin/me', requireAdmin, wrap(async (req, res) => {
-    const scope = practiceScope(req);
-    const { rows } = await db.query(
-      `select id, name from practices where active ${scope ? 'and id = any($1::uuid[])' : ''} order by name`,
-      scope ? [scope] : [],
-    );
-    res.json(publicAdmin(req.admin, rows));
+    const practices = await practicesForAdmin(req.admin);
+    res.json(publicAdmin(req.admin, practices));
   }));
 
   app.get('/admin/referrals', requireAdmin, wrap(async (req, res) => {

@@ -24,6 +24,10 @@ try {
   console.log(`Created ${admin.role} ${admin.email} (id: ${admin.id})`);
   process.exit(0);
 } catch (err) {
-  console.error(err.message ?? String(err));
+  if (err.message === 'validation') {
+    console.error('validation: check the email format, role (admin|manager), and practiceId (must be a UUID)');
+  } else {
+    console.error(err.message ?? String(err));
+  }
   process.exit(1);
 }

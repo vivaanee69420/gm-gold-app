@@ -249,7 +249,7 @@ describe('controller ruling: empty practice_ids means "all" for admin, "none" fo
     const password = 'correct-horse-battery';
     await db.query(
       `insert into admin_users (email, password_hash, role, practice_ids) values ($1,$2,'manager','{}')`,
-      [email, hashPassword(password)],
+      [email, await hashPassword(password)],
     );
     const login = await request(app).post('/auth/admin/login').send({ email, password });
     expect(login.status).toBe(200);

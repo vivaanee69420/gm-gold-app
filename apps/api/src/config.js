@@ -1,6 +1,12 @@
 const env = process.env.NODE_ENV ?? 'development';
 const dev = env !== 'production';
 
+// Boot guard: the default JWT secret below is public (it's in this repo). Never let a
+// production boot silently sign admin/patient sessions with it.
+if (env === 'production' && !process.env.API_JWT_SECRET) {
+  throw new Error('API_JWT_SECRET is required in production');
+}
+
 export const config = {
   port: Number(process.env.PORT ?? 4000),
   env,
