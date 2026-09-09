@@ -1,8 +1,9 @@
 import { buildApp } from './app.js';
-import { initDb, db } from './db.js';
+import { initDb } from './db.js';
 import { config } from './config.js';
 import { runSync } from './services/dentally/syncService.js';
 import { queueDailyDigest } from './services/digestService.js';
+import { drainOnce } from './services/outboxService.js';
 
 const kind = await initDb();
 const app = buildApp();
@@ -13,19 +14,31 @@ const app = buildApp();
 setInterval(() => runSync('cron'), config.dentally.syncIntervalMs);
 runSync('startup');
 
-// Outbox drain (NFR-10) — dev sender logs to console; WhatsApp/SMS senders swap in later.
+// Outbox drain (NFR-10). The real sender: claims rows, sends via Resend, and only then
+// records the outcome. See outboxService for the state machine.
+//
+// `draining` is a same-process guard, not a correctness one — drainOnce is already safe to
+// run concurrently thanks to FOR UPDATE SKIP LOCKED. It just stops a slow batch from
+// stacking up ticks behind it and holding ten connections per pass.
+let draining = false;
 setInterval(async () => {
+  if (draining) return;
+  draining = true;
   try {
-    const { rows } = await db.query(
-      `update notification_outbox set status='sent', sent_at=now(), attempts=attempts+1, channel_resolved='console'
-       where id in (select id from notification_outbox where status='queued' order by created_at limit 10)
-       returning template, recipient_kind, recipient_id, payload`,
-    );
-    for (const n of rows) {
-      console.log(`[notify] ${n.recipient_kind}:${n.recipient_id ?? '-'} ${n.template}`, JSON.stringify(n.payload));
+    const out = await drainOnce();
+    // Quiet when there is nothing to do; the drain runs every 3 seconds all day.
+    if (out.sent || out.failed || out.retried || out.skipped) {
+      console.log(
+        `[notify] sent=${out.sent} skipped=${out.skipped} retried=${out.retried} failed=${out.failed}`,
+      );
     }
+    // A failed row is a notification about money that a patient will never receive, and
+    // nothing else surfaces it yet (TODOS.md TODO-1). Until that lands, be loud.
+    if (out.failed) console.error(`[notify] ${out.failed} notification(s) permanently failed`);
   } catch (err) {
     console.error('[notify] drain failed', err.message);
+  } finally {
+    draining = false;
   }
 }, 3000);
 

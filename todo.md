@@ -217,18 +217,26 @@ Phone is the Dentally matching key, so phone must still be captured; the questio
 - [ ] Referred-friend form already collects email → store on `users` too.
 
 ### 4c. Shared plumbing
-- [ ] Pick provider: **Resend** or **Postmark** (UK-fine, DKIM/SPF, webhooks for bounces). Env:
-      `EMAIL_PROVIDER`, `EMAIL_API_KEY`, `EMAIL_FROM`. Verify domain + set up DKIM/SPF/DMARC.
-- [ ] `services/emailService.js` with `sendOtp`, `sendTemplate(template, to, payload)`; retry with
-      backoff; bounce webhook → mark `notification_outbox` failed.
-- [ ] Outbox drain becomes the real sender: **mark `sent` only after provider success**, `attempts++`
-      and backoff on failure, `failed` after N, `FOR UPDATE SKIP LOCKED` (see §5). Respect
-      `users.notify_opt_in` for utility templates (today never checked — `server.js:17-30`).
+- [x] **DONE 2026-09-09:** Resend, via plain `fetch` in `services/emailService.js` (no SDK, matching
+      `dentally/client.js`). Env: `EMAIL_API_KEY`, `EMAIL_FROM`, `EMAIL_REPLY_TO`. No boot guard on the
+      key by design — a missing key must not stop the API serving, it must stop the outbox *claiming*
+      a send succeeded. **Still yours:** create the Resend account, verify `mail.gmdental.co.uk`, add
+      DKIM/SPF/DMARC.
+- [x] **DONE 2026-09-09:** `services/emailService.js` — `send({to, template, payload})` with an explicit
+      retryable/terminal error split (429 + 5xx + network retry; 4xx gives up). No `sendOtp`: Supabase
+      Auth sends the OTP directly (decision T2 — routing it through our API would put Railway cold-start
+      latency on the login path). Bounce webhook is change 3b.
+- [x] **DONE 2026-09-09:** `services/outboxService.js`. Sends first, records after; `queued -> sending ->
+      sent | skipped | failed` with exponential backoff (2^attempts min) and `FOR UPDATE SKIP LOCKED`
+      so a second replica cannot double-send. Respects `notify_opt_in`. Phase-2 templates and
+      `practice_contact` rows (dropped by Q14) are marked `skipped` with a reason rather than sitting
+      in the queue forever. 20 tests in `test/outbox.test.js`.
 - [ ] Templates (HTML + text, versioned): otp, friend_used_code, friend_booked, friend_completed,
       wallet_credit, payout_ready, payout_receipt, payout_cancelled, verification_approved/rejected,
       new_inquiry (practice), daily_digest (practice).
-- [ ] OTP hygiene: per-email + per-IP send limits; `otp_deliveries` TTL cleanup job (NFR-01 — rows never
-      deleted today); constant-time compare.
+- [x] **Superseded 2026-09-09:** Supabase Auth owns OTP entirely, so send limits, TTL cleanup and the
+      constant-time compare become its problem. `otp_deliveries` is dropped in change 3b. **Do not skip
+      this:** raise Supabase's auth email rate limit from its 30/hour default before any launch push.
 - [ ] Sessions: keep 90-day JWT for now, but add `POST /auth/logout` that stamps a per-token jti into a
       `revoked_tokens` table (or move to access 1h + refresh 90d rotated — see §7).
 

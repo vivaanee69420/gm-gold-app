@@ -30,6 +30,15 @@ export const config = {
   jwtSecret: process.env.API_JWT_SECRET ?? 'dev-only-secret-change-me',
   // sms_only | whatsapp_primary come later (FR-02a); dev logs codes instead of sending.
   otpChannelMode: process.env.OTP_CHANNEL_MODE ?? 'dev',
+  // Outbound email (Resend, Q4: sending from mail.gmdental.co.uk). No boot guard on the key
+  // deliberately: a missing key must not stop the API serving, it must stop the OUTBOX
+  // claiming a send succeeded — see emailService, which treats it as a retryable fault in
+  // production and falls back to console logging in dev so local work needs no account.
+  email: {
+    apiKey: process.env.EMAIL_API_KEY ?? null,
+    from: process.env.EMAIL_FROM ?? 'GM Dental Gold Card <noreply@mail.gmdental.co.uk>',
+    replyTo: process.env.EMAIL_REPLY_TO ?? null,
+  },
   // FR: a referred friend must book within this window or the referral resets.
   referralBookingWindowHours: Number(process.env.REFERRAL_BOOKING_WINDOW_HOURS ?? 12),
   consentVersionReferred: 'referred-v1-2026-08',

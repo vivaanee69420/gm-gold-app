@@ -18,18 +18,35 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 
 process.env.PGLITE_MEMORY = '1';
-process.env.NODE_ENV = 'production';
-// config.js refuses to boot in production without this. Setting it here is the test
-// asserting that guard exists as much as it is satisfying it.
-process.env.API_JWT_SECRET = 'test-only-production-mode-secret';
 
 let app;
 
 beforeAll(async () => {
-  const { initDb } = await import('../src/db.js');
-  await initDb();
-  const { buildApp } = await import('../src/app.js');
-  app = buildApp();
+  // NODE_ENV must be 'production' when config.js is first evaluated — `isDev` is computed
+  // once at module scope. But it must NOT still be 'production' afterwards: vitest gives
+  // each file a fresh module registry while REUSING worker processes, so process.env leaks
+  // between files that share a worker. Left set, this file intermittently flips
+  // resolveDentallyMode() from 'stub' to 'off' for whichever suite runs next in the same
+  // worker, and dentally.test.js fails depending on scheduling. That is exactly the flake
+  // this dance avoids.
+  //
+  // Files never interleave within a worker, so setting it, letting the imports capture it,
+  // and restoring it here is airtight.
+  const restore = { NODE_ENV: process.env.NODE_ENV, API_JWT_SECRET: process.env.API_JWT_SECRET };
+  process.env.NODE_ENV = 'production';
+  // config.js refuses to boot in production without this. Setting it here is the test
+  // asserting that guard exists as much as it is satisfying it.
+  process.env.API_JWT_SECRET = 'test-only-production-mode-secret';
+  try {
+    const { initDb } = await import('../src/db.js');
+    await initDb();
+    const { buildApp } = await import('../src/app.js');
+    app = buildApp();
+  } finally {
+    process.env.NODE_ENV = restore.NODE_ENV;
+    if (restore.API_JWT_SECRET === undefined) delete process.env.API_JWT_SECRET;
+    else process.env.API_JWT_SECRET = restore.API_JWT_SECRET;
+  }
 });
 
 describe('production mode closes the dev surfaces', () => {
