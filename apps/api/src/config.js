@@ -17,6 +17,14 @@ if (process.env.DATABASE_URL && !process.env.API_JWT_SECRET) {
 export const config = {
   port: Number(process.env.PORT ?? 4000),
   env,
+  // Browser origins allowed to call this API (see the cors block in app.js). The mobile app
+  // sends no Origin header at all and is allowed unconditionally there — this list only ever
+  // governs browsers, which means in practice it governs the admin dashboard.
+  // Comma-separated so staging and production dashboards can share one deploy.
+  adminOrigins: (process.env.ADMIN_ORIGINS ?? process.env.ADMIN_URL ?? 'http://localhost:5173')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
   // Supabase Postgres connection string in production/staging; unset = embedded dev Postgres (PGlite).
   databaseUrl: process.env.DATABASE_URL ?? null,
   jwtSecret: process.env.API_JWT_SECRET ?? 'dev-only-secret-change-me',

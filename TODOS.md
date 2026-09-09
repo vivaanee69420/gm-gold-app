@@ -43,6 +43,27 @@ Created by /plan-eng-review on 2026-08-14.
 - [ ] GHL push at MVP or Phase 2 → open question 4
 - [ ] Backend hosting choice + environments → open question 7
 
+## Surfaced by /plan-eng-review 2026-09-09 (Supabase Auth + email plan)
+
+- [ ] **Bounced money emails fail silently** — alerting or a worklist for `notification_outbox`
+  rows reaching `status='failed'`. A hard-bounced `wallet_credit` or `payout_receipt` means a
+  referrer is never told they earned money, and nothing surfaces it. The plan's stats-strip
+  counter is not a real owner — nobody watches a counter. Cheap to build once the sender exists
+  (`failed` and `last_error` are already written); the open decision is where the alert goes:
+  dashboard worklist, email to the owner, or Sentry. **Blocked by:** change 3's outbox sender.
+- [ ] **Migrate `admin_users` to Supabase Auth** — decision I2 (2026-09-09) sequenced the
+  dashboard *after* patients, so until this lands you run two auth systems and still own scrypt,
+  lockout tuning and the admin password-reset flow that does not exist today. This supersedes the
+  2026-08-29 email+password decision as a permanent end state. **`verifyToken` and `tokenRevoked`
+  must stay in `userService.js` until this happens** — `requireAdmin` (`middleware/auth.js:36`)
+  and `adminService.js:244` both use them. ~900 lines deleted with ~900 lines of tests behind
+  them, so it needs its own review pass. **Blocked by:** change 3 proving JWKS verification in prod.
+- [ ] **Outbox + analytics retention job** — Q19's answer as code: outbox rows 90 days,
+  `analytics_events` 13 months, audit `events` forever. `notification_outbox` is append-only today
+  and nothing ever deletes from it. Storage hygiene and GDPR data-minimisation, not performance —
+  the partial index from I9 keeps the drain fast regardless. `otp_deliveries` retention is moot;
+  that table is dropped in migration 0013.
+
 ## Phase 2 backlog
 
 See `docs/FLOWS.md` §9 — the authoritative list (web capture page tripwire lever, wallet passes, leaderboard/draw, percent rules, fraud scoring, deferred deep linking, admin conveniences with MVP stand-ins, staff-side referral entry, self-service phone change, fuzzy matching).

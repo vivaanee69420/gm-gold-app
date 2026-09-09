@@ -117,7 +117,21 @@ export function buildApp() {
   // is the same internal proxy address for every request, collapsing the per-IP bucket into
   // one shared global one — 30 bad logins from anyone would 429 every admin for 15 minutes.
   app.set('trust proxy', 1);
-  app.use(cors());
+  // CORS is a browser mechanism, so there are exactly two cases here:
+  //
+  //   Origin absent  -> React Native fetch, curl, Dental Os trigger, Railway health check.
+  //                     Not a browser, so the same-origin policy this header relaxes was
+  //                     never applied to them. Allow: refusing would break the mobile app
+  //                     while stopping nothing.
+  //   Origin present -> a browser. Only the admin dashboard has any business being one.
+  //
+  // A rejected origin gets `cb(null, false)`, not an Error: that omits the CORS headers and
+  // lets the browser block the response itself. Throwing would surface a 500 and tell an
+  // attacker their origin was specifically recognised and refused.
+  app.use(cors({
+    origin: (origin, cb) => cb(null, !origin || config.adminOrigins.includes(origin)),
+    credentials: false,
+  }));
 
   // Dentally webhook (FR-16d): a doorbell, not an ingestion path — the body is never
   // ingested, it only triggers an immediate sync pass. Two callers, two auths:

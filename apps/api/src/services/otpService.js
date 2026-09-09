@@ -30,8 +30,15 @@ export async function sendOtp(phone) {
     [phone, hash(code), config.otpChannelMode],
   );
 
-  // Delivery. Dev: console. (WhatsApp/SMS delivery lands with the Meta/SMS accounts.)
-  console.log(`[otp] ${phone} -> code ${code} (dev mode)`);
+  // Delivery. Dev: console. (Real delivery lands with §4 — Supabase Auth + Resend.)
+  //
+  // The code is printed ONLY in dev. Railway streams stdout to its log viewer and to any
+  // drain configured on the service, so `console.log(code)` in production leaks exactly what
+  // returning it in `devHint` leaks — a working sign-in for that phone number — just to a
+  // different audience. Production gets the fact of the send, which is what support needs,
+  // and nothing that grants access.
+  if (isDev) console.log(`[otp] ${phone} -> code ${code} (dev mode)`);
+  else console.log(`[otp] sent to ${phone}`);
 
   return { ok: true, ...(isDev ? { devHint: `Dev code: ${code}` } : {}) };
 }

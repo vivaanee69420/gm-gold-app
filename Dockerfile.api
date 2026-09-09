@@ -14,6 +14,10 @@ COPY packages/shared packages/shared
 COPY apps/api apps/api
 COPY supabase supabase
 
-ENV NODE_ENV=development
+# Production by default. Dev mode is a local-only concern (`npm run api`), and shipping it
+# in the image is what left /auth/otp/send returning the login code in its own response and
+# /dev/dentally/* mounted on the deployed API. Railway also sets NODE_ENV explicitly; this
+# line is the floor, not the switch.
+ENV NODE_ENV=production
 EXPOSE 4000
 CMD ["node", "apps/api/src/server.js"]

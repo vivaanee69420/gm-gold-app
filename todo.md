@@ -57,28 +57,47 @@ triggers, reconciliation job, error monitoring, CI tests.
 
 ## 1. P0 — Security blockers on the deployed API (do first, ~half a day)
 
-The Railway API is connected to the real Supabase DB + Dental OS, but runs as **development**:
+The Railway API is connected to the real Supabase DB + Dental OS. It **ran as development**, which
+is what made every item below exploitable. Code fixes landed 2026-09-09 on `feat/prod-security-flip`;
+the remaining unticked items are Railway/ops actions only. See the deploy checklist at the end of this section.
 
-- [ ] **`Dockerfile.api` sets `ENV NODE_ENV=development`.** Change to `production` and set `NODE_ENV`
-      explicitly in Railway. In dev mode today:
-  - [ ] `requireAdmin` falls back to **owner for any signed-in user** (`middleware/auth.js:41-44`) →
-        any patient with the app can call `/admin/*` (mark payouts paid, change commission, credit referrals).
-  - [ ] `/auth/otp/send` returns the OTP in `devHint` (`otpService.js:36`) → anyone can sign in as **any**
-        phone number, including admin accounts. Also logs the code (`otpService.js:34`).
-  - [ ] `/dev/dentally/*` stub endpoints are mounted (`app.js:451-485`).
-  - [ ] `/webhooks/dentally` accepts unsigned calls when no secret is set (`app.js:77-79`).
-- [ ] **Verify `API_JWT_SECRET` is set on Railway.** Default is `'dev-only-secret-change-me'`
-      (`config.js:9`) — if unset, anyone can mint admin tokens. Make the API **refuse to boot** in
-      production without it (and without `DATABASE_URL`).
-- [ ] Add a startup guard: `if (!isDev && (!process.env.API_JWT_SECRET || config.otpChannelMode === 'dev')) throw`.
-- [ ] Until email OTP ships (§4), production login is impossible without `devHint` → either keep the
-      API private (Railway private networking / IP allowlist) or gate `devHint` behind an explicit
-      `OTP_DEV_HINT=1` env that is never set in prod.
-- [ ] Error handler leaks raw error text (incl. Postgres messages) for 5xx (`app.js:489-493`): return
-      `{error:'internal'}` for status ≥ 500; keep codes for 4xx.
-- [ ] `app.use(cors())` is wide open (`app.js:68`) — restrict `origin` to the admin URL(s) + allow
-      no-origin (mobile).
-- [ ] Rotate anything that may have leaked while dev mode was live (JWT secret, webhook secret).
+- [x] **DONE 2026-09-09** (branch `feat/prod-security-flip`): `Dockerfile.api` now sets `ENV NODE_ENV=production`. **Still yours:** set `NODE_ENV=production` explicitly on the Railway service too, and redeploy. Previously in dev mode:
+  - [x] **Already fixed** (2026-08-29, `feat/admin-accounts`): `requireAdmin` reads `admin_users` only and rejects patient tokens outright — there is no owner fallback left in `middleware/auth.js`.
+  - [x] **DONE 2026-09-09:** `devHint` is gated on `isDev`, which is now false in the image. The unconditional `console.log` of the code (`otpService.js`) is fixed too — it was NOT gated and was writing live codes to Railway logs. Regression test: `test/prod-mode.test.js`.
+  - [x] **DONE 2026-09-09:** already behind `if (isDev)` (`app.js:622`), so the NODE_ENV flip unmounts them. Pinned by `test/prod-mode.test.js`.
+  - [x] **DONE 2026-09-09:** `app.js:130` returns 503 when no secret is configured and `isDev` is false. Pinned by `test/prod-mode.test.js`.
+- [x] **Refuse-to-boot guard: already exists** (`config.js:8-16`) — throws when `NODE_ENV=production`
+      without `API_JWT_SECRET`, AND (env-independent) whenever `DATABASE_URL` is set without it.
+      **Useful corollary:** the API is currently running on Railway with `DATABASE_URL` set, so that
+      second guard proves `API_JWT_SECRET` is already configured there. The NODE_ENV flip will not
+      crash-loop. Verify anyway before redeploying — one `railway variables` call.
+- [x] ~~Add a startup guard on `otpChannelMode === 'dev'`~~ — **DO NOT ADD THIS.** `otpChannelMode`
+      still defaults to `'dev'` (`config.js`), so this guard would refuse to boot the very deploy that
+      fixes the problem. It is also moot: `otpService.js` and `otpChannelMode` are both deleted in
+      change 3 when Supabase Auth takes over OTP. The `API_JWT_SECRET` half of it already exists above.
+- [x] **Superseded 2026-09-09:** no `OTP_DEV_HINT` env is needed. `devHint` is gated on `isDev`, which
+      is false in the production image, so it is simply off. Q12's accepted consequence stands: **no
+      patient can log in to production until change 3 (Supabase Auth + Resend) ships.** That is the
+      intended state, not a regression — the API is locked, not broken.
+- [x] **Already fixed** (2026-08-29, commit 3eb80f3): `app.js:658-666` returns `{error:'internal'}` for status >= 500 and logs the real error server-side.
+- [x] **DONE 2026-09-09:** origin allowlist from `ADMIN_ORIGINS` (falls back to `ADMIN_URL`, then localhost). Requests with no Origin header (the mobile app) are always allowed. Tests: `test/cors.test.js`. **Still yours:** set `ADMIN_ORIGINS` on Railway to the admin dashboard URL.
+- [ ] Rotate anything that may have leaked while dev mode was live (`API_JWT_SECRET`,
+      `DENTALLY_WEBHOOK_SECRET`). Q1 says test data only and no misuse audit is needed, but the OTP
+      codes were in the Railway logs, so rotate on principle.
+
+### Deploy checklist for change 1 (all Railway-side, ~15 minutes)
+
+1. `railway variables` on the api service — confirm `API_JWT_SECRET` is set and is not
+   `dev-only-secret-change-me`.
+2. Set `NODE_ENV=production` explicitly on the service (the image now defaults to it, but be explicit).
+3. Set `ADMIN_ORIGINS` to the admin dashboard origin, e.g.
+   `https://admin-production-xxxx.up.railway.app`. Comma-separate if there is a staging dashboard too.
+   Get this wrong and the dashboard cannot call the API — it is the one way this deploy can break
+   something that works today.
+4. Redeploy the api service. Watch the boot log: it must print `[api] listening ...` and not throw.
+5. Smoke test: `GET /healthz` returns 200; open the admin dashboard and sign in; confirm
+   `POST /auth/otp/send` no longer returns `devHint`; confirm `/dev/dentally/add-patient` returns 404.
+6. Rotate the two secrets above.
 
 ---
 
