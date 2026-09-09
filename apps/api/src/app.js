@@ -665,6 +665,51 @@ export function buildApp() {
     }));
   }
 
+  // ---- Resend delivery webhook ----
+  //
+  // A hard bounce means that address will never accept mail: the mailbox does not exist, or
+  // the domain does not. Retrying is pointless and actively harmful — repeated sends to dead
+  // addresses are what wrecks a sending domain's reputation and starts putting the GOOD mail
+  // in spam. So a bounce moves the row straight to a terminal 'failed'.
+  //
+  // Soft bounces (full mailbox, temporary reject) are deliberately NOT handled here: the
+  // outbox's own backoff already covers them, and treating them as terminal would throw away
+  // a payout receipt because somebody's inbox was full for an hour.
+  //
+  // Auth is a shared secret compared in constant time, matching the Dentally webhook above.
+  // Without EMAIL_WEBHOOK_SECRET set, the endpoint refuses everything rather than trusting
+  // an unsigned caller to mark a patient's money notification as failed.
+  app.post('/webhooks/resend', wrap(async (req, res) => {
+    const secret = config.email.webhookSecret;
+    if (!secret) return res.status(503).json({ error: 'webhook_not_configured' });
+    const given = Buffer.from(String(req.headers['x-gmref-email-secret'] ?? ''));
+    const expected = Buffer.from(secret);
+    if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
+      return res.status(401).json({ error: 'invalid_signature' });
+    }
+
+    const type = req.body?.type ?? '';
+    const providerId = req.body?.data?.email_id ?? null;
+    if (!providerId) return res.status(204).end(); // nothing to correlate; not an error
+
+    if (type === 'email.bounced' || type === 'email.complained') {
+      // channel_resolved holds `resend:<id>` from the send, which is the only handle we have
+      // back to the row. Only rows we believe we delivered can be corrected.
+      const { rowCount } = await db.query(
+        `update notification_outbox
+            set status='failed', last_error=$2
+          where channel_resolved = $1 and status = 'sent'`,
+        [`resend:${providerId}`, `${type} reported by provider`],
+      );
+      if (rowCount) {
+        // TODO-1 in TODOS.md: nobody is alerted on this yet, and it means a referrer was
+        // never told about their money. Loud in the logs until that lands.
+        console.error(`[notify] ${type} for ${providerId} — ${rowCount} notification(s) marked failed`);
+      }
+    }
+    res.status(204).end(); // 2xx or Resend retries
+  }));
+
   // ---- error boundary ----
   // eslint-disable-next-line no-unused-vars
   app.use((err, _req, res, _next) => {

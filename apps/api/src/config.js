@@ -57,6 +57,10 @@ export const config = {
     apiKey: process.env.EMAIL_API_KEY ?? null,
     from: process.env.EMAIL_FROM ?? 'GM Dental Gold Card <noreply@mail.gmdental.co.uk>',
     replyTo: process.env.EMAIL_REPLY_TO ?? null,
+    // Shared secret for POST /webhooks/resend. Unset means the endpoint refuses everything:
+    // an unauthenticated caller must never be able to mark a patient's money notification
+    // as failed.
+    webhookSecret: process.env.EMAIL_WEBHOOK_SECRET ?? null,
   },
   // FR: a referred friend must book within this window or the referral resets.
   referralBookingWindowHours: Number(process.env.REFERRAL_BOOKING_WINDOW_HOURS ?? 12),

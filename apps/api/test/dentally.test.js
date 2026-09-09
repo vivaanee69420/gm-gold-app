@@ -21,11 +21,11 @@ let tick = 0;
 const ts = () => new Date(base + ++tick * 1000).toISOString();
 const past = (days) => new Date(base - days * 86_400_000).toISOString();
 
-async function signIn(phone) {
+async function signIn(phone, email) {
   // Identity is email now; the phone is attached at the profile step. helpers/patient.js
-  // walks the same two HTTP calls the mobile app makes.
-  const session = await patientSession(app, authStub, { phone });
-  return session;
+  // walks the same two HTTP calls the mobile app makes. Pass `email` when the test needs the
+  // Dentally contact to carry the same address — that pairing is what verification checks.
+  return patientSession(app, authStub, { phone, email });
 }
 
 const auth = (token) => ({ Authorization: `Bearer ${token}` });
@@ -60,12 +60,16 @@ beforeAll(async () => {
   agents.practiceId = practices.rows[0].id;
 });
 
-describe('FR-05 referrer verification against the patient index', () => {
-  it('a known Dentally patient is verified and linked on role pick', async () => {
-    stub.stubAddPatient({ phone: '+447700910001', updatedAt: ts() });
+describe('FR-05 referrer verification: the two-key match (Q2)', () => {
+  // The rule: the VERIFIED email and the DECLARED phone must land on the SAME Dental OS
+  // contact. Phone alone is not enough — it is typed, not proved — so matching on it would
+  // let anyone who knows a patient's mobile number collect that patient's referral rewards.
+
+  it('verifies and links when BOTH keys hit one contact', async () => {
+    const email = 'known.patient@example.com';
+    stub.stubAddPatient({ phone: '+447700910001', email, updatedAt: ts() });
     await runSync('test');
-    const { token } = await signIn('+447700910001');
-    await request(app).post('/me/profile').set(auth(token)).send({ firstName: 'Sarah', lastName: 'Lewis', notifyOptIn: true });
+    const { token } = await signIn('+447700910001', email);
     const role = await request(app).post('/me/role').set(auth(token)).send({ role: 'referrer' });
     expect(role.body.user.verificationStatus).toBe('verified');
     expect(role.body.user.referralCode).toMatch(/^[A-Z2-9]{8}$/);
@@ -73,10 +77,54 @@ describe('FR-05 referrer verification against the patient index', () => {
     agents.code = role.body.user.referralCode;
   });
 
+  it('does NOT verify on a phone match alone — the impersonation case', async () => {
+    // The contact exists with this phone, but under somebody else's email. Before the
+    // two-key rule this verified, and the attacker collected the real patient's rewards.
+    stub.stubAddPatient({ phone: '+447700910007', email: 'real.owner@example.com', updatedAt: ts() });
+    await runSync('test');
+    const { token } = await signIn('+447700910007', 'attacker@example.com');
+    const role = await request(app).post('/me/role').set(auth(token)).send({ role: 'referrer' });
+    expect(role.body.user.verificationStatus).toBe('pending_review');
+  });
+
+  it('does NOT verify when phone and email point at DIFFERENT contacts', async () => {
+    stub.stubAddPatient({ phone: '+447700910008', email: 'someone@example.com', updatedAt: ts() });
+    stub.stubAddPatient({ phone: '+447700919999', email: 'split.keys@example.com', updatedAt: ts() });
+    await runSync('test');
+    const { token } = await signIn('+447700910008', 'split.keys@example.com');
+    const role = await request(app).post('/me/role').set(auth(token)).send({ role: 'referrer' });
+    // Two rows come back — precisely the shape of someone stitching together half-identities.
+    expect(role.body.user.verificationStatus).toBe('pending_review');
+  });
+
+  it('a contact with no email on file waits for the front desk, and clears on the retry pass', async () => {
+    const email = 'no.email.yet@example.com';
+    stub.stubAddPatient({ phone: '+447700910009', updatedAt: ts() }); // phone only
+    await runSync('test');
+    const { token, user } = await signIn('+447700910009', email);
+    const role = await request(app).post('/me/role').set(auth(token)).send({ role: 'referrer' });
+    expect(role.body.user.verificationStatus).toBe('pending_review');
+
+    // reason names WHICH half is missing, so the admin queue can say something useful.
+    const { rows: ev } = await db.query(
+      `select reason from events where entity_id=$1 and action='verification_pending' order by created_at desc limit 1`,
+      [user.id],
+    );
+    expect(ev[0].reason).toBe('email_unconfirmed');
+
+    // Front desk adds the address in Dental OS; the next sync pass resolves it with no
+    // action from the patient.
+    stub.stubStore.patients.find((p) => p.phone === '+447700910009').email = email;
+    stub.stubStore.patients.find((p) => p.phone === '+447700910009').updatedAt = ts();
+    const sync = await runSync('test');
+    expect(sync.verificationsResolved).toBe(1);
+    const { rows } = await db.query(`select verification_status from users where id=$1`, [user.id]);
+    expect(rows[0].verification_status).toBe('verified');
+  });
+
   it('an unknown number goes to pending_review (row 24: Dentally down during signup)', async () => {
     stub.stubStore.down = true; // outage: index cannot refresh, signup must not fail
-    const { token, user } = await signIn('+447700910002');
-    await request(app).post('/me/profile').set(auth(token)).send({ firstName: 'Pending', lastName: 'Person', notifyOptIn: false });
+    const { token, user } = await signIn('+447700910002', 'outage@example.com');
     const role = await request(app).post('/me/role').set(auth(token)).send({ role: 'referrer' });
     expect(role.body.user.verificationStatus).toBe('pending_review');
     agents.pendingUserId = user.id;
@@ -90,7 +138,7 @@ describe('FR-05 referrer verification against the patient index', () => {
     expect(down.error).toBeDefined(); // outage surfaced, not thrown
 
     stub.stubStore.down = false;
-    stub.stubAddPatient({ phone: '+447700910002', updatedAt: ts() });
+    stub.stubAddPatient({ phone: '+447700910002', email: 'outage@example.com', updatedAt: ts() });
     const sync = await runSync('test');
     expect(sync.verificationsResolved).toBe(1);
     const { rows } = await db.query(`select verification_status from users where id=$1`, [agents.pendingUserId]);
@@ -98,11 +146,11 @@ describe('FR-05 referrer verification against the patient index', () => {
   });
 
   it('an ambiguous (shared) number stays pending for the admin, and reject deactivates the code', async () => {
-    stub.stubAddPatient({ phone: '+447700910003', updatedAt: ts() });
-    stub.stubAddPatient({ phone: '+447700910003', updatedAt: ts() }); // family member, same mobile
+    const email = 'shared.number@example.com';
+    stub.stubAddPatient({ phone: '+447700910003', email, updatedAt: ts() });
+    stub.stubAddPatient({ phone: '+447700910003', email, updatedAt: ts() }); // family member, same mobile
     await runSync('test');
-    const { token, user } = await signIn('+447700910003');
-    await request(app).post('/me/profile').set(auth(token)).send({ firstName: 'Shared', lastName: 'Number', notifyOptIn: false });
+    const { token, user } = await signIn('+447700910003', email);
     const role = await request(app).post('/me/role').set(auth(token)).send({ role: 'referrer' });
     expect(role.body.user.verificationStatus).toBe('pending_review');
 
@@ -116,7 +164,6 @@ describe('FR-05 referrer verification against the patient index', () => {
 describe('FR-16 sync worker: eligibility, idempotency, cursor', () => {
   it('referred friend submits; a treatment completed BEFORE submission is ineligible (row 12)', async () => {
     const { token } = await signIn('+447700910010');
-    await request(app).post('/me/profile').set(auth(token)).send({ firstName: 'Jane', lastName: 'Smith', notifyOptIn: true });
     await request(app).post('/me/role').set(auth(token)).send({ role: 'referred' });
     const sub = await submitReferral(token, 'Jane Smith');
     expect(sub.status).toBe(200);
@@ -167,7 +214,6 @@ describe('FR-16 sync worker: eligibility, idempotency, cursor', () => {
 
   it('completed but UNPAID does not propose', async () => {
     const { token } = await signIn('+447700910011');
-    await request(app).post('/me/profile').set(auth(token)).send({ firstName: 'Una', lastName: 'Paid', notifyOptIn: false });
     await request(app).post('/me/role').set(auth(token)).send({ role: 'referred' });
     const sub = await submitReferral(token, 'Una Paid');
     agents.unpaidReferralId = sub.body.referral.id;

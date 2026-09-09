@@ -101,16 +101,18 @@ export async function saveProfile(userId, { firstName, lastName, phone, notifyOp
 
 export async function pickRole(userId, role) {
   if (role === 'referrer') {
-    // Referrer verification (FR-05): exact phone match against the Dentally patient
-    // index. One clean match → verified (linked to the Dentally record); none or
-    // several (shared family number) → pending_review for the admin queue, with the
-    // sync worker auto-resolving once a clean match appears. Mode 'off' keeps the
-    // pre-Stage-5 dev-verify so the loop stays walkable without any Dentally at all.
+    // Referrer verification (FR-05, Q2): the verified EMAIL and the declared PHONE must
+    // land on the SAME Dentally contact. Matching on phone alone would let anyone who knows
+    // a patient's mobile number claim their rewards; the email is the half we actually
+    // proved. One clean two-key match → verified; anything else → pending_review for the
+    // admin queue, with the sync worker auto-resolving once the missing half appears.
+    // Mode 'off' keeps the pre-Stage-5 dev-verify so the loop stays walkable without
+    // any Dentally at all.
     if ((await resolveDentallyMode()) === 'off') {
       await db.query(`update users set role_referrer=true, verification_status='verified' where id=$1`, [userId]);
     } else {
       const user = await getUser(userId);
-      const match = await matchPatientIndex(user.phone);
+      const match = await matchPatientIndex(user.phone, user.email);
       if (match.status === 'verified') {
         await db.query(
           `update users set role_referrer=true, verification_status='verified',

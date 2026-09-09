@@ -9,9 +9,12 @@
 // request shape, the real status-code branching and the real retryable/terminal split are
 // all exercised.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import request from 'supertest';
+import { bootTestApp } from './helpers/app.js';
 
 process.env.PGLITE_MEMORY = '1';
 
+let app;
 let db;
 let drainOnce;
 let send;
@@ -56,24 +59,16 @@ const rowOf = async (id) =>
   (await db.query(`select * from notification_outbox where id=$1`, [id])).rows[0];
 
 beforeAll(async () => {
-  // Same discipline as prod-mode.test.js: config.js reads these once at module evaluation,
-  // and vitest reuses worker processes between files, so anything left in process.env leaks
-  // into whichever suite runs next in this worker. Set, let the import capture it, restore.
-  const restore = { EMAIL_API_KEY: process.env.EMAIL_API_KEY, EMAIL_FROM: process.env.EMAIL_FROM };
-  process.env.EMAIL_API_KEY = 'test-resend-key';
-  process.env.EMAIL_FROM = 'GM Dental <noreply@mail.gmdental.co.uk>';
-  try {
-    const dbMod = await import('../src/db.js');
-    db = dbMod.db;
-    await dbMod.initDb();
-    ({ drainOnce } = await import('../src/services/outboxService.js'));
-    ({ send, EmailError } = await import('../src/services/emailService.js'));
-  } finally {
-    for (const [k, v] of Object.entries(restore)) {
-      if (v === undefined) delete process.env[k];
-      else process.env[k] = v;
-    }
-  }
+  ({ app, db } = await bootTestApp());
+  // Assign onto the loaded config rather than setting env: config.js is evaluated once per
+  // worker and may already have been imported by an earlier file in it, in which case env
+  // changes here would be silently ignored. Same reason bootTestApp works this way.
+  const { config } = await import('../src/config.js');
+  config.email.apiKey = 'test-resend-key';
+  config.email.from = 'GM Dental <noreply@mail.gmdental.co.uk>';
+  config.email.webhookSecret = 'test-email-hook-secret';
+  ({ drainOnce } = await import('../src/services/outboxService.js'));
+  ({ send, EmailError } = await import('../src/services/emailService.js'));
 });
 
 beforeEach(async () => {
@@ -308,5 +303,77 @@ describe('outbox drain', () => {
     const second = await drainOnce();
     expect(second.sent).toBe(3);
     expect(calls).toHaveLength(13);
+  });
+});
+
+describe('Resend delivery webhook', () => {
+  // A hard bounce is the one failure mode the outbox cannot detect itself: Resend accepted
+  // the message, so the send looked like a success, and the mailbox rejected it afterwards.
+  // Without this the row sits at 'sent' forever and a referrer is simply never told they
+  // earned money.
+  const hook = (body, secret = 'test-email-hook-secret') =>
+    request(app).post('/webhooks/resend').set('x-gmref-email-secret', secret).send(body);
+
+  it('marks a bounced notification failed', async () => {
+    stubResend(() => ok('re_bounce_me'));
+    const user = await makeUser();
+    const id = await queue(user, 'wallet_credit');
+    await drainOnce();
+    expect((await rowOf(id)).status).toBe('sent');
+
+    const res = await hook({ type: 'email.bounced', data: { email_id: 're_bounce_me' } });
+
+    expect(res.status).toBe(204);
+    const row = await rowOf(id);
+    expect(row.status).toBe('failed');
+    expect(row.last_error).toContain('email.bounced');
+  });
+
+  it('marks a spam complaint failed too', async () => {
+    stubResend(() => ok('re_complaint'));
+    const user = await makeUser();
+    const id = await queue(user, 'payout_receipt', { amountPennies: 500 });
+    await drainOnce();
+
+    await hook({ type: 'email.complained', data: { email_id: 're_complaint' } });
+    expect((await rowOf(id)).status).toBe('failed');
+  });
+
+  it('ignores a delivered event — it must not undo a successful send', async () => {
+    stubResend(() => ok('re_delivered'));
+    const user = await makeUser();
+    const id = await queue(user, 'wallet_credit');
+    await drainOnce();
+
+    await hook({ type: 'email.delivered', data: { email_id: 're_delivered' } });
+    expect((await rowOf(id)).status).toBe('sent');
+  });
+
+  it('rejects a wrong secret', async () => {
+    const res = await hook({ type: 'email.bounced', data: { email_id: 'x' } }, 'wrong-secret');
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects a missing secret', async () => {
+    const res = await request(app).post('/webhooks/resend').send({ type: 'email.bounced', data: { email_id: 'x' } });
+    expect(res.status).toBe(401);
+  });
+
+  it('204s an unknown provider id rather than erroring', async () => {
+    // Resend retries non-2xx. An event we cannot correlate is not a failure worth retrying.
+    const res = await hook({ type: 'email.bounced', data: { email_id: 'never-seen' } });
+    expect(res.status).toBe(204);
+  });
+
+  it('refuses everything when no webhook secret is configured', async () => {
+    const { config } = await import('../src/config.js');
+    const saved = config.email.webhookSecret;
+    config.email.webhookSecret = null;
+    try {
+      const res = await hook({ type: 'email.bounced', data: { email_id: 'x' } });
+      expect(res.status).toBe(503);
+    } finally {
+      config.email.webhookSecret = saved;
+    }
   });
 });

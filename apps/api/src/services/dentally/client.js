@@ -142,15 +142,23 @@ const iso = (v) => (v == null ? null : new Date(v).toISOString());
 const dentalOsClient = {
   async listPatients({ updatedAfter }) {
     const { rows } = await dosQuery(
-      `select c.id, c.phone, p.pms_site_id as site_id, c.updated_at
+      // email as well as phone (FR-05 two-key match): verification requires BOTH to hit the
+      // same contact, so an index carrying only phone cannot express it. getPatient below
+      // already selected c.email; only this bulk path was dropping it.
+      //
+      // The phone-not-null filter is now "has at least one key": an email-only contact is
+      // exactly the row this change exists to admit. dentally_patient_index enforces the
+      // same rule as a check constraint (migration 0013).
+      `select c.id, c.phone, c.email, p.pms_site_id as site_id, c.updated_at
        from contacts c left join practices p on p.id = c.practice_id
-       where c.updated_at > $1 and c.phone is not null
+       where c.updated_at > $1 and (c.phone is not null or c.email is not null)
        order by c.updated_at asc limit ${DOS_PAGE}`,
       [updatedAfter],
     );
     const items = rows.map((r) => ({
       id: String(r.id),
-      phone: normalizePhone(r.phone),
+      phone: normalizePhone(r.phone ?? ''),
+      email: normalizeEmail(r.email ?? ''),
       siteId: r.site_id ?? null,
       updatedAt: iso(r.updated_at),
     }));

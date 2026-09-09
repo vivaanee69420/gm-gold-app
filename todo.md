@@ -206,7 +206,24 @@ Design first (30 min), then build. Two distinct audiences:
 - [ ] `SignIn.jsx` → email field; keep phone sign-in out of the admin app entirely.
 - [ ] Invite flow: owner adds an email → invite email with magic link.
 
-### 4b. Patient app — decide identity model (needs your call, options ranked)
+### 4b. Patient app — DONE 2026-09-09 (Supabase Auth, option 1)
+- [x] Identity is **Supabase Auth by email**, not our own OTP. `otpService.js` and
+      `otp_deliveries` are deleted; `requireUser` verifies Supabase JWTs via JWKS and still
+      checks `sessions_revoked_at` so FR-03 revocation stays immediate. `users.id` IS
+      `auth.users.id` (no FK — the migration runner also runs against PGlite, which has no
+      `auth` schema). Mobile signs in with `signInWithOtp`/`verifyOtp` and keeps the session in
+      the OS keychain via `expo-secure-store`.
+- [x] `users.email` / `email_verified_at` / `phone_verified_at` added, `users.phone` nullable
+      (migration 0013). Phone is captured at the profile step.
+- [x] **Two-key verification (Q2 in full):** a referrer verifies only when the verified email
+      AND the declared phone hit the SAME Dental OS contact. Phone-only → `email_unconfirmed`
+      and the retry pass clears it once the front desk adds the address. Knowing someone's
+      mobile number is no longer enough to claim their rewards.
+- [ ] **Still yours:** set `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` on Railway, and
+      `EXPO_PUBLIC_SUPABASE_URL` + `EXPO_PUBLIC_SUPABASE_ANON_KEY` in eas.json (placeholders
+      in place). `expo-secure-store` is native, so the app needs a store build, not an OTA.
+
+### 4b-old. Original options (kept for the record)
 Phone is the Dentally matching key, so phone must still be captured; the question is what proves ownership.
 1. **Recommended:** sign in with **email OTP**; capture phone in profile; referrer verification requires
    **both** email *and* phone to match the **same** Dental OS contact (contacts have `email` + `phone`).

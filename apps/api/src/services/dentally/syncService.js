@@ -2,12 +2,16 @@
 //
 //   pg_try_advisory_lock('dentally_sync')      -- skip if another instance holds it
 //     ├─ refreshPatientIndex()                 -- patients cursor → dentally_patient_index upserts
+//     │                                           (phone AND email; either alone is indexable,
+//     │                                            neither is not — see the check constraint)
 //     ├─ scanCompletions()                     -- appointments cursor → completed appts
 //     │     └─ exact E.164 match against open referrals
 //     │        + eligibility (completed AFTER referral submitted)
 //     │        + a paid invoice for the patient
 //     │        → completion_proposals (unique per dentally_event_id — idempotent)
-//     └─ retryPendingVerifications()           -- FR-05 auto-resolve: clean index matches verify
+//     └─ retryPendingVerifications()           -- FR-05 auto-resolve: clears a pending referrer
+//                                                 once BOTH their phone and their verified
+//                                                 email land on one contact (Q2 two-key match)
 //   unlock
 //
 // Watermarks (sync_state) advance only after a page is fully processed, so a
@@ -62,16 +66,22 @@ async function practiceIdForSite(siteId) {
 /** One multi-row upsert per page — the backfill would crawl doing 500 single inserts. */
 async function batchUpsertPatientIndex(patients) {
   const byId = new Map(); // dedup within the page (last write wins), else ON CONFLICT errors
-  for (const p of patients) if (p?.phone) byId.set(p.id, p);
+  // At least one key, not specifically a phone: an email-only contact is indexable now and
+  // is the case the two-key match exists to strengthen. A contact with neither is unmatchable
+  // and only costs space on every pass (the table has a check constraint saying the same).
+  for (const p of patients) if (p?.phone || p?.email) byId.set(p.id, p);
   const rows = [];
-  for (const p of byId.values()) rows.push([p.id, p.phone, await practiceIdForSite(p.siteId)]);
+  for (const p of byId.values()) {
+    rows.push([p.id, p.phone ?? null, p.email ?? null, await practiceIdForSite(p.siteId)]);
+  }
   if (!rows.length) return 0;
-  const values = rows.map((_, i) => `($${i * 3 + 1},$${i * 3 + 2},$${i * 3 + 3},now())`).join(',');
+  const values = rows.map((_, i) => `($${i * 4 + 1},$${i * 4 + 2},$${i * 4 + 3},$${i * 4 + 4},now())`).join(',');
   await db.query(
-    `insert into dentally_patient_index (dentally_patient_id, phone, practice_id, refreshed_at)
+    `insert into dentally_patient_index (dentally_patient_id, phone, email, practice_id, refreshed_at)
      values ${values}
      on conflict (dentally_patient_id) do update
-       set phone=excluded.phone, practice_id=excluded.practice_id, refreshed_at=now()`,
+       set phone=excluded.phone, email=excluded.email,
+           practice_id=excluded.practice_id, refreshed_at=now()`,
     rows.flat(),
   );
   return rows.length;
@@ -272,11 +282,13 @@ async function scanCompletions(client) {
 /** FR-05 auto-resolve: pending_review referrers with a now-clean index match become verified. */
 async function retryPendingVerifications() {
   const { rows: pending } = await db.query(
-    `select id, phone from users where role_referrer and verification_status='pending_review'`,
+    `select id, phone, email from users where role_referrer and verification_status='pending_review'`,
   );
   let resolved = 0;
   for (const user of pending) {
-    const match = await matchPatientIndex(user.phone);
+    // Both keys, same as the first attempt. This is the path that clears an
+    // 'email_unconfirmed' patient once the front desk adds their address in Dental OS.
+    const match = await matchPatientIndex(user.phone, user.email);
     if (match.status !== 'verified') continue; // still no match or still ambiguous — stays with the admin queue
     await db.query(
       `update users set verification_status='verified', dentally_patient_id=$2, practice_id=$3 where id=$1`,
@@ -296,18 +308,61 @@ async function retryPendingVerifications() {
 }
 
 /**
- * Exact-phone lookup against the index (FR-05): one clean match verifies;
- * zero or several (shared family number) go to the admin review queue.
+ * Two-key match against the index (FR-05, todo.md Q2). Verification requires the verified
+ * EMAIL and the declared PHONE to land on the SAME Dental OS contact.
+ *
+ *                        matchPatientIndex(phone, email)
+ *                                    |
+ *              rows where phone matches OR email matches
+ *                     /              |              \
+ *              exactly 1        exactly 1         0 rows, or
+ *              row, BOTH        row, only         more than 1
+ *              keys match       one key           row
+ *                  |                |                  |
+ *              verified      pending_review      pending_review
+ *                            'email_unconfirmed'  'no_match' /
+ *                            or 'phone_unconfirmed'  'ambiguous_match'
+ *
+ * Why both: the email is proven — Supabase mailed a code to it and the patient read it. The
+ * phone is merely typed. Matching on phone alone means anyone who knows a patient's mobile
+ * number can sign up with their own email, claim to be that patient, and collect their
+ * referral rewards. Requiring both means an attacker needs the victim's inbox too, which is
+ * the thing we actually verified.
+ *
+ * A patient whose Dental OS contact has no email on file lands in the admin queue with
+ * `email_unconfirmed` rather than being rejected — the front desk adds the address, and
+ * retryPendingVerifications clears them on the next pass.
  */
-export async function matchPatientIndex(phone) {
+export async function matchPatientIndex(phone, email = null) {
+  if (!phone && !email) return { status: 'pending_review', reason: 'no_keys' };
+
   const { rows } = await db.query(
-    `select dentally_patient_id, practice_id from dentally_patient_index where phone=$1`,
-    [phone],
+    `select dentally_patient_id, practice_id, phone, email
+       from dentally_patient_index
+      where ($1::text is not null and phone = $1)
+         or ($2::text is not null and email = $2)`,
+    [phone ?? null, email ?? null],
   );
-  if (rows.length === 1) {
-    return { status: 'verified', dentallyPatientId: rows[0].dentally_patient_id, practiceId: rows[0].practice_id };
+
+  if (rows.length !== 1) {
+    // Zero is nobody; more than one means the phone and the email point at DIFFERENT
+    // contacts, which is precisely the impersonation shape — never auto-verify it.
+    return { status: 'pending_review', reason: rows.length === 0 ? 'no_match' : 'ambiguous_match' };
   }
-  return { status: 'pending_review', reason: rows.length === 0 ? 'no_match' : 'ambiguous_match' };
+
+  const row = rows[0];
+  const phoneMatches = Boolean(phone) && row.phone === phone;
+  const emailMatches = Boolean(email) && row.email === email;
+
+  if (phoneMatches && emailMatches) {
+    return { status: 'verified', dentallyPatientId: row.dentally_patient_id, practiceId: row.practice_id };
+  }
+  return {
+    status: 'pending_review',
+    // Name which half is missing so the admin queue can say something useful, and so
+    // retryPendingVerifications can tell "waiting on Dental OS data" from "does not match".
+    reason: phoneMatches ? 'email_unconfirmed' : 'phone_unconfirmed',
+  };
 }
 
 /** One full sync pass. Safe to call from the cron interval, a webhook, or an admin button. */
