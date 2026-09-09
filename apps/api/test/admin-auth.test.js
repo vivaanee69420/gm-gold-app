@@ -6,11 +6,14 @@ import { fileURLToPath } from 'node:url';
 import jwt from 'jsonwebtoken';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
+import { bootTestApp } from './helpers/app.js';
+import { patientSession } from './helpers/patient.js';
 import { adminSession } from './helpers/admin.js';
 
 process.env.PGLITE_MEMORY = '1';
 
 let app;
+let authStub;
 let db;
 let practiceId;
 
@@ -18,18 +21,14 @@ const auth = (token) => ({ Authorization: `Bearer ${token}` });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function signInPatient(phone) {
-  const send = await request(app).post('/auth/otp/send').send({ phone });
-  const code = send.body.devHint.match(/(\d{6})/)[1];
-  const verify = await request(app).post('/auth/otp/verify').send({ phone, code });
-  return verify.body.token;
+  // Identity is email now; the phone is attached at the profile step. helpers/patient.js
+  // walks the same two HTTP calls the mobile app makes.
+  const session = await patientSession(app, authStub, { phone });
+  return session.token;
 }
 
 beforeAll(async () => {
-  const dbModule = await import('../src/db.js');
-  await dbModule.initDb();
-  db = dbModule.db;
-  const { buildApp } = await import('../src/app.js');
-  app = buildApp();
+  ({ app, db, stub: authStub } = await bootTestApp());
 
   const practices = await db.query(`select id from practices where active order by name limit 1`);
   practiceId = practices.rows[0].id;

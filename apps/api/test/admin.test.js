@@ -3,22 +3,23 @@
 // Runs on in-memory PGlite like api.test.js.
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
+import { bootTestApp } from './helpers/app.js';
+import { patientSession } from './helpers/patient.js';
 import { adminSession } from './helpers/admin.js';
 
 process.env.PGLITE_MEMORY = '1';
 
 let app;
+let authStub;
 let db;
 const agents = {};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function signIn(phone) {
-  const send = await request(app).post('/auth/otp/send').send({ phone });
-  expect(send.status).toBe(200);
-  const code = send.body.devHint.match(/(\d{6})/)[1];
-  const verify = await request(app).post('/auth/otp/verify').send({ phone, code });
-  expect(verify.status).toBe(200);
-  return { token: verify.body.token, user: verify.body.user };
+  // Identity is email now; the phone is attached at the profile step. helpers/patient.js
+  // walks the same two HTTP calls the mobile app makes.
+  const session = await patientSession(app, authStub, { phone });
+  return session;
 }
 
 const auth = (token) => ({ Authorization: `Bearer ${token}` });
@@ -40,11 +41,7 @@ async function submitReferralAs(phone, fullName, interest = 'implants') {
 }
 
 beforeAll(async () => {
-  const dbModule = await import('../src/db.js');
-  await dbModule.initDb();
-  db = dbModule.db;
-  const { buildApp } = await import('../src/app.js');
-  app = buildApp();
+  ({ app, db, stub: authStub } = await bootTestApp());
 
   const referrer = await signIn('07700 900801');
   agents.referrer = referrer.token;
@@ -224,45 +221,35 @@ describe('admin payout cancel (FR-21)', () => {
 });
 
 describe('session revocation (FR-03)', () => {
-  it('kills tokens issued before the revocation', async () => {
-    const { token, user } = await signIn('07700 900805');
-    expect((await request(app).get('/me').set(auth(token))).status).toBe(200);
+  it('kills tokens issued before the revocation, and lets the patient sign in again', async () => {
+    const session = await patientSession(app, authStub, { phone: '07700 900805' });
+    expect((await request(app).get('/me').set(auth(session.token))).status).toBe(200);
 
-    await sleep(1100); // iat has second precision; make "issued before" unambiguous
+    await sleep(1100); // Supabase iat has second precision; make "issued before" unambiguous
     const revoke = await request(app)
-      .post(`/admin/users/${user.id}/revoke-sessions`).set(auth(agents.admin));
+      .post(`/admin/users/${session.user.id}/revoke-sessions`).set(auth(agents.admin));
     expect(revoke.status).toBe(200);
 
-    expect((await request(app).get('/me').set(auth(token))).status).toBe(401);
+    expect((await request(app).get('/me').set(auth(session.token))).status).toBe(401);
 
+    // Signing in again means the SAME Supabase identity, not the same phone number — under
+    // email identity a fresh sub is a different person, and users.phone is unique. Revocation
+    // must not lock the patient out of their own account permanently.
     await sleep(1100);
-    const again = await signIn('07700 900805'); // fresh sign-in works after revocation
+    const again = await patientSession(app, authStub, { sub: session.sub, profile: false });
     expect((await request(app).get('/me').set(auth(again.token))).status).toBe(200);
   });
 
-  // I5 (final review): requireUser used to compare `iat * 1000` against a sub-second
-  // sessions_revoked_at, so a token minted in the very second of the revocation that preceded
-  // it read as "issued before" and died. Tokens now carry iatMs (exact); tokens minted before
-  // that claim existed fall back to a second-granularity compare.
-  it('a legacy patient token with no iatMs is judged at second granularity', async () => {
-    const { config } = await import('../src/config.js');
-    const { default: jwt } = await import('jsonwebtoken');
-    const { user } = await signIn('07700 900806');
-
-    const legacy = jwt.sign({ sub: user.id, phone: user.phone }, config.jwtSecret, { expiresIn: '90d' });
-    const { iat } = jwt.decode(legacy);
-
-    // Revoked inside the same wall-clock second it was minted -> still alive.
-    await db.query(
-      `update users set sessions_revoked_at = to_timestamp($2::float8) + interval '400 milliseconds' where id=$1`,
-      [user.id, iat],
-    );
-    expect((await request(app).get('/me').set(auth(legacy))).status).toBe(200);
-
-    // Revoked in a strictly later second -> dead.
-    await db.query(`update users set sessions_revoked_at = to_timestamp($2::float8) where id=$1`, [user.id, iat + 1]);
-    expect((await request(app).get('/me').set(auth(legacy))).status).toBe(401);
-  });
+  // The old "legacy patient token with no iatMs" case is gone with the tokens themselves:
+  // requireUser verifies Supabase JWTs and rejects anything this API signed, so a jsonwebtoken
+  // token cannot reach the revocation check at all (auth-supabase.test.js asserts the
+  // rejection). tokenRevoked's second-granularity fallback still matters for ADMIN tokens and
+  // is covered by admin-auth.test.js "a legacy token with no iatMs is still evaluated".
+  //
+  // Patient revocation now fails CLOSED instead: middleware/auth.js treats the whole second
+  // containing the revocation as revoked, because Supabase issues no sub-second iat and a
+  // security control that rounds in favour of the token is a coin flip. Covered by
+  // auth-supabase.test.js.
 
   it('404s for an unknown user', async () => {
     const res = await request(app)

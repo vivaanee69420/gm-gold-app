@@ -3,22 +3,23 @@
 // Runs on in-memory PGlite like the other suites; the interleaved race needs real Postgres.
 import { beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
+import { bootTestApp } from './helpers/app.js';
+import { patientSession } from './helpers/patient.js';
 import { adminSession } from './helpers/admin.js';
 import { createAdmin, hashPassword } from '../src/services/adminService.js';
 
 process.env.PGLITE_MEMORY = '1';
 
 let app;
+let authStub;
 let db;
 const t = {};
 
 async function signIn(phone) {
-  const send = await request(app).post('/auth/otp/send').send({ phone });
-  expect(send.status).toBe(200);
-  const code = send.body.devHint.match(/(\d{6})/)[1];
-  const verify = await request(app).post('/auth/otp/verify').send({ phone, code });
-  expect(verify.status).toBe(200);
-  return { token: verify.body.token, user: verify.body.user };
+  // Identity is email now; the phone is attached at the profile step. helpers/patient.js
+  // walks the same two HTTP calls the mobile app makes.
+  const session = await patientSession(app, authStub, { phone });
+  return session;
 }
 
 const auth = (token) => ({ Authorization: `Bearer ${token}` });
@@ -60,11 +61,7 @@ async function managerFor(phone, practiceId) {
 }
 
 beforeAll(async () => {
-  const dbModule = await import('../src/db.js');
-  await dbModule.initDb();
-  db = dbModule.db;
-  const { buildApp } = await import('../src/app.js');
-  app = buildApp();
+  ({ app, db, stub: authStub } = await bootTestApp());
 
   t.admin = (await adminSession(app)).token;
   await request(app).put('/admin/reward-amount').set(auth(t.admin)).send({ amountPennies: 10000 });

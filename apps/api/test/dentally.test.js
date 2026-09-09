@@ -3,12 +3,13 @@
 import crypto from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
+import { bootTestApp } from './helpers/app.js';
+import { patientSession } from './helpers/patient.js';
 
 process.env.PGLITE_MEMORY = '1';
-process.env.DENTALLY_MODE = 'stub';
-process.env.DENTALLY_WEBHOOK_SECRET = 'test-webhook-secret';
 
 let app;
+let authStub;
 let db;
 let runSync;
 let stub;
@@ -21,10 +22,10 @@ const ts = () => new Date(base + ++tick * 1000).toISOString();
 const past = (days) => new Date(base - days * 86_400_000).toISOString();
 
 async function signIn(phone) {
-  const send = await request(app).post('/auth/otp/send').send({ phone });
-  const code = send.body.devHint.match(/(\d{6})/)[1];
-  const verify = await request(app).post('/auth/otp/verify').send({ phone, code });
-  return { token: verify.body.token, user: verify.body.user };
+  // Identity is email now; the phone is attached at the profile step. helpers/patient.js
+  // walks the same two HTTP calls the mobile app makes.
+  const session = await patientSession(app, authStub, { phone });
+  return session;
 }
 
 const auth = (token) => ({ Authorization: `Bearer ${token}` });
@@ -41,13 +42,15 @@ const submitReferral = (token, fullName, extra = {}) =>
   });
 
 beforeAll(async () => {
-  const { initDb, db: database } = await import('../src/db.js');
-  await initDb();
-  db = database;
+  // DENTALLY_* env goes through bootTestApp rather than module scope: config.js reads it
+  // once at import, and anything left in process.env leaks into whichever suite runs next
+  // in this vitest worker.
+  ({ app, db, stub: authStub } = await bootTestApp({
+    dentallyMode: 'stub',
+    dentallyWebhookSecret: 'test-webhook-secret',
+  }));
   ({ runSync } = await import('../src/services/dentally/syncService.js'));
   stub = await import('../src/services/dentally/client.js');
-  const { buildApp } = await import('../src/app.js');
-  app = buildApp();
   // Dynamic import: a static one would pull in config.js (via adminService.js) before the
   // DENTALLY_* env vars above are set, since ES module imports are hoisted ahead of them.
   const { adminSession } = await import('./helpers/admin.js');

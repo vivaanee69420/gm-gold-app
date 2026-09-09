@@ -4,29 +4,27 @@
 // points at Supabase; see test at bottom.
 import { beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
+import { bootTestApp } from './helpers/app.js';
+import { patientSession } from './helpers/patient.js';
 import { adminSession } from './helpers/admin.js';
 
 process.env.PGLITE_MEMORY = '1';
 
 let app;
+let authStub;
 const agents = {};
 
 async function signIn(phone) {
-  const send = await request(app).post('/auth/otp/send').send({ phone });
-  expect(send.status).toBe(200);
-  const code = send.body.devHint.match(/(\d{6})/)[1];
-  const verify = await request(app).post('/auth/otp/verify').send({ phone, code });
-  expect(verify.status).toBe(200);
-  return { token: verify.body.token, user: verify.body.user };
+  // Identity is email now; the phone is attached at the profile step. helpers/patient.js
+  // walks the same two HTTP calls the mobile app makes.
+  const session = await patientSession(app, authStub, { phone });
+  return session;
 }
 
 const auth = (token) => ({ Authorization: `Bearer ${token}` });
 
 beforeAll(async () => {
-  const { initDb } = await import('../src/db.js');
-  await initDb();
-  const { buildApp } = await import('../src/app.js');
-  app = buildApp();
+  ({ app, stub: authStub } = await bootTestApp());
   agents.admin = (await adminSession(app)).token;
 });
 
@@ -36,28 +34,20 @@ describe('auth', () => {
     expect(res.body.ok).toBe(true);
   });
 
-  it('rejects a wrong OTP and caps attempts', async () => {
-    const phone = '+447700900001';
-    await request(app).post('/auth/otp/send').send({ phone });
-    for (let i = 0; i < 5; i += 1) {
-      const bad = await request(app).post('/auth/otp/verify').send({ phone, code: '000001' });
-      expect(bad.status).toBe(401);
-    }
-    const capped = await request(app).post('/auth/otp/verify').send({ phone, code: '000001' });
-    expect(capped.status).toBe(429);
-  });
+  // The wrong-code cap and the send rate limit used to be tested here against
+  // otpService.js. That file is gone: Supabase Auth generates, stores, expires and
+  // rate-limits login codes now, so those are its behaviours to guarantee, not ours, and a
+  // test asserting them here would only be testing a mock. What IS still ours is that the old
+  // endpoints are gone — asserted in auth-supabase.test.js — and that a verified Supabase
+  // token maps to the right account, asserted there too.
+  //
+  // Operational note that replaces the deleted rate-limit test: Supabase's auth email limit
+  // defaults to 30/hour with custom SMTP. Raise it in the dashboard before any launch push.
 
-  it('rate-limits sends (3 per 5 minutes)', async () => {
-    const phone = '+447700900002';
-    for (let i = 0; i < 3; i += 1) {
-      expect((await request(app).post('/auth/otp/send').send({ phone })).status).toBe(200);
-    }
-    expect((await request(app).post('/auth/otp/send').send({ phone })).status).toBe(429);
-  });
-
-  it('signs in with the dev code and normalizes the phone', async () => {
+  it('signs in, and the phone captured at profile is normalized to E.164', async () => {
     const { user, token } = await signIn('07700 900123');
     expect(user.phone).toBe('+447700900123');
+    expect(user.email).toMatch(/@example\.com$/);
     agents.referrer = token;
   });
 });

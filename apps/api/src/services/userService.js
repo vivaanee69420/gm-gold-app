@@ -5,21 +5,50 @@ import { config } from '../config.js';
 import { matchPatientIndex } from './dentally/syncService.js';
 import { resolveDentallyMode } from './dentally/connectionService.js';
 
-export async function getOrCreateUserByPhone(phone) {
-  const found = await db.query(`select * from users where phone = $1`, [phone]);
-  if (found.rows[0]) return found.rows[0];
-  const created = await db.query(`insert into users (phone) values ($1) returning *`, [phone]);
-  // No actorKind: this row is created mid-OTP-verify, before any session exists — there is no
-  // acting id to name, and 'user' would imply one. Null is the honest answer.
-  await logEvent(db, { entityType: 'user', entityId: created.rows[0].id, action: 'created' });
-  return created.rows[0];
-}
+/**
+ * The patient profile row for a verified Supabase identity.
+ *
+ * `users.id` IS `auth.users.id` — the same uuid, deliberately not a join table and not a
+ * mapping column, so there is nothing to keep in sync and no way for the two to diverge.
+ * There is no foreign key to `auth.users` though: db.js runs migrations unconditionally,
+ * including under PGlite in tests, and PGlite has no `auth` schema at all. The link is an
+ * invariant this function maintains, not one the database enforces.
+ *
+ * Called on every authenticated request, so the common path is a single indexed SELECT.
+ * Insert only happens on a patient's very first request after signing up.
+ */
+export async function getOrCreateUserByAuthId({ sub, email }) {
+  const found = await db.query(`select * from users where id = $1`, [sub]);
+  if (found.rows[0]) {
+    // Supabase is the source of truth for the address. Backfill a row created before the
+    // email was confirmed, and follow an address change made through Supabase.
+    if (email && found.rows[0].email !== email) {
+      const { rows } = await db.query(
+        `update users set email = $2, email_verified_at = now() where id = $1 returning *`,
+        [sub, email],
+      );
+      return rows[0];
+    }
+    return found.rows[0];
+  }
 
-export function issueToken(user) {
-  // Dev sessions: long-lived signed token. Supabase Auth sessions replace this in Stage 2-proper.
-  // iatMs: see tokenRevoked() — jwt's own `iat` is whole seconds, too coarse to say whether this
-  // token was minted before or after a revocation that happened in the same second.
-  return jwt.sign({ sub: user.id, phone: user.phone, iatMs: Date.now() }, config.jwtSecret, { expiresIn: '90d' });
+  // Two concurrent first requests (the app firing /me and /practices at once) both miss the
+  // select above. ON CONFLICT makes the loser a no-op rather than a 500, and the reselect
+  // below gives it the winner's row. `phone` is null here by design — it is captured at the
+  // profile step, and the referrer path gates on its presence.
+  const created = await db.query(
+    `insert into users (id, email, email_verified_at) values ($1, $2, now())
+     on conflict (id) do nothing returning *`,
+    [sub, email],
+  );
+  if (created.rows[0]) {
+    // No actorKind: the row is created on the user's first authenticated request, and while
+    // there is now a session, naming the actor as the row being created reads as circular.
+    await logEvent(db, { entityType: 'user', entityId: created.rows[0].id, action: 'created' });
+    return created.rows[0];
+  }
+  const raced = await db.query(`select * from users where id = $1`, [sub]);
+  return raced.rows[0] ?? null;
 }
 
 export function verifyToken(token) {
@@ -46,14 +75,28 @@ export async function getUser(id) {
   return rows[0] ?? null;
 }
 
-export async function saveProfile(userId, { firstName, lastName, notifyOptIn }) {
-  const { rows } = await db.query(
-    `update users set first_name=$2, last_name=$3, notify_opt_in=$4,
-       notify_opt_in_version='notify-v1-2026-08', notify_opt_in_at=now()
-     where id=$1 returning *`,
-    [userId, firstName, lastName, notifyOptIn],
-  );
-  return rows[0];
+export async function saveProfile(userId, { firstName, lastName, phone, notifyOptIn }) {
+  try {
+    const { rows } = await db.query(
+      `update users set first_name=$2, last_name=$3, phone=$4, phone_verified_at=null,
+         notify_opt_in=$5, notify_opt_in_version='notify-v1-2026-08', notify_opt_in_at=now()
+       where id=$1 returning *`,
+      [userId, firstName, lastName, phone, notifyOptIn],
+    );
+    return rows[0];
+  } catch (err) {
+    // users.phone is unique. Two accounts claiming one number is a real case now that
+    // identity is email: a patient who signs up twice with different addresses, or someone
+    // typing a number that is not theirs. 23505 is Postgres' unique_violation.
+    //
+    // phone_verified_at stays null above deliberately: the number is self-declared. What
+    // makes it trustworthy is matching a Dentally contact that ALSO matches the verified
+    // email (FR-05, two-key match), not the fact that someone typed it.
+    if (err.code === '23505') {
+      throw Object.assign(new Error('phone_taken'), { status: 409 });
+    }
+    throw err;
+  }
 }
 
 export async function pickRole(userId, role) {
@@ -119,10 +162,14 @@ export function publicUser(user) {
   return {
     id: user.id,
     phone: user.phone,
+    email: user.email,
     firstName: user.first_name,
     lastName: user.last_name,
     roles,
     verificationStatus: user.verification_status,
     notifyOptIn: user.notify_opt_in,
+    // The app gates the referrer role on having a phone on file (it is the Dentally
+    // matching key), so it needs to know without inferring from a null.
+    needsPhone: !user.phone,
   };
 }

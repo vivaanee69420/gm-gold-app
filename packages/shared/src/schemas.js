@@ -39,19 +39,13 @@ export const referralCodeSchema = z
     return code;
   });
 
-export const otpSendSchema = z.object({
-  phone: phoneSchema,
-  channel: z.enum(['whatsapp', 'sms']).optional(),
-});
-
-export const otpVerifySchema = z.object({
-  phone: phoneSchema,
-  code: z.string().regex(/^\d{6}$/, 'invalid_otp'),
-});
-
+// Phone is captured here, not at sign-in: Supabase Auth owns identity by EMAIL now, but
+// phone is still the key that matches a patient to their Dentally record (FR-05), so every
+// account has to provide one before the referrer role means anything.
 export const profileSchema = z.object({
   firstName: z.string().trim().min(1).max(60),
   lastName: z.string().trim().min(1).max(60),
+  phone: phoneSchema,
   notifyOptIn: z.boolean(),
 });
 

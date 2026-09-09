@@ -4,8 +4,6 @@ import express from 'express';
 import cors from 'cors';
 import { z } from 'zod';
 import {
-  otpSendSchema,
-  otpVerifySchema,
   profileSchema,
   roleSchema,
   referralSubmitSchema,
@@ -14,10 +12,7 @@ import {
   adminLoginSchema,
 } from '@gm-referral/shared/schemas';
 import { db, logEvent } from './db.js';
-import { sendOtp, verifyOtp } from './services/otpService.js';
 import {
-  getOrCreateUserByPhone,
-  issueToken,
   saveProfile,
   pickRole,
   publicUser,
@@ -163,15 +158,16 @@ export function buildApp() {
   app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
   // ---- auth ----
-  app.post('/auth/otp/send', validate(otpSendSchema), wrap(async (req, res) => {
-    res.json(await sendOtp(req.data.phone));
-  }));
-
-  app.post('/auth/otp/verify', validate(otpVerifySchema), wrap(async (req, res) => {
-    await verifyOtp(req.data.phone, req.data.code);
-    const user = await getOrCreateUserByPhone(req.data.phone);
-    res.json({ ok: true, token: issueToken(user), user: await publicUserWithCode(user) });
-  }));
+  //
+  // Patient sign-in has NO endpoint here. The mobile app talks to Supabase Auth directly
+  // (signInWithOtp / verifyOtp) and sends the resulting access token as a bearer; requireUser
+  // verifies it against the project's public keys. See middleware/auth.js.
+  //
+  // /auth/otp/send and /auth/otp/verify were deleted rather than deprecated. They minted a
+  // session from a phone number using a code that /auth/otp/send handed back in its own
+  // response, so leaving them mounted "just during the transition" would have kept a working
+  // sign-in-as-anyone bypass alongside the auth system built to close it. The usual
+  // dual-accept migration pattern assumes the old path is merely old; this one was the hole.
 
   // Dashboard accounts: email + password, its own identity table (admin_users), not a
   // patient session. See middleware/auth.js requireAdmin / services/adminService.js.
@@ -431,7 +427,7 @@ export function buildApp() {
   app.put('/admin/settings', requireAdmin, wrap(async (req, res) => {
     const entries = Object.entries(req.body ?? {}).filter(([k]) =>
       // invite_sent_manual_count: FR-28's hand-entered GHL campaign count (CSV upload is Phase 2).
-      ['payout_threshold_pennies', 'payout_expiry_days', 'otp_channel_mode', 'invite_sent_manual_count'].includes(k),
+      ['payout_threshold_pennies', 'payout_expiry_days', 'invite_sent_manual_count'].includes(k),
     );
     for (const [key, value] of entries) {
       await db.query(

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { normalizePhone, isUkMobile, isE164 } from '../src/phone.js';
 import { normalizeCode, formatCode, generateCode, CODE_ALPHABET } from '../src/referral-code.js';
 import { formatPennies, addPennies, parseGBPToPennies, assertPennies } from '../src/money.js';
-import { referralSubmitSchema, otpVerifySchema, phoneSchema, adminLoginSchema, adminCreateSchema } from '../src/schemas.js';
+import { referralSubmitSchema, profileSchema, phoneSchema, adminLoginSchema, adminCreateSchema } from '../src/schemas.js';
 
 describe('phone normalization', () => {
   it('normalizes UK domestic formats to E.164', () => {
@@ -95,10 +95,26 @@ describe('schemas', () => {
       }),
     ).toThrow();
   });
-  it('validates OTP shape and normalizes phones', () => {
-    expect(otpVerifySchema.parse({ phone: '07700 900123', code: '123456' }).phone).toBe('+447700900123');
-    expect(() => otpVerifySchema.parse({ phone: '07700 900123', code: '12345' })).toThrow();
+  // otpSendSchema / otpVerifySchema are gone: Supabase Auth owns login codes now, so there
+  // is no OTP payload of ours left to validate. The phone normalization those tests really
+  // cared about moved to profileSchema, which is where a phone number now enters the system.
+  it('normalizes a free-typed phone to E.164', () => {
     expect(phoneSchema.parse('07700 900123')).toBe('+447700900123');
+  });
+
+  it('profileSchema requires a phone and normalizes it', () => {
+    const parsed = profileSchema.parse({
+      firstName: 'Sarah', lastName: 'Lewis', phone: '07700 900123', notifyOptIn: true,
+    });
+    expect(parsed.phone).toBe('+447700900123');
+    // Phone is the Dentally matching key (FR-05), so an account without one cannot be
+    // verified as a referrer. Making it optional here would let that fail silently later.
+    expect(() => profileSchema.parse({
+      firstName: 'Sarah', lastName: 'Lewis', notifyOptIn: true,
+    })).toThrow();
+    expect(() => profileSchema.parse({
+      firstName: 'Sarah', lastName: 'Lewis', phone: 'not-a-phone', notifyOptIn: true,
+    })).toThrow();
   });
 });
 

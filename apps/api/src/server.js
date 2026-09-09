@@ -60,6 +60,6 @@ digestTick().catch((err) => console.error('[digest] failed', err.message));
 
 app.listen(config.port, () => {
   console.log(
-    `[api] listening on http://localhost:${config.port} (db: ${kind}, otp: ${config.otpChannelMode}, dentally: ${config.dentally.modeOverride ?? 'auto'})`,
+    `[api] listening on http://localhost:${config.port} (db: ${kind}, dentally: ${config.dentally.modeOverride ?? 'auto'})`,
   );
 });

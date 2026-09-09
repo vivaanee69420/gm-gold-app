@@ -28,8 +28,27 @@ export const config = {
   // Supabase Postgres connection string in production/staging; unset = embedded dev Postgres (PGlite).
   databaseUrl: process.env.DATABASE_URL ?? null,
   jwtSecret: process.env.API_JWT_SECRET ?? 'dev-only-secret-change-me',
-  // sms_only | whatsapp_primary come later (FR-02a); dev logs codes instead of sending.
-  otpChannelMode: process.env.OTP_CHANNEL_MODE ?? 'dev',
+  // Supabase Auth owns patient identity (decision 2026-09-09). The API never issues a patient
+  // token any more; it verifies Supabase's, against the project's public keys.
+  //
+  // jwksUrl is derived from `url` so there is one thing to configure, not two that can drift.
+  // `issuer` is what the `iss` claim must equal — checking it is what stops a token minted by
+  // somebody else's Supabase project from being accepted by ours.
+  //
+  // Note for whoever moves this to the London project: new Supabase projects sign with
+  // asymmetric keys (ES256) and publish a JWKS endpoint, which is what this expects. A legacy
+  // project still on the shared HS256 secret would need a different verification path.
+  supabase: (() => {
+    const url = (process.env.SUPABASE_URL ?? '').replace(/\/+$/, '') || null;
+    return {
+      url,
+      jwksUrl: process.env.SUPABASE_JWKS_URL ?? (url ? `${url}/auth/v1/.well-known/jwks.json` : null),
+      issuer: process.env.SUPABASE_JWT_ISSUER ?? (url ? `${url}/auth/v1` : null),
+      // Server-side only. Used for "sign out everywhere" (FR-03) and nothing else so far.
+      // Never goes near a response body.
+      serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? null,
+    };
+  })(),
   // Outbound email (Resend, Q4: sending from mail.gmdental.co.uk). No boot guard on the key
   // deliberately: a missing key must not stop the API serving, it must stop the OUTBOX
   // claiming a send succeeded — see emailService, which treats it as a retryable fault in

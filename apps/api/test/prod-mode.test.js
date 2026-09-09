@@ -5,6 +5,8 @@
 //
 //   /auth/otp/send      -> returned the six-digit code in `devHint` (otpService.js), so
 //                          anyone could sign in as any phone number, admin accounts included
+//                          [that endpoint is now DELETED — see auth-supabase.test.js, which
+//                           asserts it 404s; Supabase Auth issues codes now]
 //   /dev/dentally/*     -> stub endpoints mounted on the public API (app.js)
 //   /webhooks/dentally  -> accepted unsigned calls when no secret was configured
 //
@@ -53,35 +55,6 @@ describe('production mode closes the dev surfaces', () => {
   it('confirms the app really is in production mode', async () => {
     const { isDev } = await import('../src/config.js');
     expect(isDev).toBe(false);
-  });
-
-  it('/auth/otp/send does NOT return the code', async () => {
-    const res = await request(app).post('/auth/otp/send').send({ phone: '07700900123' });
-    expect(res.status).toBe(200);
-    expect(res.body.devHint).toBeUndefined();
-    // Belt and braces: no six-digit code anywhere in the response, whatever it is called.
-    expect(JSON.stringify(res.body)).not.toMatch(/\d{6}/);
-  });
-
-  it('does not print the OTP code to stdout', async () => {
-    // Railway streams stdout to its log viewer and to any configured drain, so a code in
-    // the logs is a working sign-in for anyone with log access. This was live: the
-    // console.log in otpService.sendOtp was unconditional, not gated on isDev.
-    const lines = [];
-    const original = console.log;
-    console.log = (...args) => lines.push(args.join(' '));
-    try {
-      await request(app).post('/auth/otp/send').send({ phone: '07700900456' });
-    } finally {
-      console.log = original;
-    }
-    const otpLines = lines.filter((l) => l.includes('[otp]'));
-    expect(otpLines.length).toBeGreaterThan(0); // the send is still observable
-    // Assert the exact production line rather than "no six digits anywhere" — an E.164
-    // phone number contains plenty of six-digit runs of its own, so a loose regex passes
-    // for the wrong reason. The contract is: the fact of the send, and nothing more.
-    expect(otpLines).toEqual(['[otp] sent to +447700900456']);
-    for (const line of otpLines) expect(line).not.toContain('code');
   });
 
   it('/dev/dentally/add-patient is not mounted', async () => {
