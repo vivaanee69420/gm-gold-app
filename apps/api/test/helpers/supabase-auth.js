@@ -11,20 +11,50 @@
 // The alternative (a test-only bypass flag inside requireUser) was rejected in review: an
 // auth bypass guarded by an env var is one bad deploy from being a production bypass, which
 // is the exact class of bug this whole migration exists to remove.
+import crypto from 'node:crypto';
 import http from 'node:http';
 import { SignJWT, exportJWK, generateKeyPair } from 'jose';
 
 const ALG = 'ES256'; // what current Supabase projects sign with
-const KID = 'test-key-1';
+
+// A UNIQUE kid per stub, and this is the load-bearing part of the flake fix.
+//
+// jose's createRemoteJWKSet caches keys and only refetches when it meets a `kid` it does not
+// know. With every stub publishing the same kid, a key set cached from stub A would happily
+// answer for a token signed by stub B — same kid, so no refetch — verify against A's public
+// key, fail the signature, and 401 a perfectly valid token. That is a wrong-key error dressed
+// up as an auth failure, and it surfaced as roughly one run in three under a shared module
+// registry.
+//
+// With a unique kid, a stale key set meets an unknown kid, refetches from whatever URL config
+// currently points at, and gets the right key. Self-healing rather than silently wrong.
+const kidFor = () => `test-key-${crypto.randomUUID()}`;
 
 /**
- * Start the stub. Call BEFORE importing config.js — it returns the env the config module
- * must see, and config reads it once at module evaluation.
+ * ONE stub per process, memoized.
  *
- * @returns {Promise<{env: object, signToken: Function, stop: Function, jwksHits: () => number}>}
+ * This is not an optimisation, it is a correctness fix. bootTestApp points the shared
+ * `config.supabase` at the stub, and vitest can run several test files against one module
+ * registry (notably with --poolOptions.threads.singleThread). A stub per file meant the last
+ * file to boot repointed config at ITS keypair, so a file already running got 401s on tokens
+ * its own stub had signed — six auth tests failing perhaps one run in three.
+ *
+ * One keypair and one JWKS server for the whole process means every file's tokens verify
+ * against the same keys, whatever order files run in and whether or not they share a registry.
+ *
+ * Consequence: do NOT stop this in an afterAll. Whoever stops it breaks every file after it.
  */
+let shared = null;
+
 export async function startSupabaseAuthStub() {
+  if (shared) return shared;
+  shared = await createStub();
+  return shared;
+}
+
+async function createStub() {
   const { publicKey, privateKey } = await generateKeyPair(ALG, { extractable: true });
+  const KID = kidFor();
   const jwk = { ...(await exportJWK(publicKey)), kid: KID, alg: ALG, use: 'sig' };
 
   let hits = 0;
@@ -75,7 +105,9 @@ export async function startSupabaseAuthStub() {
     },
     signToken,
     jwksHits: () => hits,
-    stop: () => new Promise((resolve) => server.close(resolve)),
+    // Deliberately a no-op: the stub is shared process-wide, so stopping it from one file's
+    // afterAll would 401 every file that runs afterwards. The process exiting cleans it up.
+    stop: async () => {},
   };
 }
 

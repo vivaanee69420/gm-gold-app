@@ -74,6 +74,22 @@ Created by /plan-eng-review on 2026-08-14.
   "Sender email address" AND `EMAIL_FROM` in the API env — they must match.
   **Blocked by:** nothing. It is 10 minutes of DNS whenever you want it.
 
+- [ ] **Rare cross-file test flake (~1 run in 11)** — not root-caused, recorded so the next
+  person does not start from zero. Symptom: a handful of tests fail with the sync worker
+  returning nothing (`verificationsResolved: 0`, `proposalsCreated: 0`) or `requireUser`
+  answering 401 to a token that is valid. Always passes on a re-run.
+  **What is established:** `test/dentally.test.js` alone is 8/8 green, so it is not
+  order-dependence inside that file. It only appears when files run together, which points at
+  module-global state that each test file implicitly assumes it owns: `db.js:13` holds a
+  module-level `driver` that `initDb()` reassigns, and `syncService.js:27` holds a
+  module-level `inFlight` guard. In the default pool each file gets its own worker and module
+  registry, so that assumption normally holds — under load or a shared registry it does not.
+  **Do NOT use `--poolOptions.threads.singleThread` on this suite.** It shares one registry
+  across files, so the second file's `initDb()` swaps the database out from under the first,
+  and it fails ~1 run in 3. It is not a stricter check; it is an invalid one.
+  **Where to start:** make `db.js` expose a per-caller handle rather than a module-global
+  driver, or give vitest `isolate` guarantees the suite can actually rely on.
+
 ## Phase 2 backlog
 
 See `docs/FLOWS.md` §9 — the authoritative list (web capture page tripwire lever, wallet passes, leaderboard/draw, percent rules, fraud scoring, deferred deep linking, admin conveniences with MVP stand-ins, staff-side referral entry, self-service phone change, fuzzy matching).

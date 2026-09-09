@@ -145,6 +145,26 @@ describe('FR-05 referrer verification: the two-key match (Q2)', () => {
     expect(rows[0].verification_status).toBe('verified');
   });
 
+  it('the admin queue carries the email and the REASON, not just a name and a phone', async () => {
+    // Since verification became a two-key match, "pending" means four different things that
+    // need four different actions from the front desk. A queue showing only a name and a
+    // number cannot tell them apart — and getting it wrong on email_unconfirmed means
+    // clicking Approve, which marks the patient verified without the second key ever
+    // matching and quietly discards the fraud check.
+    const email = 'queue.reason@example.com';
+    stub.stubAddPatient({ phone: '+447700910020', updatedAt: ts() }); // phone only, no email
+    await runSync('test');
+    const { token } = await signIn('+447700910020', email);
+    await request(app).post('/me/role').set(auth(token)).send({ role: 'referrer' });
+
+    const queue = await request(app).get('/admin/verifications').set(auth(agents.admin));
+    const row = queue.body.verifications.find((v) => v.phone === '+447700910020');
+
+    expect(row).toBeDefined();
+    expect(row.email).toBe(email);
+    expect(row.reason).toBe('email_unconfirmed');
+  });
+
   it('an ambiguous (shared) number stays pending for the admin, and reject deactivates the code', async () => {
     const email = 'shared.number@example.com';
     stub.stubAddPatient({ phone: '+447700910003', email, updatedAt: ts() });

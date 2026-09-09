@@ -585,3 +585,31 @@ button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: de
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+/* Verification queue: why a referrer is waiting, and what to do about it.
+   Three tones rather than a single grey note, because the actions genuinely differ:
+   `fixable` resolves itself once Dental OS is corrected (do NOT approve — approving skips
+   the second key and throws away the fraud check), `check` needs a look, `care` is the
+   shape impersonation takes and needs a human decision. */
+.verify-reason {
+  display: inline-block;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--mist);
+  color: var(--mist);
+  margin: 6px 0 4px;
+}
+.verify-reason--fixable { border-color: var(--success); color: var(--success); }
+.verify-reason--check   { border-color: var(--gold); color: var(--gold); }
+.verify-reason--care    { border-color: var(--danger); color: var(--danger); }
+
+.verify-action {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--mist);
+  max-width: 52ch;
+}

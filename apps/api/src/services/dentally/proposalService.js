@@ -120,11 +120,38 @@ export async function rejectProposal(proposalId, adminId, reason) {
 
 // ---- FR-05 verification queue ----
 
+/**
+ * The admin review queue (FR-05).
+ *
+ * Carries the EMAIL and the REASON, not just a name and a phone. Since verification became a
+ * two-key match, "pending" covers four different situations that need four different actions
+ * from the front desk, and they are not distinguishable by looking at the patient:
+ *
+ *   email_unconfirmed  -> we matched their phone; their Dental OS contact has no email, or a
+ *                         different one. Add it there and the next sync pass verifies them
+ *                         automatically — nobody needs to click approve.
+ *   phone_unconfirmed  -> we matched their email; the phone they typed is not on that contact.
+ *   ambiguous_match    -> phone and email point at DIFFERENT contacts, or a shared family
+ *                         number. Needs a human, and is the shape impersonation takes.
+ *   no_match           -> not a patient here, or Dentally was down when they signed up.
+ *
+ * The reason lives in the events log (written by pickRole), so it is joined back rather than
+ * duplicated onto users — one source of truth, and the history stays inspectable.
+ *
+ * The ::text cast is load-bearing: events.entity_id is text (0001_init.sql:116) because the
+ * log is polymorphic across entity types, while users.id is uuid. Without it Postgres has no
+ * operator for the comparison and the whole endpoint 500s.
+ */
 export async function pendingVerifications() {
   const { rows } = await db.query(
-    `select id, phone, first_name, last_name, created_at from users
-     where role_referrer and verification_status='pending_review'
-     order by created_at asc`,
+    `select u.id, u.phone, u.email, u.first_name, u.last_name, u.created_at,
+            (select e.reason from events e
+              where e.entity_type='user' and e.entity_id=u.id::text
+                and e.action='verification_pending'
+              order by e.created_at desc limit 1) as reason
+       from users u
+      where u.role_referrer and u.verification_status='pending_review'
+      order by u.created_at asc`,
   );
   return rows;
 }

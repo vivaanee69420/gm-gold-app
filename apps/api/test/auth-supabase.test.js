@@ -5,7 +5,7 @@
 // merely failed to check: if requireUser answers 401 when Supabase's JWKS endpoint is
 // briefly unreachable, every patient is signed out at once and the mobile client clears its
 // stored session on the way out. A blip becomes a mass logout.
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { generateKeyPair } from 'jose';
 import { bootTestApp } from './helpers/app.js';
@@ -30,9 +30,8 @@ beforeAll(async () => {
   supabaseAuth = await import('../src/services/supabaseAuth.js');
 });
 
-afterAll(async () => {
-  await stub?.stop();
-});
+// No afterAll stopping the stub: it is shared process-wide (see helpers/supabase-auth.js).
+// Stopping it here would 401 every suite that runs after this one.
 
 describe('requireUser: tokens it must accept', () => {
   it('accepts a valid token and creates the profile row on first contact', async () => {
