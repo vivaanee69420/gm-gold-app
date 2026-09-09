@@ -64,6 +64,16 @@ Created by /plan-eng-review on 2026-08-14.
   the partial index from I9 keeps the drain fast regardless. `otp_deliveries` retention is moot;
   that table is dropped in migration 0013.
 
+- [ ] **Move sending back to `mail.gmdental.co.uk` before the first real patient** — testing
+  currently borrows `mail.plan4growth.uk`, which was already verified in Resend (2026-09-09).
+  Two reasons it cannot ship: a GM Dental login code arriving from `plan4growth.uk` is
+  indistinguishable from phishing, and it trains patients to accept codes from a domain that
+  is not their dentist; and sender reputation is per-domain, so a spam complaint against
+  either business would degrade the other's deliverability. Work: verify
+  `mail.gmdental.co.uk` in Resend (DKIM/SPF/DMARC), then change BOTH the Supabase SMTP
+  "Sender email address" AND `EMAIL_FROM` in the API env — they must match.
+  **Blocked by:** nothing. It is 10 minutes of DNS whenever you want it.
+
 ## Phase 2 backlog
 
 See `docs/FLOWS.md` §9 — the authoritative list (web capture page tripwire lever, wallet passes, leaderboard/draw, percent rules, fraud scoring, deferred deep linking, admin conveniences with MVP stand-ins, staff-side referral entry, self-service phone change, fuzzy matching).
