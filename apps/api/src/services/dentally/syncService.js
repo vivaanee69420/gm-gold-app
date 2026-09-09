@@ -175,19 +175,24 @@ async function processCompletedPage(client, appointments) {
 
       if (paidInvoice === undefined) {
         const { items: invoices } = await client.listInvoices({ patientId: appointment.patientId });
-        // The invoice must be THEIRS, FOR THIS TREATMENT — i.e. dated on or after the referral.
-        // `invoices.find((i) => i.paid)` alone accepted ANY paid invoice ever, so a returning
-        // patient's years-old invoice satisfied "they have paid". Measured against real data
-        // 2026-09-09: 31.5% of recent attendees have a paid invoice dated >30 days before the
-        // appointment, so this was not a theoretical hole.
+        // Creditable = ANY paid invoice for THIS treatment. Two deliberate parts:
         //
-        // flagExistingPatients is the primary defence and catches these people earlier. This is
-        // the second line, for when that check could not run (Dentally unreachable) or was
-        // fooled by a duplicate contact record.
+        //   amount: does not matter (decision 2026-09-09). A minimum-spend threshold was built
+        //   and removed. The data would have supported one — half these patients pay across
+        //   several invoices, the first averaging £246 of £2,548 eventually paid over 258 days,
+        //   and the largest band of first invoices is under £50 — but paying referrers promptly
+        //   on any real payment won. Do not reintroduce a threshold without asking.
+        //
+        //   date: must be on or after the referral. `invoices.find((i) => i.paid)` alone
+        //   accepted any paid invoice EVER, so a returning patient's years-old invoice
+        //   satisfied "they have paid" — 31.5% of recent attendees have one dated more than 30
+        //   days before their appointment, so this was not theoretical. flagExistingPatients is
+        //   the primary defence against those people; this is the second line, for when that
+        //   check could not run or was fooled by a duplicate contact record.
         const referredOn = new Date(referral.created_at).toISOString().slice(0, 10);
         paidInvoice = invoices.find((i) => i.paid && (!i.paidOn || i.paidOn >= referredOn)) ?? null;
       }
-      if (!paidInvoice) continue; // completed but not paid for THIS treatment — not creditable
+      if (!paidInvoice) continue; // no paid invoice for this treatment yet — not creditable
 
       const invoiceState = `paid${paidInvoice.paidOn ? ` ${paidInvoice.paidOn}` : ''}${
         paidInvoice.amountPennies != null ? ` £${(paidInvoice.amountPennies / 100).toFixed(2)}` : ''
