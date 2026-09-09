@@ -9,6 +9,8 @@
 //     │        + eligibility (completed AFTER referral submitted)
 //     │        + a paid invoice for the patient
 //     │        → completion_proposals (unique per dentally_event_id — idempotent)
+//     ├─ clawbackRefunded()                    -- credit reversed when the payment that
+//     │                                          earned it is no longer paid in Dentally
 //     ├─ flagExistingPatients()                -- FR-11: referred person was ALREADY a
 //     │                                          patient -> existing_patient_suspect,
 //     │                                          which blocks the credit
@@ -25,6 +27,7 @@ import { db, logEvent } from '../../db.js';
 import { dentallyClient } from './client.js';
 import { resolveDentallyMode } from './connectionService.js';
 import { expireUnbookedReferrals } from '../referralService.js';
+import { clawbackReferralCredit } from '../walletService.js';
 
 const APPTS_CURSOR = 'dentally_appointments';
 const PATIENTS_CURSOR = 'dentally_patients';
@@ -349,6 +352,51 @@ async function flagExistingPatients(client) {
   return flagged;
 }
 
+/**
+ * Reverse commission when the treatment that earned it gets refunded.
+ *
+ * Dental OS emits no refund event — a reversed payment just shows up as an invoice that is no
+ * longer paid. So the only way to see one is to re-ask the question that justified the credit
+ * and notice the answer changed.
+ *
+ * Runs every pass over every credited referral. That is a small set (one row per paid
+ * referral) and the query is indexed, so re-checking forever is cheap and means a refund six
+ * months later is still caught.
+ *
+ * null from the client means COULD NOT CHECK — skipped, never treated as a refund. Clawing back
+ * money because Dentally was briefly unreachable would be far worse than catching it late.
+ */
+async function clawbackRefunded(client) {
+  const { rows: credited } = await db.query(
+    `select distinct r.id, r.referred_phone, r.referred_email, r.created_at
+       from referrals r
+       join wallet_ledger w on w.referral_id = r.id and w.kind = 'credit'
+      where not exists (
+        select 1 from wallet_ledger c
+         where c.referral_id = r.id and c.idempotency_key = 'clawback:' || r.id::text
+      )`,
+  );
+  let clawedBack = 0;
+  for (const referral of credited) {
+    const stillPaid = await client.hasQualifyingPaidInvoice({
+      phone: referral.referred_phone,
+      email: referral.referred_email ? referral.referred_email.trim().toLowerCase() : null,
+      since: new Date(referral.created_at).toISOString().slice(0, 10),
+    });
+    if (stillPaid !== false) continue; // true = fine; null = could not check, try next pass
+
+    const reversed = await clawbackReferralCredit(
+      referral.id,
+      'payment reversed in Dentally after the credit was issued',
+    );
+    if (reversed) {
+      clawedBack += 1;
+      console.error(`[dentally] clawed back commission for referral ${referral.id} — payment reversed`);
+    }
+  }
+  return clawedBack;
+}
+
 /** One full sync pass. Safe to call from the cron interval, a webhook, or an admin button. */
 let rerunQueued = false;
 
@@ -373,9 +421,10 @@ export async function runSync(trigger = 'manual') {
         const patientsIndexed = await refreshPatientIndex(client);
         const { proposals: proposalsCreated, bookings: bookingsDetected } = await scanCompletions(client);
         const existingPatientsFlagged = await flagExistingPatients(client);
+        const clawedBack = await clawbackRefunded(client);
         const referralsExpired = await expireUnbookedReferrals();
-        const summary = { trigger, patientsIndexed, proposalsCreated, bookingsDetected, existingPatientsFlagged, referralsExpired };
-        if (proposalsCreated || bookingsDetected || existingPatientsFlagged || referralsExpired) console.log('[dentally] sync', JSON.stringify(summary));
+        const summary = { trigger, patientsIndexed, proposalsCreated, bookingsDetected, existingPatientsFlagged, clawedBack, referralsExpired };
+        if (proposalsCreated || bookingsDetected || existingPatientsFlagged || clawedBack || referralsExpired) console.log('[dentally] sync', JSON.stringify(summary));
         return summary;
       } finally {
         await lockClient.query(`select pg_advisory_unlock(hashtext('dentally_sync'))`);

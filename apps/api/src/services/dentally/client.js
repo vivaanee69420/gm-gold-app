@@ -80,6 +80,10 @@ const liveClient = {
   async hasPriorTreatment() {
     return null;
   },
+  /** Same reasoning as hasPriorTreatment: null means COULD NOT CHECK, never "no". */
+  async hasQualifyingPaidInvoice() {
+    return null;
+  },
 
   async listAppointments({ updatedAfter, page = 1 }) {
     const body = await liveGet(
@@ -251,6 +255,32 @@ const dentalOsClient = {
     );
     return rows.length > 0;
   },
+  /**
+   * Does this person STILL have a paid invoice dated on/after the referral?
+   *
+   * The counterpart of the credit test, asked again later. If it was true when we credited and
+   * is false now, the payment was reversed — a refund, a voided invoice, a correction. Dental
+   * OS has no refund event to subscribe to, so the only way to see one is to re-ask the
+   * question and notice the answer changed.
+   */
+  async hasQualifyingPaidInvoice({ phone, email, since }) {
+    if (!phone && !email) return false;
+    const phone10 = phone ? String(phone).replace(/\D/g, '').slice(-10) : null;
+    const emailNorm = email ? String(email).trim().toLowerCase() : null;
+    const { rows } = await dosQuery(
+      `select 1
+         from invoices i
+         join contacts c on c.id = i.contact_id
+        where i.paid
+          and i.dated_on >= $3::date
+          and (($1::text is not null and c.phone10 = $1)
+            or ($2::text is not null and c.email_norm = $2))
+        limit 1`,
+      [phone10, emailNorm, since],
+    );
+    return rows.length > 0;
+  },
+
   async listInvoices({ patientId }) {
     const byPms = String(patientId).startsWith('pms:');
     const { rows } = await dosQuery(
@@ -375,6 +405,21 @@ const stubClient = {
     assertUp();
     return stubHasPriorTreatment(args);
   },
+  async hasQualifyingPaidInvoice({ phone, email, since }) {
+    assertUp();
+    const last10 = (v) => (v ? String(v).replace(/\D/g, '').slice(-10) : null);
+    const wantPhone = last10(phone);
+    const addr = email ? normalizeEmail(email) : null;
+    const ids = new Set(
+      stubStore.patients
+        .filter((p) => (wantPhone && last10(p.phone) === wantPhone) || (addr && p.email === addr))
+        .map((p) => p.id),
+    );
+    const sinceDay = String(since).slice(0, 10);
+    return stubStore.invoices.some(
+      (i) => ids.has(i.patientId) && i.paid && (!i.paidOn || i.paidOn >= sinceDay),
+    );
+  },
   async listAppointments({ updatedAfter }) {
     assertUp();
     return { items: afterFilter(stubStore.appointments, updatedAfter), hasMore: false };
@@ -396,4 +441,22 @@ const stubClient = {
 export function dentallyClient(mode) {
   if (mode === 'dentalos') return dentalOsClient;
   return mode === 'live' ? liveClient : stubClient;
+}
+
+/**
+ * Test helper: reverse a payment, the way a refund or a voided invoice shows up in Dental OS —
+ * the invoice simply stops being paid. There is no refund event to emit.
+ */
+export function stubRefundInvoices({ phone }) {
+  const last10 = (v) => (v ? String(v).replace(/\D/g, '').slice(-10) : null);
+  const want = last10(phone);
+  const ids = new Set(stubStore.patients.filter((p) => last10(p.phone) === want).map((p) => p.id));
+  let reversed = 0;
+  for (const inv of stubStore.invoices) {
+    if (ids.has(inv.patientId) && inv.paid) {
+      inv.paid = false;
+      reversed += 1;
+    }
+  }
+  return reversed;
 }

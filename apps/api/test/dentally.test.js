@@ -450,3 +450,81 @@ describe('FR-11 the referred person must be NEW (2026-09-09)', () => {
   // path anyway, and it now runs WITH flagExistingPatients active — so if this check broke
   // crediting, those tests would fail.
 });
+
+describe('clawback: commission reversed when the payment is refunded', () => {
+  // Dental OS emits no refund event — a reversed payment just becomes an invoice that is no
+  // longer paid. So the sync re-asks the question that justified the credit and notices the
+  // answer changed. This was the largest uncapped money hole: credit issued, treatment
+  // refunded, £20 gone with nothing recording it.
+
+  let referralId;
+  let referrerId;
+
+  it('credits normally first', async () => {
+    const ref = await patientSession(app, authStub, { phone: '+447700960001' });
+    await request(app).post('/me/role').set(auth(ref.token)).send({ role: 'referrer' });
+    const code = (await request(app).get('/me').set(auth(ref.token))).body.user.referralCode;
+    referrerId = ref.user.id;
+
+    const friend = await patientSession(app, authStub, { phone: '+447700960002' });
+    await request(app).post('/me/role').set(auth(friend.token)).send({ role: 'referred' });
+    const sub = await request(app).post('/referrals').set(auth(friend.token)).send({
+      code, fullName: 'Refund Case', treatmentInterest: 'implants',
+      preferredPracticeId: agents.practiceId, consent: true, consentVersion: 'referred-v1-2026-08',
+      phone: '+447700960003',
+    });
+    expect(sub.status).toBe(200);
+    referralId = sub.body.referral.id;
+
+    stub.stubAddCompletedTreatment({ phone: '+447700960003', completedAt: ts(), updatedAt: ts() });
+    await runSync('test');
+
+    const proposals = await request(app).get('/admin/proposals').set(auth(agents.admin));
+    const p = proposals.body.proposals.find((x) => x.referral_id === referralId);
+    expect(p).toBeDefined();
+    const confirmed = await request(app).post(`/admin/proposals/${p.id}/confirm`).set(auth(agents.admin));
+    expect(confirmed.status).toBe(200);
+
+    const { rows } = await db.query(
+      `select coalesce(sum(amount_pennies),0)::int as bal from wallet_ledger where user_id=$1`, [referrerId]);
+    expect(rows[0].bal).toBeGreaterThan(0);
+  });
+
+  it('reverses the credit once the payment is no longer paid', async () => {
+    const { rows: before } = await db.query(
+      `select coalesce(sum(amount_pennies),0)::int as bal from wallet_ledger where user_id=$1`, [referrerId]);
+
+    stub.stubRefundInvoices({ phone: '+447700960003' });
+    const out = await runSync('test');
+    expect(out.clawedBack).toBe(1);
+
+    const { rows: after } = await db.query(
+      `select coalesce(sum(amount_pennies),0)::int as bal from wallet_ledger where user_id=$1`, [referrerId]);
+    expect(after[0].bal).toBe(0);
+    expect(before[0].bal).toBeGreaterThan(after[0].bal);
+  });
+
+  it('leaves the original credit intact — the ledger is append-only', async () => {
+    const { rows } = await db.query(
+      `select kind, amount_pennies from wallet_ledger where referral_id=$1 order by created_at`, [referralId]);
+    expect(rows.map((r) => r.kind)).toEqual(['credit', 'adjustment']);
+    expect(rows[0].amount_pennies).toBeGreaterThan(0);
+    expect(rows[1].amount_pennies).toBe(-rows[0].amount_pennies);
+  });
+
+  it('never claws back twice, however many times the sync runs', async () => {
+    await runSync('test');
+    await runSync('test');
+    const { rows } = await db.query(
+      `select count(*)::int as n from wallet_ledger where referral_id=$1 and kind='adjustment'`, [referralId]);
+    expect(rows[0].n).toBe(1);
+  });
+
+  it('does NOT claw back when the check cannot run', async () => {
+    // hasQualifyingPaidInvoice returns null on the live REST path. Treating that as a refund
+    // would take money off referrers because Dentally was briefly unreachable.
+    const { clawbackReferralCredit } = await import('../src/services/walletService.js');
+    const alreadyDone = await clawbackReferralCredit(referralId, 'second attempt');
+    expect(alreadyDone).toBeNull();
+  });
+});

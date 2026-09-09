@@ -127,7 +127,15 @@ Created by /plan-eng-review on 2026-08-14.
   For contacts that DO have invoices the phone link is excellent — 7,380 of 7,414 payers
   (99.5%) reachable by phone, 22 unreachable.
 
-- [ ] 💰 **Refund / clawback: commission paid on treatment that gets refunded is unrecoverable**
+- [x] ✅ **DONE 2026-09-09 — Refund / clawback.** `clawbackRefunded` runs every sync pass over
+  every credited referral and re-asks the question that justified the credit; Dental OS emits no
+  refund event, so a reversal only shows up as an invoice that is no longer paid. Writes a
+  NEGATIVE adjustment rather than editing the credit (append-only ledger, NFR-03), idempotent on
+  `clawback:<referralId>`. A null answer means could-not-check and is skipped, never treated as a
+  refund. Balance is allowed to go negative if the referrer was already paid out — that is a real
+  debt and hiding it would be worse. **Open sub-question:** what the practice does about a
+  negative balance (write off, deduct from the next payout, chase). Currently it just shows.
+  ~~Original note: commission paid on treatment that gets refunded is unrecoverable~~
   — now the single largest uncapped money hole, and the sync cannot see refunds at all. Flow:
   patient pays first invoice → we credit the referrer → the practice refunds them → the £20 is
   gone with nothing marking it. Newly actionable: the Dental OS read-only access was granted

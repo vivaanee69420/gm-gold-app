@@ -116,6 +116,53 @@ export async function walletFor(userId) {
   });
 }
 
+/**
+ * Reverse a referral credit whose payment was refunded.
+ *
+ * Writes a NEGATIVE adjustment rather than deleting or editing the original credit: the ledger
+ * is append-only (NFR-03), and the history of "we credited, then it was refunded" is exactly
+ * what an accountant needs to see. Balance is the sum, so the effect is the same.
+ *
+ * Idempotent on `clawback:<referralId>` — the unique index on idempotency_key means the sync
+ * can re-evaluate every 15 minutes forever and only ever reverse once.
+ *
+ * The balance is allowed to go NEGATIVE if the referrer has already been paid out. That is the
+ * honest record: they were paid for a referral that was refunded, and they owe it. Silently
+ * absorbing it would hide a real debt, and refusing to write it would leave the ledger claiming
+ * the credit still stands.
+ *
+ * @returns the adjustment row, or null if already clawed back
+ */
+export async function clawbackReferralCredit(referralId, reason) {
+  const { rows: credits } = await db.query(
+    `select user_id, amount_pennies, practice_id from wallet_ledger
+      where referral_id = $1 and kind = 'credit'`,
+    [referralId],
+  );
+  if (!credits.length) return null; // never credited — nothing to reverse
+
+  const userId = credits[0].user_id;
+  const total = credits.reduce((sum, c) => sum + c.amount_pennies, 0);
+
+  return withWalletLock(userId, async (client) => {
+    try {
+      const { rows } = await client.query(
+        `insert into wallet_ledger (user_id, kind, amount_pennies, referral_id, practice_id, idempotency_key, reason, created_by)
+         values ($1,'adjustment',$2,$3,$4,$5,$6,'system') returning *`,
+        [userId, -total, referralId, credits[0].practice_id, `clawback:${referralId}`, reason],
+      );
+      await logEvent(client, {
+        actorKind: 'system', entityType: 'wallet', entityId: userId,
+        action: 'credit_clawed_back', toValue: String(-total), reason,
+      });
+      return rows[0];
+    } catch (err) {
+      if (err.code === '23505') return null; // already reversed
+      throw err;
+    }
+  });
+}
+
 export async function requestPayout(userId, practiceId) {
   const threshold = Number(await getSetting('payout_threshold_pennies', '10000'));
   return withWalletLock(userId, async (client) => {
