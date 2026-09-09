@@ -3,7 +3,7 @@
 //   boot ──▶ no user ──▶ [Login → Verify → Profile → RolePicker]
 //        └─▶ user.roles includes 'referrer' ──▶ tabs: Card / Referrals / Wallet
 //        └─▶ user.roles == ['referred']     ──▶ [EnterCode → InterestForm → ReferredStatus]
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect } from 'react';
 import { Platform, Text, View } from 'react-native';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -20,10 +20,11 @@ import { colors } from './src/theme';
 const Stack = createNativeStackNavigator();
 const Tabs = createBottomTabNavigator();
 
-// Dev shortcut: true silently signs in with the dev phone below (dev OTP mode only).
-// Re-enabled real sign-in 2026-08-22 — every install was landing in the same shared account.
-const LOGIN_DISABLED = false;
-const AUTO_LOGIN_PHONE = '+447700900001';
+// The LOGIN_DISABLED dev shortcut is gone (2026-09-09). It worked by asking the API for an
+// OTP and reading the code back out of the response's devHint field — the same hole that let
+// anyone sign in as anyone. Supabase issues codes now and never hands them to us, so there is
+// nothing left to read. To test on a device, sign in with a real address; Supabase's own
+// dashboard shows the sent emails.
 
 const navTheme = {
   ...DarkTheme,
@@ -70,33 +71,20 @@ function ReferrerTabs() {
 }
 
 function Router() {
-  const { booted, user, boot, devSignIn } = useAppState();
-  const [autoLoginFailed, setAutoLoginFailed] = useState(false);
-  const autoLoginTried = useRef(false);
+  const { booted, user, boot } = useAppState();
 
   useEffect(() => {
     boot();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // LOGIN_DISABLED bypass: once boot confirms there's no session, sign in silently.
-  useEffect(() => {
-    if (!LOGIN_DISABLED || !booted || user || autoLoginTried.current) return;
-    autoLoginTried.current = true; // one attempt in flight at a time (sign-out retriggers)
-    devSignIn(AUTO_LOGIN_PHONE)
-      .catch(() => setAutoLoginFailed(true))
-      .finally(() => {
-        autoLoginTried.current = false;
-      });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [booted, user]);
-
-  const autoLoginPending = LOGIN_DISABLED && !user && !autoLoginFailed;
-  if (!booted || autoLoginPending) return <View style={{ flex: 1, backgroundColor: colors.boardroom }} />;
+  if (!booted) return <View style={{ flex: 1, backgroundColor: colors.boardroom }} />;
 
   const roles = user?.roles ?? [];
   // A signed-in user without a name/role starts past Login/Verify.
-  const initialAuthRoute = !user ? 'Login' : !user.firstName ? 'Profile' : 'RolePicker';
+  // needsPhone: identity is email now, so a new account arrives with no phone — and phone is
+  // the Dentally matching key, so the referrer role means nothing without it.
+  const initialAuthRoute = !user ? 'Login' : (!user.firstName || user.needsPhone) ? 'Profile' : 'RolePicker';
   return (
     <NavigationContainer theme={navTheme}>
       {roles.includes('referrer') ? (

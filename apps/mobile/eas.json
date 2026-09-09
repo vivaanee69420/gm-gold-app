@@ -15,13 +15,20 @@
       "extends": "preview",
       "env": {
         "EXPO_PUBLIC_API_URL": "https://api-production-9d24.up.railway.app",
-        "ANDROID_ARCHS": "arm64-v8a"
+        "ANDROID_ARCHS": "arm64-v8a",
+        "EXPO_PUBLIC_SUPABASE_URL": "REPLACE_WITH_SUPABASE_PROJECT_URL",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "REPLACE_WITH_SUPABASE_ANON_KEY"
       },
       "channel": "preview-live-api"
     },
     "production": {
       "autoIncrement": true,
-      "channel": "production"
+      "channel": "production",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://api-production-9d24.up.railway.app",
+        "EXPO_PUBLIC_SUPABASE_URL": "REPLACE_WITH_SUPABASE_PROJECT_URL",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "REPLACE_WITH_SUPABASE_ANON_KEY"
+      }
     }
   },
   "submit": {

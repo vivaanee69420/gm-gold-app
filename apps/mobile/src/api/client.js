@@ -7,8 +7,8 @@
 // The mock keeps the UI fully browsable before/without the backend; every call
 // reports `source: 'live' | 'mock'` so the shell can show a dev banner.
 
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import { currentAccessToken } from '../lib/supabase';
 
 // Resolve the API host: explicit env wins; otherwise reuse the Expo dev-server host
 // (so a phone on the same Wi-Fi finds the API without configuration).
@@ -19,7 +19,6 @@ function resolveBaseUrl() {
   return host ? `http://${host}:4000` : 'http://localhost:4000';
 }
 const BASE_URL = resolveBaseUrl();
-const TOKEN_KEY = 'gmref.session.token';
 
 let mockMode = false;
 let liveSeen = false; // once the real API has answered, never silently swap to mock
@@ -27,7 +26,6 @@ export const isMockMode = () => mockMode;
 
 // ---------- mock fixtures (mirror the API's response shapes) ----------
 const mock = {
-  otp: '123456',
   user: null,
   practices: [
     { id: '11111111-1111-4111-8111-111111111111', name: 'Ashford', bookingUrl: 'https://booking.dentally.co/mock/ashford' },
@@ -57,12 +55,6 @@ const mock = {
 
 function mockRespond(path, options = {}) {
   const body = options.body ? JSON.parse(options.body) : {};
-  if (path === '/auth/otp/send') return { ok: true, devHint: `Dev code: ${mock.otp}` };
-  if (path === '/auth/otp/verify') {
-    if (body.code !== mock.otp) return { error: 'invalid_otp' };
-    mock.user = mock.user || { phone: body.phone, firstName: null, roles: [], verificationStatus: 'unverified' };
-    return { ok: true, token: 'mock-token', user: mock.user };
-  }
   if (path === '/me') return { user: mock.user, source: 'mock' };
   if (path === '/me/profile') {
     mock.user = mock.user ?? { phone: null, firstName: null, roles: [], verificationStatus: 'unverified' };
@@ -105,7 +97,9 @@ function mockRespond(path, options = {}) {
 
 // ---------- transport ----------
 async function request(path, { method = 'GET', body } = {}) {
-  const token = await AsyncStorage.getItem(TOKEN_KEY);
+  // supabase-js refreshes the access token in the background, so ask it every call rather
+  // than caching one here — a cached token is exactly how you end up sending an expired one.
+  const token = await currentAccessToken();
   const options = {
     method,
     headers: {
@@ -138,21 +132,13 @@ async function request(path, { method = 'GET', body } = {}) {
   }
 }
 
-export async function saveToken(token) {
-  if (token) await AsyncStorage.setItem(TOKEN_KEY, token);
-}
-export async function clearToken() {
-  await AsyncStorage.removeItem(TOKEN_KEY);
-}
+// saveToken/clearToken are gone: the session belongs to supabase-js, which persists it in
+// the OS keychain (see lib/supabase.js). Signing out is supabase.auth.signOut().
 
 // ---------- surface ----------
 export const api = {
-  sendOtp: (phone) => request('/auth/otp/send', { method: 'POST', body: { phone } }),
-  verifyOtp: async (phone, code) => {
-    const out = await request('/auth/otp/verify', { method: 'POST', body: { phone, code } });
-    if (out.token) await saveToken(out.token);
-    return out;
-  },
+  // No sign-in call here any more. The app talks to Supabase Auth directly
+  // (state/AppState.js) and this client just carries the resulting access token.
   me: () => request('/me'),
   saveProfile: (profile) => request('/me/profile', { method: 'POST', body: profile }),
   pickRole: (role) => request('/me/role', { method: 'POST', body: { role } }),

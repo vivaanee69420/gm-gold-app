@@ -54,7 +54,8 @@
           }
         }
       ],
-      "./plugins/withAndroidArchitectures.js"
+      "./plugins/withAndroidArchitectures.js",
+      "expo-secure-store"
     ],
     "extra": {
       "eas": {

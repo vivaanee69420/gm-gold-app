@@ -1,23 +1,32 @@
-import React, { createContext, useContext, useMemo, useReducer } from 'react';
-import { api, clearToken } from '../api/client';
+import React, { createContext, useContext, useEffect, useMemo, useReducer } from 'react';
+import { api } from '../api/client';
+import { supabase, clearLegacySession, isAuthConfigured } from '../lib/supabase';
 
 const AppStateContext = createContext(null);
 
+// Sign-in is now a conversation with Supabase, not with our API:
+//
+//   LoginScreen   -> supabase.auth.signInWithOtp({ email })   -> code arrives by email
+//   VerifyScreen  -> supabase.auth.verifyOtp({ email, token }) -> session
+//   everything    -> api.* with that session's access token as the bearer
+//
+// Our API never sees the code. It only ever verifies the token Supabase issued, which is why
+// there is no `devHint` here any more — there is no code for us to leak.
 const initial = {
   booted: false,
-  user: null, // { phone, firstName, roles: [], verificationStatus, referralCode }
-  pendingPhone: null,
-  devHint: null,
+  user: null, // { email, phone, firstName, roles: [], verificationStatus, referralCode, needsPhone }
+  pendingEmail: null,
+  authError: null,
 };
 
 function reducer(state, action) {
   switch (action.type) {
     case 'booted':
       return { ...state, booted: true, user: action.user ?? null };
-    case 'otp-sent':
-      return { ...state, pendingPhone: action.phone, devHint: action.devHint ?? null };
+    case 'code-sent':
+      return { ...state, pendingEmail: action.email, authError: null };
     case 'signed-in':
-      return { ...state, user: action.user, pendingPhone: null, devHint: null };
+      return { ...state, user: action.user, pendingEmail: null, authError: null };
     case 'user-updated':
       return { ...state, user: action.user };
     case 'signed-out':
@@ -30,38 +39,60 @@ function reducer(state, action) {
 export function AppStateProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initial);
 
+  // Supabase refreshes the access token in the background and emits SIGNED_OUT when a refresh
+  // token is finally rejected (revoked, or expired after long disuse). Without this listener
+  // the app would sit on a dead session showing stale data until the next manual reload.
+  useEffect(() => {
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_OUT') dispatch({ type: 'signed-out' });
+    });
+    return () => data.subscription.unsubscribe();
+  }, []);
+
   const actions = useMemo(
     () => ({
       boot: async () => {
+        // One-time: remove the pre-Supabase 90-day token from plaintext AsyncStorage. It is
+        // already useless (the API rejects anything it signed itself) but it is still a
+        // credential-shaped string sitting in a readable file on every upgraded device.
+        await clearLegacySession();
         try {
+          const { data } = await supabase.auth.getSession();
+          if (!data.session) return dispatch({ type: 'booted', user: null });
           const out = await api.me();
           dispatch({ type: 'booted', user: out.user ?? null });
         } catch {
           dispatch({ type: 'booted', user: null });
         }
       },
-      sendOtp: async (phone) => {
-        const out = await api.sendOtp(phone);
-        dispatch({ type: 'otp-sent', phone, devHint: out.devHint });
+
+      /** Ask Supabase to email a six-digit code. */
+      sendCode: async (email) => {
+        if (!isAuthConfigured) throw new Error('auth_not_configured');
+        const { error } = await supabase.auth.signInWithOtp({
+          email,
+          // Open self-registration: a patient signing up IS the product. An account with no
+          // phone and no matching Dentally record can do nothing and earn nothing.
+          options: { shouldCreateUser: true },
+        });
+        if (error) throw error;
+        dispatch({ type: 'code-sent', email });
+      },
+
+      /** Exchange the code for a session, then load the profile from our API. */
+      verifyCode: async (code) => {
+        const { error } = await supabase.auth.verifyOtp({
+          email: state.pendingEmail,
+          token: code,
+          type: 'email',
+        });
+        if (error) throw error;
+        // First call after verifying creates the profile row from the verified identity.
+        const out = await api.me();
+        dispatch({ type: 'signed-in', user: out.user });
         return out;
       },
-      // Silent sign-in for the LOGIN_DISABLED bypass (App.js): sends a dev OTP and
-      // verifies it with the code from devHint. Only works while the API runs in dev
-      // OTP mode — in production there is no devHint, so this throws and the normal
-      // login screen shows instead.
-      devSignIn: async (phone) => {
-        const sent = await api.sendOtp(phone);
-        const code = sent.devHint?.match(/\d{6}/)?.[0];
-        if (!code) throw new Error('dev_sign_in_unavailable');
-        const out = await api.verifyOtp(phone, code);
-        dispatch({ type: 'signed-in', user: out.user });
-        return out.user;
-      },
-      verifyOtp: async (code) => {
-        const out = await api.verifyOtp(state.pendingPhone, code);
-        dispatch({ type: 'signed-in', user: out.user });
-        return out;
-      },
+
       saveProfile: async (profile) => {
         const out = await api.saveProfile(profile);
         dispatch({ type: 'user-updated', user: out.user });
@@ -72,11 +103,12 @@ export function AppStateProvider({ children }) {
         return out.user;
       },
       signOut: async () => {
-        await clearToken();
+        // Clears the session from the keychain and revokes the refresh token.
+        await supabase.auth.signOut();
         dispatch({ type: 'signed-out' });
       },
     }),
-    [state.pendingPhone],
+    [state.pendingEmail],
   );
 
   const value = useMemo(() => ({ ...state, ...actions }), [state, actions]);
