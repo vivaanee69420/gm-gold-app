@@ -69,3 +69,63 @@ describe('0011_admin_accounts.sql email lowercasing', () => {
     }
   });
 });
+
+describe('RLS covers every table (Supabase anon-key exposure)', () => {
+  let db;
+
+  beforeAll(async () => {
+    // This describe needs the REAL migrated schema, not the scratch tables above.
+    // Set/restore rather than assigning at module scope: vitest reuses worker processes
+    // between files, so a stray env var leaks into whichever suite runs next.
+    const restore = process.env.PGLITE_MEMORY;
+    process.env.PGLITE_MEMORY = '1';
+    try {
+      const dbMod = await import('../src/db.js');
+      await dbMod.initDb();
+      db = dbMod.db;
+    } finally {
+      if (restore === undefined) delete process.env.PGLITE_MEMORY;
+      else process.env.PGLITE_MEMORY = restore;
+    }
+  });
+
+  // Why this test exists: the mobile app ships the Supabase ANON KEY, and anyone can extract
+  // it from the APK. That is fine by design — the anon key is public — but it is only fine
+  // because Supabase's auto-generated REST/GraphQL surface can read nothing. What makes that
+  // true is RLS being ON with no policy granting `anon` anything.
+  //
+  // Nothing enforces it though. Migration 0004 lists tables by hand; admin_users and
+  // dentally_oauth only have RLS because someone remembered to add it in 0007 and 0005. A
+  // future migration that creates a table and forgets opens the whole table to the internet,
+  // silently, until somebody thinks to look. This is that somebody.
+  it('every public table has row level security enabled', async () => {
+    const { rows } = await db.query(
+      `select c.relname as table_name
+         from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'public' and c.relkind = 'r' and c.relrowsecurity = false
+        order by c.relname`,
+    );
+    const unprotected = rows.map((r) => r.table_name);
+    expect(unprotected, `Tables without RLS — these are readable with the public anon key. `
+      + `Add "alter table <name> enable row level security;" to the migration that creates them.`)
+      .toEqual([]);
+  });
+
+  it('no policy grants the anon or authenticated roles anything', async () => {
+    // A policy is how you would deliberately open a table back up. The only one in this schema
+    // is scoped to gm_referral_api (the API's own role). If a policy ever names anon or
+    // authenticated, that is a decision that deserves to be made on purpose, not noticed later.
+    const { rows } = await db.query(
+      `select polname, c.relname as table_name
+         from pg_policy p
+         join pg_class c on c.oid = p.polrelid
+         join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'public'
+          and exists (
+            select 1 from pg_roles r
+             where r.oid = any(p.polroles) and r.rolname in ('anon', 'authenticated')
+          )`,
+    );
+    expect(rows.map((r) => `${r.table_name}.${r.polname}`)).toEqual([]);
+  });
+});
