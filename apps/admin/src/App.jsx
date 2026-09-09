@@ -30,13 +30,12 @@ export default function App() {
 
   const loadAll = useCallback(async () => {
     try {
-      const [settings, stats, payouts, referrals, proposals, verifications, aging, dentally, reviews, funnel, top] = await Promise.all([
+      const [settings, stats, payouts, referrals, proposals, aging, dentally, reviews, funnel, top] = await Promise.all([
         api('/admin/settings'),
         api('/admin/stats'),
         api('/admin/payouts'),
         api('/admin/referrals'),
         api('/admin/proposals'),
-        api('/admin/verifications'),
         api('/admin/aging'),
         api('/admin/dentally/status'),
         api('/admin/referral-review'),
@@ -49,7 +48,6 @@ export default function App() {
         payouts: payouts.payouts,
         referrals: referrals.referrals,
         proposals: proposals.proposals,
-        verifications: verifications.verifications,
         aging: aging.aging,
         agingDays: aging.days,
         dentally,

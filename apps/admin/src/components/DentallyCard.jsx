@@ -34,7 +34,7 @@ export default function DentallyCard({ status, onChanged, notify }) {
       notify(
         out.skipped
           ? `Sync skipped (${out.skipped}).`
-          : `Sync done — ${out.proposalsCreated ?? 0} new proposal(s), ${out.verificationsResolved ?? 0} verification(s) resolved.`,
+          : `Sync done — ${out.proposalsCreated ?? 0} new proposal(s), ${out.bookingsDetected ?? 0} booking(s) detected.`,
       );
       onChanged();
     } catch (err) {

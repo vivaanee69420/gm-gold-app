@@ -2,8 +2,6 @@ import jwt from 'jsonwebtoken';
 import { generateCode } from '@gm-referral/shared/referral-code';
 import { db, logEvent } from '../db.js';
 import { config } from '../config.js';
-import { matchPatientIndex } from './dentally/syncService.js';
-import { resolveDentallyMode } from './dentally/connectionService.js';
 
 /**
  * The patient profile row for a verified Supabase identity.
@@ -99,34 +97,22 @@ export async function saveProfile(userId, { firstName, lastName, phone, notifyOp
   }
 }
 
+/**
+ * Pick a role. Anyone can be a referrer — that is the product (2026-09-09).
+ *
+ * There is deliberately NO check that a referrer is an existing GM Dental patient. The old
+ * FR-05 verification (phone match against Dentally, admin review queue, pending_review) is
+ * gone: the app is open, you download it and you can refer. Note that it never actually
+ * gated anything anyway — an unverified referrer earned exactly like a verified one; the
+ * only real control was an admin manually rejecting someone to kill their code.
+ *
+ * The Dentally link belongs on the REFERRED side, not here: their phone is what the sync
+ * matches to detect the booking and the treatment, and that is what releases commission.
+ * A referrer needs an account and a code, nothing more.
+ */
 export async function pickRole(userId, role) {
   if (role === 'referrer') {
-    // Referrer verification (FR-05, Q2): the verified EMAIL and the declared PHONE must
-    // land on the SAME Dentally contact. Matching on phone alone would let anyone who knows
-    // a patient's mobile number claim their rewards; the email is the half we actually
-    // proved. One clean two-key match → verified; anything else → pending_review for the
-    // admin queue, with the sync worker auto-resolving once the missing half appears.
-    // Mode 'off' keeps the pre-Stage-5 dev-verify so the loop stays walkable without
-    // any Dentally at all.
-    if ((await resolveDentallyMode()) === 'off') {
-      await db.query(`update users set role_referrer=true, verification_status='verified' where id=$1`, [userId]);
-    } else {
-      const user = await getUser(userId);
-      const match = await matchPatientIndex(user.phone, user.email);
-      if (match.status === 'verified') {
-        await db.query(
-          `update users set role_referrer=true, verification_status='verified',
-             dentally_patient_id=$2, practice_id=$3 where id=$1`,
-          [userId, match.dentallyPatientId, match.practiceId],
-        );
-      } else {
-        await db.query(`update users set role_referrer=true, verification_status='pending_review' where id=$1`, [userId]);
-        await logEvent(db, {
-          actorId: userId, actorKind: 'user', entityType: 'user', entityId: userId,
-          action: 'verification_pending', reason: match.reason,
-        });
-      }
-    }
+    await db.query(`update users set role_referrer=true where id=$1`, [userId]);
     const existing = await db.query(`select code from referral_codes where user_id=$1 and active`, [userId]);
     if (!existing.rows[0]) {
       let attempts = 0;
@@ -168,7 +154,6 @@ export function publicUser(user) {
     firstName: user.first_name,
     lastName: user.last_name,
     roles,
-    verificationStatus: user.verification_status,
     notifyOptIn: user.notify_opt_in,
     // The app gates the referrer role on having a phone on file (it is the Dentally
     // matching key), so it needs to know without inferring from a null.

@@ -57,15 +57,14 @@ function mockRespond(path, options = {}) {
   const body = options.body ? JSON.parse(options.body) : {};
   if (path === '/me') return { user: mock.user, source: 'mock' };
   if (path === '/me/profile') {
-    mock.user = mock.user ?? { phone: null, firstName: null, roles: [], verificationStatus: 'unverified' };
+    mock.user = mock.user ?? { phone: null, firstName: null, roles: [] };
     Object.assign(mock.user, { firstName: body.firstName, lastName: body.lastName, notifyOptIn: body.notifyOptIn });
     return { ok: true, user: mock.user };
   }
   if (path === '/me/role') {
-    mock.user = mock.user ?? { phone: null, firstName: null, roles: [], verificationStatus: 'unverified' };
+    mock.user = mock.user ?? { phone: null, firstName: null, roles: [] };
     mock.user.roles = [...new Set([...(mock.user.roles || []), body.role])];
     if (body.role === 'referrer') {
-      mock.user.verificationStatus = 'verified';
       mock.user.referralCode = 'GMRF7K2X';
     }
     return { ok: true, user: mock.user };

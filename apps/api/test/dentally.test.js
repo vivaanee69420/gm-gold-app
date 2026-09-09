@@ -60,124 +60,51 @@ beforeAll(async () => {
   agents.practiceId = practices.rows[0].id;
 });
 
-describe('FR-05 referrer verification: the two-key match (Q2)', () => {
-  // The rule: the VERIFIED email and the DECLARED phone must land on the SAME Dental OS
-  // contact. Phone alone is not enough — it is typed, not proved — so matching on it would
-  // let anyone who knows a patient's mobile number collect that patient's referral rewards.
+describe('anyone can refer — no referrer verification (2026-09-09)', () => {
+  // The old FR-05 rule was that a referrer had to be an existing GM Dental patient, proved by
+  // matching their phone against Dentally, with an admin queue for anything that did not
+  // match cleanly. That is not the product: you download the app, you sign up, you refer.
+  //
+  // Worth remembering why removing it cost nothing in enforcement: verification never gated
+  // earning. An unverified referrer submitted referrals, earned credits and took payouts
+  // exactly like a verified one. The only real control was an admin manually rejecting
+  // someone, which deactivated their code.
+  //
+  // The Dentally check that matters is on the REFERRED person — asserted throughout FR-16
+  // below, where their phone confirms the booking and the treatment.
 
-  it('verifies and links when BOTH keys hit one contact', async () => {
-    const email = 'known.patient@example.com';
-    stub.stubAddPatient({ phone: '+447700910001', email, updatedAt: ts() });
-    await runSync('test');
-    const { token } = await signIn('+447700910001', email);
+  it('a referrer with NO Dentally record at all gets a working code immediately', async () => {
+    // Nothing added to the stub for this phone: they are not a patient here, and it does not
+    // matter. This is the case the old rule sent to a review queue.
+    const { token, user } = await signIn('+447700910001', 'not.a.patient@example.com');
     const role = await request(app).post('/me/role').set(auth(token)).send({ role: 'referrer' });
-    expect(role.body.user.verificationStatus).toBe('verified');
+
+    expect(role.status).toBe(200);
     expect(role.body.user.referralCode).toMatch(/^[A-Z2-9]{8}$/);
+    expect(role.body.user.roles).toContain('referrer');
+    // No verification state is exposed to the app at all any more.
+    expect(role.body.user).not.toHaveProperty('verificationStatus');
+
     agents.referrer = token;
     agents.code = role.body.user.referralCode;
+    agents.referrerId = user.id;
   });
 
-  it('does NOT verify on a phone match alone — the impersonation case', async () => {
-    // The contact exists with this phone, but under somebody else's email. Before the
-    // two-key rule this verified, and the attacker collected the real patient's rewards.
-    stub.stubAddPatient({ phone: '+447700910007', email: 'real.owner@example.com', updatedAt: ts() });
-    await runSync('test');
-    const { token } = await signIn('+447700910007', 'attacker@example.com');
-    const role = await request(app).post('/me/role').set(auth(token)).send({ role: 'referrer' });
-    expect(role.body.user.verificationStatus).toBe('pending_review');
+  it('picking the referrer role twice keeps the same code', async () => {
+    const again = await request(app).post('/me/role').set(auth(agents.referrer)).send({ role: 'referrer' });
+    expect(again.body.user.referralCode).toBe(agents.code);
   });
 
-  it('does NOT verify when phone and email point at DIFFERENT contacts', async () => {
-    stub.stubAddPatient({ phone: '+447700910008', email: 'someone@example.com', updatedAt: ts() });
-    stub.stubAddPatient({ phone: '+447700919999', email: 'split.keys@example.com', updatedAt: ts() });
-    await runSync('test');
-    const { token } = await signIn('+447700910008', 'split.keys@example.com');
-    const role = await request(app).post('/me/role').set(auth(token)).send({ role: 'referrer' });
-    // Two rows come back — precisely the shape of someone stitching together half-identities.
-    expect(role.body.user.verificationStatus).toBe('pending_review');
+  it('the admin verification queue is gone, not merely empty', async () => {
+    // Deleted rather than left returning []: a queue nobody works is worse than no queue,
+    // because it looks like a control that exists.
+    const res = await request(app).get('/admin/verifications').set(auth(agents.admin));
+    expect(res.status).toBe(404);
   });
 
-  it('a contact with no email on file waits for the front desk, and clears on the retry pass', async () => {
-    const email = 'no.email.yet@example.com';
-    stub.stubAddPatient({ phone: '+447700910009', updatedAt: ts() }); // phone only
-    await runSync('test');
-    const { token, user } = await signIn('+447700910009', email);
-    const role = await request(app).post('/me/role').set(auth(token)).send({ role: 'referrer' });
-    expect(role.body.user.verificationStatus).toBe('pending_review');
-
-    // reason names WHICH half is missing, so the admin queue can say something useful.
-    const { rows: ev } = await db.query(
-      `select reason from events where entity_id=$1 and action='verification_pending' order by created_at desc limit 1`,
-      [user.id],
-    );
-    expect(ev[0].reason).toBe('email_unconfirmed');
-
-    // Front desk adds the address in Dental OS; the next sync pass resolves it with no
-    // action from the patient.
-    stub.stubStore.patients.find((p) => p.phone === '+447700910009').email = email;
-    stub.stubStore.patients.find((p) => p.phone === '+447700910009').updatedAt = ts();
-    const sync = await runSync('test');
-    expect(sync.verificationsResolved).toBe(1);
-    const { rows } = await db.query(`select verification_status from users where id=$1`, [user.id]);
-    expect(rows[0].verification_status).toBe('verified');
-  });
-
-  it('an unknown number goes to pending_review (row 24: Dentally down during signup)', async () => {
-    stub.stubStore.down = true; // outage: index cannot refresh, signup must not fail
-    const { token, user } = await signIn('+447700910002', 'outage@example.com');
-    const role = await request(app).post('/me/role').set(auth(token)).send({ role: 'referrer' });
-    expect(role.body.user.verificationStatus).toBe('pending_review');
-    agents.pendingUserId = user.id;
-
-    const queue = await request(app).get('/admin/verifications').set(auth(agents.admin));
-    expect(queue.body.verifications.map((v) => v.phone)).toContain('+447700910002');
-  });
-
-  it('row 24: the retry pass auto-resolves once Dentally is back with a clean match', async () => {
-    const down = await runSync('test');
-    expect(down.error).toBeDefined(); // outage surfaced, not thrown
-
-    stub.stubStore.down = false;
-    stub.stubAddPatient({ phone: '+447700910002', email: 'outage@example.com', updatedAt: ts() });
-    const sync = await runSync('test');
-    expect(sync.verificationsResolved).toBe(1);
-    const { rows } = await db.query(`select verification_status from users where id=$1`, [agents.pendingUserId]);
-    expect(rows[0].verification_status).toBe('verified');
-  });
-
-  it('the admin queue carries the email and the REASON, not just a name and a phone', async () => {
-    // Since verification became a two-key match, "pending" means four different things that
-    // need four different actions from the front desk. A queue showing only a name and a
-    // number cannot tell them apart — and getting it wrong on email_unconfirmed means
-    // clicking Approve, which marks the patient verified without the second key ever
-    // matching and quietly discards the fraud check.
-    const email = 'queue.reason@example.com';
-    stub.stubAddPatient({ phone: '+447700910020', updatedAt: ts() }); // phone only, no email
-    await runSync('test');
-    const { token } = await signIn('+447700910020', email);
-    await request(app).post('/me/role').set(auth(token)).send({ role: 'referrer' });
-
-    const queue = await request(app).get('/admin/verifications').set(auth(agents.admin));
-    const row = queue.body.verifications.find((v) => v.phone === '+447700910020');
-
-    expect(row).toBeDefined();
-    expect(row.email).toBe(email);
-    expect(row.reason).toBe('email_unconfirmed');
-  });
-
-  it('an ambiguous (shared) number stays pending for the admin, and reject deactivates the code', async () => {
-    const email = 'shared.number@example.com';
-    stub.stubAddPatient({ phone: '+447700910003', email, updatedAt: ts() });
-    stub.stubAddPatient({ phone: '+447700910003', email, updatedAt: ts() }); // family member, same mobile
-    await runSync('test');
-    const { token, user } = await signIn('+447700910003', email);
-    const role = await request(app).post('/me/role').set(auth(token)).send({ role: 'referrer' });
-    expect(role.body.user.verificationStatus).toBe('pending_review');
-
-    const rejected = await request(app).post(`/admin/verifications/${user.id}/reject`).set(auth(agents.admin));
-    expect(rejected.status).toBe(200);
-    const { rows } = await db.query(`select active from referral_codes where user_id=$1`, [user.id]);
-    expect(rows.every((r) => !r.active)).toBe(true);
+  it('the sync no longer reports verification work', async () => {
+    const out = await runSync('test');
+    expect(out.verificationsResolved).toBeUndefined();
   });
 });
 

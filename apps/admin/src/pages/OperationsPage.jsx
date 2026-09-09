@@ -1,5 +1,4 @@
 import ConfirmQueue from '../components/ConfirmQueue.jsx';
-import VerificationQueue from '../components/VerificationQueue.jsx';
 import AgingReport from '../components/AgingReport.jsx';
 import PayoutQueue from '../components/PayoutQueue.jsx';
 import PipelineBoard from '../components/PipelineBoard.jsx';
@@ -16,7 +15,6 @@ export default function OperationsPage({ data, loadAll, notify }) {
         <div className="zone-grid">
           <ConfirmQueue proposals={data.proposals} onChanged={loadAll} notify={notify} />
           <PayoutQueue payouts={data.payouts} onChanged={loadAll} notify={notify} />
-          <VerificationQueue verifications={data.verifications} onChanged={loadAll} notify={notify} />
           <ReferralReviewQueue reviews={data.reviews} onChanged={loadAll} notify={notify} />
           <AgingReport aging={data.aging} days={data.agingDays} />
         </div>

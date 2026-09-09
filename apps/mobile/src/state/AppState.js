@@ -14,7 +14,7 @@ const AppStateContext = createContext(null);
 // there is no `devHint` here any more — there is no code for us to leak.
 const initial = {
   booted: false,
-  user: null, // { email, phone, firstName, roles: [], verificationStatus, referralCode, needsPhone }
+  user: null, // { email, phone, firstName, roles: [], referralCode, needsPhone }
   pendingEmail: null,
   authError: null,
 };

@@ -215,10 +215,16 @@ Design first (30 min), then build. Two distinct audiences:
       the OS keychain via `expo-secure-store`.
 - [x] `users.email` / `email_verified_at` / `phone_verified_at` added, `users.phone` nullable
       (migration 0013). Phone is captured at the profile step.
-- [x] **Two-key verification (Q2 in full):** a referrer verifies only when the verified email
-      AND the declared phone hit the SAME Dental OS contact. Phone-only → `email_unconfirmed`
-      and the retry pass clears it once the front desk adds the address. Knowing someone's
-      mobile number is no longer enough to claim their rewards.
+- [x] ~~**Two-key verification (Q2 in full)**~~ — **REMOVED 2026-09-09.** Q2 asked which
+      identity model to use for referrer *verification*; the answer turned out to be that there
+      is no referrer verification. Anyone downloads the app and can refer — that is the product.
+      Deleted: `matchPatientIndex`, `retryPendingVerifications`, `pendingVerifications`,
+      `decideVerification`, the `/admin/verifications` routes and the dashboard queue.
+      It gated nothing anyway: an unverified referrer earned exactly like a verified one, and
+      the only real control was an admin manually rejecting someone to kill their code
+      (`rejected` is kept for exactly that). The Dentally check that matters is on the
+      **referred** person — their phone confirms the booking and the treatment, which is what
+      releases commission.
 - [ ] **Still yours:** set `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` on Railway, and
       `EXPO_PUBLIC_SUPABASE_URL` + `EXPO_PUBLIC_SUPABASE_ANON_KEY` in eas.json (placeholders
       in place). `expo-secure-store` is native, so the app needs a store build, not an OTA.

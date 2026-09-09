@@ -35,11 +35,6 @@ export function CardScreen() {
       </View>
       <GoldButton label="Share my card" onPress={share} style={{ marginTop: space(5) }} />
       <BookAppointment label="Book an appointment" style={{ marginTop: space(3) }} />
-      {user?.verificationStatus === 'pending_review' ? (
-        <Body muted style={{ textAlign: 'center', marginTop: space(3), fontSize: 12 }}>
-          We’re confirming you’re a GM Dental patient — your card works while we check.
-        </Body>
-      ) : null}
       <Body muted style={{ textAlign: 'center', marginTop: space(3), fontSize: 12 }}>
         You earn cash when a friend’s treatment completes. No limit on friends.
       </Body>

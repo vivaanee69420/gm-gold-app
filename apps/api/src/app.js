@@ -43,8 +43,6 @@ import {
   openProposals,
   confirmProposal,
   rejectProposal,
-  pendingVerifications,
-  decideVerification,
 } from './services/dentally/proposalService.js';
 import { stubAddBookedAppointment, stubAddCompletedTreatment, stubAddPatient } from './services/dentally/client.js';
 import {
@@ -479,17 +477,9 @@ export function buildApp() {
     res.json(await rejectProposal(req.params.id, req.admin.id, req.body?.reason));
   }));
 
-  app.get('/admin/verifications', requireAdmin, wrap(async (_req, res) => {
-    res.json({ verifications: await pendingVerifications() });
-  }));
-
-  app.post('/admin/verifications/:id/approve', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
-    res.json(await decideVerification(req.params.id, req.admin.id, { approve: true, dentallyPatientId: req.body?.dentallyPatientId }));
-  }));
-
-  app.post('/admin/verifications/:id/reject', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
-    res.json(await decideVerification(req.params.id, req.admin.id, { approve: false }));
-  }));
+  // No /admin/verifications: anyone can be a referrer (2026-09-09). The queue, the approve
+  // and reject actions and the pending_review state are gone. Commission is gated by the
+  // REFERRED person's treatment, which is where the Dentally check belongs.
 
   app.get('/admin/aging', requireAdmin, wrap(async (req, res) => {
     const days = Number.isSafeInteger(Number(req.query.days)) && Number(req.query.days) > 0 ? Number(req.query.days) : 7;
