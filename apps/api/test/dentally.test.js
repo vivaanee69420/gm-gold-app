@@ -408,6 +408,25 @@ describe('FR-11 the referred person must be NEW (2026-09-09)', () => {
     expect(rows[0].review_status).toBeNull();
   });
 
+  it('matches a contact stored in DOMESTIC phone format, not just E.164', async () => {
+    // Dental OS stores contacts.phone inconsistently: measured 2026-09-09, 21,337 rows are
+    // E.164 and 16,151 are UK domestic (0...). An earlier version of hasPriorTreatment
+    // compared our E.164 value against the raw column and therefore missed 45% of contacts —
+    // and a miss reads as "this person is new", so an existing patient would be credited.
+    // Matching on the last 10 digits (Dental OS keeps a phone10 column for exactly this) is
+    // what makes the formats irrelevant.
+    stub.stubAddCompletedTreatment({ phone: '07700950010', completedAt: past(300), updatedAt: ts() });
+    await runSync('test');
+
+    // The referral carries the number in E.164, the way our app normalises it.
+    const sub = await submitReferral(agents.referrer, 'Domestic Format', { phone: '+447700950010' });
+    expect(sub.status).toBe(200);
+
+    await runSync('test');
+    const { rows } = await db.query(`select review_status from referrals where id=$1`, [sub.body.referral.id]);
+    expect(rows[0].review_status).toBe('existing_patient_suspect');
+  });
+
   it('matches on EMAIL too, not just phone', async () => {
     // The referred person self-declares their number; the practice may hold them under a
     // different one but the same address.

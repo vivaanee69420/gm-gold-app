@@ -116,6 +116,17 @@ Created by /plan-eng-review on 2026-08-14.
   **Where to start:** make `db.js` expose a per-caller handle rather than a module-global
   driver, or give vitest `isolate` guarantees the suite can actually rely on.
 
+- [ ] ⚠️ **~20% of paid invoices in Dental OS have no `contact_id`** (owner: Dental OS owner).
+  4,688 of ~22,500 paid invoices are orphaned, and it is ONGOING, not a backfill artefact:
+  157 in Q3 2026, 547 in Q2, 654 in Q1, 680 in Q4 2025. If a referred patient's invoice lands
+  in that bucket, **commission silently never fires** — the referral waits forever and the
+  referrer concludes the app does not pay.
+  Not fixable from our side: they carry an `external_id` (the Dentally invoice id) but no
+  `patient_name`, so there is no route back to a contact. Ask: *why do ~20% of Dentally
+  invoices arrive without a contact_id, and can the webhook resolve it?*
+  For contacts that DO have invoices the phone link is excellent — 7,380 of 7,414 payers
+  (99.5%) reachable by phone, 22 unreachable.
+
 - [ ] 💰 **Refund / clawback: commission paid on treatment that gets refunded is unrecoverable**
   — now the single largest uncapped money hole, and the sync cannot see refunds at all. Flow:
   patient pays first invoice → we credit the referrer → the practice refunds them → the £20 is

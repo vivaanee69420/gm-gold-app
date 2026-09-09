@@ -226,15 +226,28 @@ const dentalOsClient = {
    */
   async hasPriorTreatment({ phone, email, before }) {
     if (!phone && !email) return false;
+    // Match on phone10 / email_norm, NOT the raw columns.
+    //
+    // contacts.phone is stored inconsistently: measured 2026-09-09, 21,337 rows are E.164
+    // (+44...), 16,151 are UK domestic (0...), and ~2,100 are something else. Comparing our
+    // E.164 value against the raw column therefore misses 45% of contacts — and a miss here
+    // reads as "this person is new", so an existing patient would be silently credited. A
+    // check that fails open is worse than no check, because it looks like it is working.
+    //
+    // phone10 (last 10 digits) and email_norm (lower+trim) are maintained by Dental OS and are
+    // 100% consistent with their source columns across all 39,628 / 34,309 populated rows.
+    const phone10 = phone ? String(phone).replace(/\D/g, '').slice(-10) : null;
+    const emailNorm = email ? String(email).trim().toLowerCase() : null;
     const { rows } = await dosQuery(
       `select 1
          from appointments a
          join contacts c on c.id = a.contact_id
         where a.status = 'completed'
           and a.ends_at < $3
-          and (($1::text is not null and c.phone = $1) or ($2::text is not null and c.email = $2))
+          and (($1::text is not null and c.phone10 = $1)
+            or ($2::text is not null and c.email_norm = $2))
         limit 1`,
-      [phone ?? null, email ?? null, before],
+      [phone10, emailNorm, before],
     );
     return rows.length > 0;
   },
@@ -263,10 +276,13 @@ export const stubStore = { patients: [], appointments: [], invoices: [], nextId:
 
 /** Stub counterpart of hasPriorTreatment — same question, same answer shape. */
 function stubHasPriorTreatment({ phone, email, before }) {
-  const e164 = phone ? normalizePhone(phone) : null;
+  // Mirror the Dental Os query: compare last-10-digits and a normalised address, so a test
+  // passing here means the real thing would match too.
+  const last10 = (v) => (v ? String(v).replace(/\D/g, '').slice(-10) : null);
+  const wantPhone = last10(phone);
   const addr = email ? normalizeEmail(email) : null;
   const match = stubStore.patients.filter(
-    (p) => (e164 && p.phone === e164) || (addr && p.email === addr),
+    (p) => (wantPhone && last10(p.phone) === wantPhone) || (addr && p.email === addr),
   );
   if (!match.length) return false;
   const ids = new Set(match.map((p) => p.id));
