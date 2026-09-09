@@ -5,7 +5,7 @@
 // so it is still required — just captured after we know who someone is rather than as the
 // claim of who they are. Verification needs BOTH to match one Dental OS contact, so knowing
 // somebody's mobile number is no longer enough to collect their rewards.
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { StyleSheet, Switch, Text, View } from 'react-native';
 import { normalizePhone } from '@gm-referral/shared/phone';
 import { Body, Eyebrow, Field, GoldButton, Screen, Title } from '../components/ui';
@@ -72,11 +72,42 @@ export function LoginScreen({ navigation }) {
   );
 }
 
+// Supabase enforces a minimum interval between codes to the same address (the SMTP
+// setting, 60s by default) and answers 429 inside it. Mirror it in the UI: a button that
+// silently does nothing gets tapped again, and again, which is how a patient concludes the
+// app is broken and gives up on the spot.
+const RESEND_COOLDOWN_SECONDS = 60;
+
 export function VerifyScreen({ navigation }) {
   const { verifyCode, pendingEmail, sendCode } = useAppState();
   const [code, setCode] = useState('');
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState(null);
+  const [cooldown, setCooldown] = useState(RESEND_COOLDOWN_SECONDS);
+
+  useEffect(() => {
+    if (cooldown <= 0) return undefined;
+    const timer = setTimeout(() => setCooldown((n) => n - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [cooldown]);
+
+  const resend = async () => {
+    if (!pendingEmail || cooldown > 0) return;
+    setError(null);
+    setNotice(null);
+    try {
+      await sendCode(pendingEmail);
+      setCooldown(RESEND_COOLDOWN_SECONDS);
+      setNotice('New code sent. Check your inbox.');
+    } catch (err) {
+      // 429 means we asked again too soon — tell them to wait rather than failing silently.
+      setError(err?.status === 429
+        ? 'Please wait a moment before asking for another code.'
+        : 'Could not send another code. Check your connection and try again.');
+      setCooldown(RESEND_COOLDOWN_SECONDS);
+    }
+  };
 
   const submit = async () => {
     setBusy(true);
@@ -117,12 +148,14 @@ export function VerifyScreen({ navigation }) {
           maxLength={6}
           onSubmitEditing={submit}
         />
+        {notice ? <Text style={styles.notice}>{notice}</Text> : null}
         {error ? <Text style={styles.error}>{error}</Text> : null}
         <GoldButton label="Sign in" onPress={submit} disabled={busy || code.trim().length !== 6} />
         <GoldButton
-          label="Email it again"
+          label={cooldown > 0 ? `Email it again in ${cooldown}s` : 'Email it again'}
           variant="ghost"
-          onPress={() => pendingEmail && sendCode(pendingEmail)}
+          onPress={resend}
+          disabled={cooldown > 0}
         />
       </View>
     </Screen>
@@ -238,6 +271,7 @@ export function RolePickerScreen() {
 
 const styles = StyleSheet.create({
   error: { color: colors.danger, marginBottom: space(2) },
+  notice: { color: colors.success, marginBottom: space(2) },
   optRow: {
     flexDirection: 'row',
     alignItems: 'center',
