@@ -16,8 +16,8 @@
       "env": {
         "EXPO_PUBLIC_API_URL": "https://api-production-9d24.up.railway.app",
         "ANDROID_ARCHS": "arm64-v8a",
-        "EXPO_PUBLIC_SUPABASE_URL": "REPLACE_WITH_SUPABASE_PROJECT_URL",
-        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "REPLACE_WITH_SUPABASE_ANON_KEY"
+        "EXPO_PUBLIC_SUPABASE_URL": "https://xiijsxabqwngeoxlflya.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhpaWpzeGFicXduZ2VveGxmbHlhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODczMTM0OTksImV4cCI6MjEwMjg4OTQ5OX0.ynnUwgKsJQAMe8yKGzje_kmjBPSp4rmFPJV5EuB2UAM"
       },
       "channel": "preview-live-api"
     },
@@ -26,8 +26,8 @@
       "channel": "production",
       "env": {
         "EXPO_PUBLIC_API_URL": "https://api-production-9d24.up.railway.app",
-        "EXPO_PUBLIC_SUPABASE_URL": "REPLACE_WITH_SUPABASE_PROJECT_URL",
-        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "REPLACE_WITH_SUPABASE_ANON_KEY"
+        "EXPO_PUBLIC_SUPABASE_URL": "https://xiijsxabqwngeoxlflya.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhpaWpzeGFicXduZ2VveGxmbHlhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODczMTM0OTksImV4cCI6MjEwMjg4OTQ5OX0.ynnUwgKsJQAMe8yKGzje_kmjBPSp4rmFPJV5EuB2UAM"
       }
     }
   },

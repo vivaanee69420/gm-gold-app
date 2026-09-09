@@ -1,0 +1,45 @@
+# ggshield configuration.
+#
+# Only ONE thing is ignored here, and this comment is the record of why. If you are adding a
+# second entry, stop and check it deserves the same reasoning — the value of this file is that
+# it stays short enough to read.
+
+version: 2
+
+secret:
+  ignored_matches:
+    # Supabase ANON key, in apps/mobile/eas.json (preview-live-api + production build envs).
+    #
+    # Why this is safe to commit, specifically:
+    #
+    #   1. It is public BY DESIGN. Supabase anon keys are meant to ship in client apps. This
+    #      one is compiled into the APK by Expo (EXPO_PUBLIC_* variables always are), so
+    #      anyone who installs the app can extract it in about a minute. Keeping it out of
+    #      the repo would not make it secret; it would only make it harder to find.
+    #
+    #   2. It grants the `anon` Postgres role, and that role can read NOTHING. Row Level
+    #      Security is enabled on all 17 tables and no policy grants anon or authenticated
+    #      anything (the only policy in the schema is scoped to gm_referral_api, the API's
+    #      own role). This is enforced, not assumed — see the RLS tests in
+    #      apps/api/test/migrations.test.js, which fail if a future migration adds a table
+    #      without RLS or a policy that names anon.
+    #
+    #   3. The API does not use it at all. The Express API connects over a direct Postgres
+    #      connection string as gm_referral_api and bypasses PostgREST entirely. This key
+    #      exists solely so the mobile app can call Supabase Auth to send and verify codes.
+    #
+    # The residual risk is abuse, not disclosure: someone with this key can ask Supabase to
+    # email login codes to arbitrary addresses, which burns Resend quota and sending-domain
+    # reputation. Supabase's per-IP and per-address auth rate limits are the control. When
+    # raising the 30/hour auth email limit before launch, raise it to a real number rather
+    # than removing the ceiling.
+    #
+    # What must NEVER appear in this repo, or in any EXPO_PUBLIC_ variable: the Supabase
+    # SERVICE_ROLE key. It bypasses RLS completely, and an EXPO_PUBLIC_ prefix would compile
+    # it into the APK. It belongs only in Railway env, as SUPABASE_SERVICE_ROLE_KEY.
+    #
+    # This hash is tied to THIS key for THIS project (ref xiijsxabqwngeoxlflya, Sydney).
+    # Rotating the key, or moving to the London project, produces a new hash and this entry
+    # will need replacing — which is deliberate: a new key deserves a fresh look.
+    - name: Supabase anon key (public by design; RLS denies it everything)
+      match: f1bd1c242d56cb2027c04ef732cc429af6bdd0368cb89b6b6b73471dac6b3b88
