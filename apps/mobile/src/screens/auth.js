@@ -137,7 +137,7 @@ export function VerifyScreen({ navigation }) {
         <Eyebrow>Check your inbox</Eyebrow>
         <Title>Enter your code</Title>
         <Body muted style={{ marginBottom: space(6) }}>
-          Sent to {pendingEmail}. It expires in a few minutes — check spam if it hasn’t arrived.
+          Sent to {pendingEmail}. It expires in 10 minutes — check spam if it hasn’t arrived.
         </Body>
         <Field
           label="6-digit code"
