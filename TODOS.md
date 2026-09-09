@@ -10,6 +10,32 @@ Created by /plan-eng-review on 2026-08-14.
 - [x] **Dentally data — LIVE via Dental Os (2026-08-21, decision by Ruhith)**: the sync reads the central Dental Os DB (fed by Dentally webhooks) through read-only role `gm_referral_reader`; ~16k patients indexed on first backfill; `gmref_doorbell` triggers on Dental Os ping `/webhooks/dentally` for second-level latency. Real practices seeded (migration 0006). Direct-Dentally OAuth + token paths remain as built fallbacks (spike script kept). **The Dentally-credentials email is now OPTIONAL** — only needed if we ever switch to direct mode.
   - [ ] Deploy current code + env (`DATABASE_URL`, `DENTAL_OS_DATABASE_URL`, `DENTALLY_WEBHOOK_SECRET`) to Railway so the doorbell (which targets the staging URL) completes the instant-update chain in staging.
 - [x] ~~**Meta WhatsApp Business verification**~~ — OBSOLETE (2026-08-22, decision by Ruhith): **email replaces WhatsApp** for auth OTP and reminders. Auth email first; reminder emails are a later phase. No Meta verification needed; `whatsapp_primary` mode is dropped from the plan. → new work item: pick an email provider + wire OTP-by-email alongside SMS.
+- [ ] 🚨 **BLOCKER — Dental OS reads are denied: the sync cannot see anything** (owner: Dental OS
+  owner). Diagnosed 2026-09-09 against the live `DENTAL_OS_DATABASE_URL`:
+
+  ```
+  connected as:       gm_referral_reader                              OK
+  tables visible:     appointments, contacts, invoices, practices     OK
+  current_org_id():   exists, owned by postgres
+  EXECUTE privilege:  false                                        <-- the blocker
+  ```
+
+  RLS policies on `contacts`, `appointments` and `invoices` all call `current_org_id()`, and
+  `gm_referral_reader` cannot execute it, so **every** read fails with
+  `permission denied for function current_org_id`. That is patients, appointments AND invoices —
+  the whole sync. No booking detection, no treatment tracking, no commission, ever.
+
+  It fails SILENTLY: `runSync` catches and returns `{error}`, so it has been failing every 15
+  minutes into the Railway logs rather than alerting anyone. Nothing in the app looks broken.
+
+  **Ask the Dental OS owner for:**
+  ```sql
+  grant execute on function current_org_id() to gm_referral_reader;
+  ```
+  and then confirm it RESOLVES an org for that role — if it returns null, the policies will
+  return zero rows and the sync will look "working but empty", which is worse than an error.
+  Verify with: `select count(*) from appointments;` as `gm_referral_reader`.
+
 - [ ] **Accountant: cash-commission tax treatment** (owner: practice accountant) — blocks payout wording + terms. → open question 2
 - [ ] **Solicitor: incentive claims + UK GDPR Article 9 basis** (owner: solicitor) — blocks consent wording finalization + launch. → open question 5 / compliance checklist
 
