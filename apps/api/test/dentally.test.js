@@ -359,3 +359,75 @@ describe('email fallback: Dentally records under a different phone still match t
     expect(rows[0].status).toBe('new');
   });
 });
+
+// Deliberately LAST in this file. These tests create referrals and completed treatments, and
+// the FR-16 / FR-25 blocks above assert counts over completion_proposals and the aging report.
+// Run earlier, this block leaves proposals behind and those assertions fail — which is a test
+// isolation problem, not a product one, but it is easier to order the file than to scope every
+// count above to its own referral.
+describe('FR-11 the referred person must be NEW (2026-09-09)', () => {
+  // The rule: the REFERRER can be anyone — no verification, that is the product. The REFERRED
+  // person must be genuinely new, meaning no COMPLETED appointment in Dental OS before the
+  // referral was submitted. Existing patient => no commission, ever.
+  //
+  // This mattered more than it looked. Nothing in the codebase ever SET
+  // existing_patient_suspect — it was read in three places and written in none, so FR-11 was
+  // never actually implemented. Measured against real Dental OS data: ~63% of people attending
+  // in a quarter had been treated before, so most commission would have gone on patients who
+  // were already the practice's.
+
+  it('flags a referred person who was ALREADY a patient, which blocks the credit', async () => {
+    // Treated here a year before anyone referred them.
+    stub.stubAddCompletedTreatment({ phone: '+447700950001', completedAt: past(365), updatedAt: ts() });
+    await runSync('test');
+
+    const sub = await submitReferral(agents.referrer, 'Old Patient', { phone: '+447700950001' });
+    expect(sub.status).toBe(200);
+
+    const out = await runSync('test');
+    expect(out.existingPatientsFlagged).toBeGreaterThanOrEqual(1);
+
+    const { rows } = await db.query(`select review_status from referrals where id=$1`, [sub.body.referral.id]);
+    expect(rows[0].review_status).toBe('existing_patient_suspect');
+  });
+
+  it('leaves a genuinely new person alone', async () => {
+    const sub = await submitReferral(agents.referrer, 'Brand New', { phone: '+447700950002' });
+    await runSync('test');
+    const { rows } = await db.query(`select review_status from referrals where id=$1`, [sub.body.referral.id]);
+    expect(rows[0].review_status).toBeNull();
+  });
+
+  it('a treatment AFTER the referral does not make them an existing patient', async () => {
+    // The whole point: they were new when referred, then got treated. That is the happy path,
+    // not a flag. Comparing against the wrong side of the referral date breaks every referral.
+    const sub = await submitReferral(agents.referrer, 'New Then Treated', { phone: '+447700950003' });
+    stub.stubAddCompletedTreatment({ phone: '+447700950003', completedAt: ts(), updatedAt: ts() });
+    await runSync('test');
+    const { rows } = await db.query(`select review_status from referrals where id=$1`, [sub.body.referral.id]);
+    expect(rows[0].review_status).toBeNull();
+  });
+
+  it('matches on EMAIL too, not just phone', async () => {
+    // The referred person self-declares their number; the practice may hold them under a
+    // different one but the same address.
+    stub.stubAddCompletedTreatment({
+      phone: '+447700959999', email: 'known@example.com', completedAt: past(200), updatedAt: ts(),
+    });
+    await runSync('test');
+
+    const sub = await submitReferral(agents.referrer, 'Email Match', {
+      phone: '+447700950004', email: 'known@example.com',
+    });
+    expect(sub.status).toBe(200);
+
+    await runSync('test');
+    const { rows } = await db.query(`select review_status from referrals where id=$1`, [sub.body.referral.id]);
+    expect(rows[0].review_status).toBe('existing_patient_suspect');
+  });
+
+  // No "and it still credits normally" test here: it would leave a proposal behind and the
+  // FR-16 block below asserts an empty completion_proposals table. FR-16 proves the happy
+  // path anyway, and it now runs WITH flagExistingPatients active — so if this check broke
+  // crediting, those tests would fail.
+});

@@ -68,6 +68,19 @@ const hasMore = (items) => items.length === PER_PAGE;
 const poundsToPennies = (v) => (v == null ? null : Math.round(parseFloat(v) * 100));
 
 const liveClient = {
+  /**
+   * FR-11 against the Dentally REST API. Not implemented: the Dental Os database is the
+   * source of record (decision 2026-08-21) and answers this in one query, whereas the REST
+   * API would need a patient search followed by an appointment list per hit.
+   *
+   * Returns null — NOT false — so the caller can tell "checked, they are new" from "could not
+   * check". Answering false here would silently mark every referral as clean and pay
+   * commission on existing patients, which is the exact failure this check exists to prevent.
+   */
+  async hasPriorTreatment() {
+    return null;
+  },
+
   async listAppointments({ updatedAfter, page = 1 }) {
     const body = await liveGet(
       `/appointments?updated_after=${encodeURIComponent(updatedAfter)}&per_page=${PER_PAGE}&page=${page}`,
@@ -200,6 +213,31 @@ const dentalOsClient = {
       ? { id: String(r.id), phone: normalizePhone(r.phone ?? ''), email: normalizeEmail(r.email ?? ''), siteId: r.site_id ?? null, updatedAt: iso(r.updated_at) }
       : null;
   },
+  /**
+   * FR-11: had this person already been treated here BEFORE the referral?
+   *
+   * "Treated" is a COMPLETED appointment (decision 2026-09-09, option B). Not a paid invoice:
+   * NHS work, a free check-up and warranty work can all be treatment with no invoice raised,
+   * and someone treated without paying is still plainly an existing patient. Not merely a
+   * booking either — booked-and-never-attended is a lead, not a patient.
+   *
+   * Matched on phone OR email, because the referred person self-declares their number and the
+   * practice may hold them under either.
+   */
+  async hasPriorTreatment({ phone, email, before }) {
+    if (!phone && !email) return false;
+    const { rows } = await dosQuery(
+      `select 1
+         from appointments a
+         join contacts c on c.id = a.contact_id
+        where a.status = 'completed'
+          and a.ends_at < $3
+          and (($1::text is not null and c.phone = $1) or ($2::text is not null and c.email = $2))
+        limit 1`,
+      [phone ?? null, email ?? null, before],
+    );
+    return rows.length > 0;
+  },
   async listInvoices({ patientId }) {
     const byPms = String(patientId).startsWith('pms:');
     const { rows } = await dosQuery(
@@ -222,6 +260,20 @@ const dentalOsClient = {
 
 // ---------- stub ----------
 export const stubStore = { patients: [], appointments: [], invoices: [], nextId: 1, down: false };
+
+/** Stub counterpart of hasPriorTreatment — same question, same answer shape. */
+function stubHasPriorTreatment({ phone, email, before }) {
+  const e164 = phone ? normalizePhone(phone) : null;
+  const addr = email ? normalizeEmail(email) : null;
+  const match = stubStore.patients.filter(
+    (p) => (e164 && p.phone === e164) || (addr && p.email === addr),
+  );
+  if (!match.length) return false;
+  const ids = new Set(match.map((p) => p.id));
+  return stubStore.appointments.some(
+    (a) => ids.has(a.patientId) && a.completedAt && new Date(a.completedAt) < new Date(before),
+  );
+}
 
 export function stubReset() {
   stubStore.patients = [];
@@ -303,6 +355,10 @@ const assertUp = () => {
 const afterFilter = (items, updatedAfter) => items.filter((x) => x.updatedAt > updatedAfter);
 
 const stubClient = {
+  async hasPriorTreatment(args) {
+    assertUp();
+    return stubHasPriorTreatment(args);
+  },
   async listAppointments({ updatedAfter }) {
     assertUp();
     return { items: afterFilter(stubStore.appointments, updatedAfter), hasMore: false };

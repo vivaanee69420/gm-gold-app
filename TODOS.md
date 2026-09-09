@@ -116,6 +116,36 @@ Created by /plan-eng-review on 2026-08-14.
   **Where to start:** make `db.js` expose a per-caller handle rather than a module-global
   driver, or give vitest `isolate` guarantees the suite can actually rely on.
 
+- [ ] 💰 **Refund / clawback: commission paid on treatment that gets refunded is unrecoverable**
+  — now the single largest uncapped money hole, and the sync cannot see refunds at all. Flow:
+  patient pays first invoice → we credit the referrer → the practice refunds them → the £20 is
+  gone with nothing marking it. Newly actionable: the Dental OS read-only access was granted
+  2026-09-09, so `invoices` is queryable. Work: detect a paid invoice becoming unpaid/refunded
+  (or a credit note) for a contact behind a credited referral, then write a reasoned negative
+  adjustment via the existing wallet ledger — do NOT delete the original credit, the ledger is
+  append-only (NFR-03). Also decide what happens if the referrer has already been paid out.
+
+- [ ] **Self-referral via a different phone** — `referralService.js:24` only rejects
+  `referrer_phone === referred_phone`. Refer yourself using a spouse's or second number and it
+  passes. The FR-11 existing-patient check now catches the case where you refer yourself and
+  you were already a patient, which is the common one, but not a genuinely new second person.
+  Options: device fingerprint, same-household heuristics, or a per-referrer cap.
+
+- [ ] **No rate limit on referral submission** — `todo.md` Q18 specifies 3/day/account. Not
+  implemented; there is no limit at all. One compromised or abusive account can submit
+  unbounded referrals.
+
+- [ ] **Staff participation is undefined** — anyone can refer, including practice employees.
+  This is the sharpest edge of the GDC "referral fee" guidance, which restricts dental
+  professionals receiving benefit for referrals. Patient word-of-mouth is a different thing and
+  is normal, but staff earning per head is not. Ask the solicitor alongside the incentive-claims
+  question, and consider flagging staff accounts.
+
+- [ ] **Shared family phone blocks legitimate referrals** —
+  `referrals_referred_phone_active` is unique per phone, so a household sharing one mobile can
+  only ever have ONE referred member. Common in dentistry. Consider keying on phone+name, or
+  allowing an admin override.
+
 ## Phase 2 backlog
 
 See `docs/FLOWS.md` §9 — the authoritative list (web capture page tripwire lever, wallet passes, leaderboard/draw, percent rules, fraud scoring, deferred deep linking, admin conveniences with MVP stand-ins, staff-side referral entry, self-service phone change, fuzzy matching).

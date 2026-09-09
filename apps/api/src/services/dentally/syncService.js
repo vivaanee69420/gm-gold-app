@@ -9,6 +9,9 @@
 //     │        + eligibility (completed AFTER referral submitted)
 //     │        + a paid invoice for the patient
 //     │        → completion_proposals (unique per dentally_event_id — idempotent)
+//     ├─ flagExistingPatients()                -- FR-11: referred person was ALREADY a
+//     │                                          patient -> existing_patient_suspect,
+//     │                                          which blocks the credit
 //     └─ expireUnbookedReferrals()             -- referrals that never got booked in time
 //   unlock
 //
@@ -172,9 +175,19 @@ async function processCompletedPage(client, appointments) {
 
       if (paidInvoice === undefined) {
         const { items: invoices } = await client.listInvoices({ patientId: appointment.patientId });
-        paidInvoice = invoices.find((i) => i.paid) ?? null;
+        // The invoice must be THEIRS, FOR THIS TREATMENT — i.e. dated on or after the referral.
+        // `invoices.find((i) => i.paid)` alone accepted ANY paid invoice ever, so a returning
+        // patient's years-old invoice satisfied "they have paid". Measured against real data
+        // 2026-09-09: 31.5% of recent attendees have a paid invoice dated >30 days before the
+        // appointment, so this was not a theoretical hole.
+        //
+        // flagExistingPatients is the primary defence and catches these people earlier. This is
+        // the second line, for when that check could not run (Dentally unreachable) or was
+        // fooled by a duplicate contact record.
+        const referredOn = new Date(referral.created_at).toISOString().slice(0, 10);
+        paidInvoice = invoices.find((i) => i.paid && (!i.paidOn || i.paidOn >= referredOn)) ?? null;
       }
-      if (!paidInvoice) continue; // completed but not paid — not yet creditable
+      if (!paidInvoice) continue; // completed but not paid for THIS treatment — not creditable
 
       const invoiceState = `paid${paidInvoice.paidOn ? ` ${paidInvoice.paidOn}` : ''}${
         paidInvoice.amountPennies != null ? ` £${(paidInvoice.amountPennies / 100).toFixed(2)}` : ''
@@ -282,6 +295,55 @@ async function scanCompletions(client) {
 }
 
 /** FR-05 auto-resolve: pending_review referrers with a now-clean index match become verified. */
+/**
+ * FR-11: flag referrals whose "new patient" was already a patient here.
+ *
+ * The commission rule (2026-09-09): the REFERRER can be anyone, but the REFERRED person must
+ * be genuinely new. Existing patient means they have a COMPLETED appointment in Dental OS
+ * dated before the referral was submitted — treated here before, whether or not an invoice was
+ * ever raised (NHS work, a free check-up and warranty work are all treatment with no invoice).
+ *
+ * Measured against real data 2026-09-09: ~63% of people attending these practices in a given
+ * quarter had been treated before. Without this, most commission would go on patients who were
+ * already yours.
+ *
+ * Runs here, in the sync, rather than at submission — which is what FR-11 asks for: never block
+ * a referral being submitted, retry when Dentally is unreachable, and apply retroactively if
+ * the evidence arrives late.
+ *
+ * `hasPriorTreatment` returning null means COULD NOT CHECK (the live Dentally REST path does
+ * not implement it). That is skipped, not treated as clean — marking an unchecked referral as
+ * fine is how you end up paying on existing patients silently.
+ */
+async function flagExistingPatients(client) {
+  const { rows: candidates } = await db.query(
+    `select id, referred_phone, referred_email, created_at
+       from referrals
+      where review_status is null
+        and status not in ('lost', 'treatment_completed')`,
+  );
+  let flagged = 0;
+  for (const referral of candidates) {
+    const prior = await client.hasPriorTreatment({
+      phone: referral.referred_phone,
+      email: referral.referred_email ? referral.referred_email.trim().toLowerCase() : null,
+      before: referral.created_at,
+    });
+    if (prior !== true) continue; // false = genuinely new; null = could not check, try next pass
+
+    await db.query(`update referrals set review_status='existing_patient_suspect' where id=$1`, [referral.id]);
+    await logEvent(db, {
+      actorKind: 'system',
+      entityType: 'referral',
+      entityId: referral.id,
+      action: 'existing_patient_flagged',
+      reason: 'completed appointment in Dental OS predating the referral',
+    });
+    flagged += 1;
+  }
+  return flagged;
+}
+
 /** One full sync pass. Safe to call from the cron interval, a webhook, or an admin button. */
 let rerunQueued = false;
 
@@ -305,9 +367,10 @@ export async function runSync(trigger = 'manual') {
         const client = dentallyClient(mode);
         const patientsIndexed = await refreshPatientIndex(client);
         const { proposals: proposalsCreated, bookings: bookingsDetected } = await scanCompletions(client);
+        const existingPatientsFlagged = await flagExistingPatients(client);
         const referralsExpired = await expireUnbookedReferrals();
-        const summary = { trigger, patientsIndexed, proposalsCreated, bookingsDetected, referralsExpired };
-        if (proposalsCreated || bookingsDetected || referralsExpired) console.log('[dentally] sync', JSON.stringify(summary));
+        const summary = { trigger, patientsIndexed, proposalsCreated, bookingsDetected, existingPatientsFlagged, referralsExpired };
+        if (proposalsCreated || bookingsDetected || existingPatientsFlagged || referralsExpired) console.log('[dentally] sync', JSON.stringify(summary));
         return summary;
       } finally {
         await lockClient.query(`select pg_advisory_unlock(hashtext('dentally_sync'))`);
