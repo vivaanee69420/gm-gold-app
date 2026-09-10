@@ -19,6 +19,7 @@ function stubDashboardRoutes() {
     { method: 'GET', path: '/admin/stats', body: { stats: { commissionPennies: 2000, liabilityPennies: 46000, referralCounts: { new: 2, booked: 1 } } } },
     { method: 'GET', path: '/admin/payouts', body: { payouts: [] } },
     { method: 'GET', path: '/admin/referrals', body: { referrals: [] } },
+    { method: 'GET', path: '/admin/patients', body: { patients: [] } },
     { method: 'GET', path: '/admin/proposals', body: { proposals: [] } },
     { method: 'GET', path: '/admin/verifications', body: { verifications: [] } },
     { method: 'GET', path: '/admin/aging', body: { aging: [], days: 7 } },
@@ -46,21 +47,50 @@ describe('App', () => {
     expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
   });
 
-  it('shows the operations page by default when signed in', async () => {
+  it('shows the pipeline page by default when signed in', async () => {
     setToken('tok');
     stubDashboardRoutes();
     render(<App />);
 
     expect(await screen.findByText('£460.00')).toBeInTheDocument(); // liability
-    expect(screen.getByRole('heading', { name: /payout requests/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^pipeline$/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /existing-patient review/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /referral record/i })).toBeInTheDocument();
+    // Operations content — the queues and the referral record — now lives on its own page.
+    expect(screen.queryByRole('heading', { name: /payout requests/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /existing-patient review/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /referral record/i })).not.toBeInTheDocument();
     // Reports & Setup content lives on the other page.
     expect(screen.queryByRole('heading', { name: /^funnel$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /reward levers/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /top referrers/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /^dentally$/i })).not.toBeInTheDocument();
+  });
+
+  it('switches to the operations page via the topbar nav', async () => {
+    setToken('tok');
+    stubDashboardRoutes();
+    render(<App />);
+    await screen.findByText('£460.00');
+
+    await userEvent.click(screen.getByRole('link', { name: /^operations$/i }));
+
+    expect(screen.getByRole('heading', { name: /existing-patient review/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /referral record/i })).toBeInTheDocument();
+    // Pipeline and payouts are their own pages now — not rendered twice inside Operations.
+    expect(screen.queryByRole('heading', { name: /^pipeline$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /payout requests/i })).not.toBeInTheDocument();
+    expect(window.location.pathname).toBe('/operations');
+  });
+
+  it('switches to the payouts page via the topbar nav', async () => {
+    setToken('tok');
+    stubDashboardRoutes();
+    render(<App />);
+    await screen.findByText('£460.00');
+
+    await userEvent.click(screen.getByRole('link', { name: /^payouts$/i }));
+
+    expect(screen.getByRole('heading', { name: /payout requests/i })).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/payouts');
   });
 
   it('switches to the reports & setup page via the topbar nav', async () => {
@@ -102,7 +132,7 @@ describe('App', () => {
     expect(screen.queryByRole('heading', { name: /change password/i })).not.toBeInTheDocument();
   });
 
-  it('returns to the operations page when the browser goes back', async () => {
+  it('returns to the pipeline page when the browser goes back', async () => {
     setToken('tok');
     stubDashboardRoutes();
     render(<App />);
@@ -113,7 +143,7 @@ describe('App', () => {
     window.history.replaceState({}, '', '/');
     fireEvent.popState(window);
 
-    expect(screen.getByRole('heading', { name: /payout requests/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^pipeline$/i })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /^funnel$/i })).not.toBeInTheDocument();
   });
 
@@ -139,21 +169,52 @@ describe('App', () => {
     expect(window.location.search).toBe('');
   });
 
-  it('renders the manager payout screen for a practice-scoped manager, with no top nav', async () => {
+  it('shows a clear message instead of crashing for a manager with no practice assigned', async () => {
     setToken('tok');
     const calls = stubFetchRoutes([
-      { method: 'GET', path: '/admin/me', body: { role: 'manager', practices: [{ id: 'pr-sidcup', name: 'Sidcup' }] } },
-      { method: 'GET', path: '/admin/payouts', body: { payouts: [] } },
+      { method: 'GET', path: '/admin/me', body: { id: 'm2', email: 'm2@x.co', role: 'manager', practices: [] } },
     ]);
     render(<App />);
 
-    expect(await screen.findByRole('heading', { name: /sidcup · payouts/i })).toBeInTheDocument();
-    expect(screen.queryByRole('navigation')).not.toBeInTheDocument();
+    expect(
+      await screen.findByText(/no practice is assigned to this account — ask the owner to fix it/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/loading/i)).not.toBeInTheDocument();
+    // Nothing to scope a query to — don't hit the API just to render nothing.
+    expect(calls.map((c) => c.path)).toEqual(['/admin/me']);
+  });
+});
+
+describe('role-driven navigation', () => {
+  const managerRoutes = [
+    { method: 'GET', path: '/admin/me', body: { id: 'm1', email: 'm@x.co', role: 'manager', practices: [{ id: 'p1', name: 'Ashford' }] } },
+    { method: 'GET', path: '/admin/stats', body: { stats: { commissionPennies: 10000, liabilityPennies: null, creditedPennies: 5000, referralCounts: {} } } },
+    { method: 'GET', path: '/admin/payouts', body: { payouts: [] } },
+    { method: 'GET', path: '/admin/referrals', body: { referrals: [] } },
+    { method: 'GET', path: '/admin/patients', body: { patients: [] } },
+  ];
+
+  it('gives a manager pipeline, patients and payouts — and no setup nav', async () => {
+    const calls = stubFetchRoutes(managerRoutes);
+    setToken('tok');
+    render(<App />);
+
+    expect(await screen.findByRole('link', { name: /pipeline/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /patients/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /payouts/i })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /reports & setup/i })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument();
-    // A manager's `loadAll` must never fire — only the two routes ManagerPage itself needs.
-    // Waited on rather than asserted once: /admin/payouts is fired by an effect that runs
-    // after /admin/me resolves, so a bare assertion races the second fetch.
-    await vi.waitFor(() => expect(calls.map((c) => c.path).sort()).toEqual(['/admin/me', '/admin/payouts']));
+
+    // A manager must never trigger a request they are not allowed to make.
+    const paths = calls.map((c) => c.path);
+    expect(paths).not.toContain('/admin/proposals');
+    expect(paths).not.toContain('/admin/settings');
+    expect(paths).not.toContain('/admin/team');
+  });
+
+  it('shows the manager their practice name', async () => {
+    stubFetchRoutes(managerRoutes);
+    setToken('tok');
+    render(<App />);
+    expect(await screen.findByText(/ashford/i)).toBeInTheDocument();
   });
 });

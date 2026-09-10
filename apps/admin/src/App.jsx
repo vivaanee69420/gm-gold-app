@@ -4,14 +4,29 @@ import { isSignedIn, signOut } from './api/auth.js';
 import { errorMessage } from './copy.js';
 import SignIn from './components/SignIn.jsx';
 import ChangePassword from './components/ChangePassword.jsx';
-import ManagerPage from './pages/ManagerPage.jsx';
+import PipelinePage from './pages/PipelinePage.jsx';
+import PatientsPage from './pages/PatientsPage.jsx';
+import PayoutsPage from './pages/PayoutsPage.jsx';
 import OperationsPage from './pages/OperationsPage.jsx';
 import ReportsPage from './pages/ReportsPage.jsx';
 
+// Managers get a strict subset of the owner's dashboard, scoped by the API to their own
+// practice (see MANAGER_ROUTES in the API's middleware/auth.js — these two lists must agree).
 const PAGES = [
-  { path: '/', label: 'Operations' },
-  { path: '/reports', label: 'Reports & Setup' },
+  { path: '/', label: 'Pipeline', roles: ['admin', 'manager'] },
+  { path: '/patients', label: 'Patients', roles: ['admin', 'manager'] },
+  { path: '/payouts', label: 'Payouts', roles: ['admin', 'manager'] },
+  { path: '/operations', label: 'Operations', roles: ['admin'] },
+  { path: '/reports', label: 'Reports & Setup', roles: ['admin'] },
 ];
+
+const PAGE_COMPONENTS = {
+  '/': PipelinePage,
+  '/patients': PatientsPage,
+  '/payouts': PayoutsPage,
+  '/operations': OperationsPage,
+  '/reports': ReportsPage,
+};
 
 export default function App() {
   const [signedIn, setSignedIn] = useState(isSignedIn());
@@ -29,12 +44,31 @@ export default function App() {
   }, []);
 
   const loadAll = useCallback(async () => {
+    if (!me) return;
+    const isManager = me.role === 'manager';
+    // Controller ruling (2026-08-28, carried over from the old ManagerPage): a manager
+    // granted no practice yet would only ever get back empty, practice-scoped results —
+    // don't hit the API just to render nothing; show the explicit state below instead.
+    if (isManager && me.practices.length === 0) return;
     try {
-      const [settings, stats, payouts, referrals, proposals, aging, dentally, reviews, funnel, top] = await Promise.all([
-        api('/admin/settings'),
+      // Every manager-reachable endpoint, and for an admin the rest of the dashboard too.
+      const shared = await Promise.all([
         api('/admin/stats'),
         api('/admin/payouts'),
         api('/admin/referrals'),
+        api('/admin/patients'),
+      ]);
+      const [stats, payouts, referrals, patients] = shared;
+      const base = {
+        stats: stats.stats,
+        payouts: payouts.payouts,
+        referrals: referrals.referrals,
+        patients: patients.patients,
+      };
+      if (isManager) return setData(base);
+
+      const [settings, proposals, aging, dentally, reviews, funnel, top] = await Promise.all([
+        api('/admin/settings'),
         api('/admin/proposals'),
         api('/admin/aging'),
         api('/admin/dentally/status'),
@@ -43,10 +77,8 @@ export default function App() {
         api('/admin/reports/top-referrers'),
       ]);
       setData({
+        ...base,
         settings: settings.settings,
-        stats: stats.stats,
-        payouts: payouts.payouts,
-        referrals: referrals.referrals,
         proposals: proposals.proposals,
         aging: aging.aging,
         agingDays: aging.days,
@@ -58,7 +90,7 @@ export default function App() {
     } catch (err) {
       notify(err.code ?? 'load_failed');
     }
-  }, [notify]);
+  }, [notify, me]);
 
   const signOutNow = useCallback(() => {
     signOut();
@@ -96,15 +128,25 @@ export default function App() {
     setRoute('/reports');
   }, []);
 
-  // FR-24: fetch role + practice scope first — a manager gets a stripped-down
-  // payouts-only screen; everyone else gets the full dashboard's loadAll.
+  // FR-24: fetch role + practice scope first — a manager's `loadAll` scopes itself to
+  // only the endpoints the API lets a manager call.
   useEffect(() => {
     if (!signedIn) return;
     api('/admin/me').then(setMe).catch((err) => notify(err.code ?? 'load_failed'));
   }, [signedIn, notify]);
 
   useEffect(() => {
-    if (signedIn && me && me.role !== 'manager') loadAll();
+    if (signedIn && me) loadAll();
+  }, [signedIn, me, loadAll]);
+
+  // The front desk leaves this open all day; a colleague's change should appear without a
+  // manual reload. Only while the tab is actually in front of someone.
+  useEffect(() => {
+    if (!signedIn || !me) return undefined;
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') loadAll();
+    }, 30_000);
+    return () => clearInterval(timer);
   }, [signedIn, me, loadAll]);
 
   if (!signedIn) return <SignIn onSignedIn={() => setSignedIn(true)} />;
@@ -116,26 +158,19 @@ export default function App() {
     </div>
   );
 
-  if (me?.role === 'manager') {
-    return (
-      <>
-        {toastEl}
-        <ManagerPage me={me} notify={notify} onSignOut={signOutNow} />
-      </>
-    );
-  }
-
-  // Unknown paths fall back to Operations.
-  const activePath = route === '/reports' ? '/reports' : '/';
-  const Page = activePath === '/reports' ? ReportsPage : OperationsPage;
+  const role = me?.role ?? 'admin';
+  const visiblePages = PAGES.filter((p) => p.roles.includes(role));
+  const activePath = visiblePages.some((p) => p.path === route) ? route : '/';
+  const Page = PAGE_COMPONENTS[activePath];
+  const managerHasNoPractice = role === 'manager' && (me?.practices?.length ?? 0) === 0;
 
   return (
     <div className="dashboard">
       <header className="topbar">
         <p className="wordmark">GM Dental</p>
-        <h1>Referral Admin</h1>
+        <h1>{me?.practices?.length === 1 ? `${me.practices[0].name} · Referrals` : 'Referral Admin'}</h1>
         <nav className="topnav">
-          {PAGES.map(({ path, label }) => (
+          {visiblePages.map(({ path, label }) => (
             <a
               key={path}
               href={path}
@@ -162,7 +197,11 @@ export default function App() {
           <ChangePassword notify={notify} onDone={() => setShowChangePassword(false)} />
         </div>
       )}
-      {!data ? (
+      {managerHasNoPractice ? (
+        <main>
+          <p className="empty">No practice is assigned to this account — ask the owner to fix it.</p>
+        </main>
+      ) : !data ? (
         <p className="loading">Loading…</p>
       ) : (
         <main>
