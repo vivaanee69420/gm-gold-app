@@ -106,11 +106,11 @@ export async function updateStatus({ referralId, status, lostReason, actorId, ac
     reason: privilegedComplete && status === 'treatment_completed' ? `privileged (skipped from ${from})` : lostReason ?? null,
   });
 
-  if (['booked', 'treatment_completed'].includes(status)) {
+  if (status === 'booked') {
     await db.query(
       `insert into notification_outbox (recipient_kind, recipient_id, template, payload)
-       values ('user',$1,$2,$3)`,
-      [referral.referrer_id, status === 'booked' ? 'friend_booked' : 'friend_completed', JSON.stringify({ friendName: firstNameInitial(referral.referred_name) })],
+       values ('user',$1,'friend_booked',$2)`,
+      [referral.referrer_id, JSON.stringify({ friendName: firstNameInitial(referral.referred_name) })],
     );
   }
 
@@ -135,6 +135,18 @@ export async function updateStatus({ referralId, status, lostReason, actorId, ac
       // else (no_active_rule, a real failure) still propagates.
       if (err.message !== 'already_credited') throw err;
     }
+  }
+
+  // Tied to the credit, not to a status. The money is what the referrer is being told about,
+  // and `credit` is non-null exactly once per referral (the partial unique index guarantees
+  // it), so this fires on whichever transition actually paid them — treatment_started in the
+  // normal flow, or a privileged jump straight to treatment_completed — and never twice.
+  if (credit) {
+    await db.query(
+      `insert into notification_outbox (recipient_kind, recipient_id, template, payload)
+       values ('user',$1,'friend_completed',$2)`,
+      [referral.referrer_id, JSON.stringify({ friendName: firstNameInitial(referral.referred_name) })],
+    );
   }
   return { from, to: status, credit };
 }

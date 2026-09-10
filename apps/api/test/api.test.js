@@ -378,6 +378,43 @@ describe('treatment_started credits the referrer', () => {
     );
     expect(rows[0].n).toBe(0);
   });
+
+  it('queues friend_completed on the credit-bearing transition, not on a later no-op one', async () => {
+    // Task 2 moved the MONEY to treatment_started but left the notification list unchanged
+    // (still keyed on the 'treatment_completed' status string) — the referrer would only ever
+    // hear about a completed treatment if someone later advanced the patient past
+    // treatment_started, which the manager-credit flow may never do. The notification must be
+    // tied to the credit actually being written, not to a specific status string.
+    const id = await freshReferral('005');
+    const { rows: [ref] } = await db.query(`select referrer_id from referrals where id = $1`, [id]);
+
+    // Count against a baseline, not an absolute total — this describe block's fixtures all
+    // share the one seeded referrer (agents.code), so other tests' notifications land against
+    // the same recipient_id.
+    const countFriendCompleted = async () => {
+      const { rows: [row] } = await db.query(
+        `select count(*)::int as n from notification_outbox
+          where recipient_id = $1 and template = 'friend_completed'`,
+        [ref.referrer_id],
+      );
+      return row.n;
+    };
+    const before = await countFriendCompleted();
+
+    const started = await setStatus(id, 'treatment_started');
+    expect(started.status).toBe(200);
+    expect(started.body.credit).not.toBeNull();
+
+    const afterStarted = await countFriendCompleted();
+    expect(afterStarted - before, 'queued exactly once, on the transition that actually paid').toBe(1);
+
+    const completed = await setStatus(id, 'treatment_completed');
+    expect(completed.status).toBe(200);
+    expect(completed.body.credit).toBeNull(); // already credited — no second credit
+
+    const afterCompleted = await countFriendCompleted();
+    expect(afterCompleted - before, 'a status change with no credit queues no second notification').toBe(1);
+  });
 });
 
 describe.skipIf(!process.env.DATABASE_URL)('concurrency (real Postgres only)', () => {

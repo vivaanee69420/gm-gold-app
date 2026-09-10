@@ -611,6 +611,50 @@ describe('booking re-attributes the lead to the practice it happened at', () => 
   });
 });
 
+describe('confirmProposal resolves the reward-rule practice via booked_practice_id, not just the form choice', () => {
+  it('a practice-scoped rule at the booked practice wins over the global rule when treating_practice_id is unset', async () => {
+    const practices = (await request(app).get('/practices')).body.practices;
+    const practiceA = practices[0]; // the form's original choice (preferred_practice_id)
+    const practiceB = practices[1]; // where the patient actually booked (booked_practice_id)
+
+    // A rule for B distinct from the £20 global rule (seeded in 0002_seed_dev.sql) — if
+    // confirmProposal fell through to preferred_practice_id (A, which has no scoped rule) it
+    // would resolve the global £20 rule instead, not this one.
+    await db.query(
+      `insert into reward_rules (practice_id, type, amount_pennies, created_by)
+       values ($1,'fixed',3500,'test')`,
+      [practiceB.id],
+    );
+
+    const sub = await submitReferral(agents.referrer, 'Precedence Check', {
+      phone: '07700 904003', preferredPracticeId: practiceA.id,
+    });
+    expect(sub.status).toBe(200);
+    const referralId = sub.body.referral.id;
+    await db.query(`update referrals set booked_practice_id=$2 where id=$1`, [referralId, practiceB.id]);
+
+    // No siteId — the resulting completion_proposals row gets treating_practice_id NULL
+    // (practiceIdForSite(null) short-circuits to null), so the only way to reach B's rule is
+    // via booked_practice_id.
+    const { rows: [{ referred_phone: friendPhone }] } = await db.query(
+      `select referred_phone from referrals where id=$1`, [referralId],
+    );
+    stub.stubAddCompletedTreatment({ phone: friendPhone, amountPennies: 52000, completedAt: ts(), updatedAt: ts() });
+    const sync = await runSync('test');
+    expect(sync.proposalsCreated).toBe(1);
+
+    const { rows: [proposal] } = await db.query(
+      `select id, treating_practice_id from completion_proposals where referral_id = $1`,
+      [referralId],
+    );
+    expect(proposal.treating_practice_id).toBeNull();
+
+    const confirm = await request(app).post(`/admin/proposals/${proposal.id}/confirm`).set(auth(agents.admin));
+    expect(confirm.status).toBe(200);
+    expect(confirm.body.credit.amountPennies, 'booked_practice_id must be consulted before preferred_practice_id').toBe(3500);
+  });
+});
+
 describe('the poller is a safety net, not a second payer', () => {
   // Managers can now credit directly (treatment_started, privileged). The poller must not
   // compete with that path: no proposal for work that is already settled, and confirming a
