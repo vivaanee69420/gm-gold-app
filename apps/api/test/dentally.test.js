@@ -261,19 +261,10 @@ describe('FR-25 aging report (row 13)', () => {
   });
 });
 
-describe('the aging report watches treatment_started', () => {
-  it('surfaces a patient parked at treatment_started', async () => {
-    // A dedicated referral, not `where status = 'treatment_started' limit 1`: agingReport
-    // excludes any referral with a completion_proposals row, and other tests in this file
-    // create exactly those, so an arbitrary pick risks landing on an excluded row and failing
-    // for an unrelated reason.
-    const { referralId } = await referredFriendReadyToComplete('07700 904004');
-
-    const started = await request(app).patch(`/admin/referrals/${referralId}/status`)
-      .set(auth(agents.admin)).send({ status: 'treatment_started' });
-    expect(started.status).toBe(200);
-
-    // Backdate the last status change so it is past the (default 7-day) aging window.
+describe('the aging report watches treatment_started, but not once paid', () => {
+  // Backdate the last status-change trail (and the referral's own created_at) so a referral
+  // reads as past the default 7-day aging window.
+  async function backdate(referralId) {
     await db.query(
       `update events set created_at = now() - interval '30 days'
         where entity_type = 'referral' and entity_id = $1`,
@@ -281,6 +272,46 @@ describe('the aging report watches treatment_started', () => {
     );
     await db.query(`update referrals set created_at = now() - interval '30 days' where id = $1`,
       [referralId]);
+  }
+
+  it('a referral credited at treatment_started does NOT appear — nothing is owed, so nothing to chase', async () => {
+    // A dedicated referral, not `where status = 'treatment_started' limit 1`: agingReport
+    // excludes any referral with a completion_proposals row, and other tests in this file
+    // create exactly those, so an arbitrary pick risks landing on an excluded row and failing
+    // for an unrelated reason.
+    const { referralId } = await referredFriendReadyToComplete('07700 904004');
+
+    // The admin route always sets privilegedComplete, so this jumps straight from 'new' to
+    // 'treatment_started' — which also credits the referrer (regression guard for the bug this
+    // block exists to catch: scanCompletions skips filing a proposal for an already-credited
+    // referral, so `not exists (completion_proposals)` alone would keep this row forever).
+    const started = await request(app).patch(`/admin/referrals/${referralId}/status`)
+      .set(auth(agents.admin)).send({ status: 'treatment_started' });
+    expect(started.status).toBe(200);
+    expect(started.body.credit, 'sanity check — this referral must actually be credited').toBeTruthy();
+
+    await backdate(referralId);
+
+    const res = await request(app).get('/admin/aging').set(auth(agents.admin));
+    expect(res.status).toBe(200);
+    expect(res.body.aging.map((a) => a.id)).not.toContain(referralId);
+  });
+
+  it('an uncredited referral aging at booked still appears — the fix must not gut the report', async () => {
+    const { token } = await signIn('+447700904006');
+    await request(app).post('/me/role').set(auth(token)).send({ role: 'referred' });
+    const sub = await submitReferral(token, 'Aging Booked');
+    expect(sub.status).toBe(200);
+    const referralId = sub.body.referral.id;
+
+    const booked = await request(app).patch(`/admin/referrals/${referralId}/status`)
+      .set(auth(agents.admin)).send({ status: 'contacted' });
+    expect(booked.status).toBe(200);
+    const toBooked = await request(app).patch(`/admin/referrals/${referralId}/status`)
+      .set(auth(agents.admin)).send({ status: 'booked' });
+    expect(toBooked.status).toBe(200);
+
+    await backdate(referralId);
 
     const res = await request(app).get('/admin/aging').set(auth(agents.admin));
     expect(res.status).toBe(200);

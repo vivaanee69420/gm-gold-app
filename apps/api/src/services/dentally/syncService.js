@@ -473,7 +473,16 @@ export async function runSync(trigger = 'manual') {
   }
 }
 
-/** FR-25 aging report: referrals sitting at booked/treatment_agreed/treatment_started ≥ N days with no proposal. */
+/**
+ * FR-25 aging report: referrals aging at booked/treatment_agreed/treatment_started ≥ N days
+ * with no proposal AND no credit. The `no credit` half matters because a manager can credit a
+ * referral directly at treatment_started — at which point scanCompletions deliberately skips
+ * filing a completion_proposals row for it (the outcome the proposal exists to produce has
+ * already happened), so `not exists (completion_proposals)` alone would stay true forever and
+ * the referral would age in this report indefinitely even though it has been paid. Excluding
+ * anything already credited keeps this report's population what it is meant to be: aging AND
+ * still possibly-missed commission, not already-settled work.
+ */
 export async function agingReport(days = 7) {
   const { rows } = await db.query(
     `select r.id, r.referred_name, r.referred_phone, r.status, p.name as practice,
@@ -487,6 +496,7 @@ export async function agingReport(days = 7) {
      left join practices p on p.id = r.preferred_practice_id
      where r.status in ('booked','treatment_agreed','treatment_started')
        and not exists (select 1 from completion_proposals cp where cp.referral_id = r.id)
+       and not exists (select 1 from wallet_ledger wl where wl.referral_id = r.id and wl.kind = 'credit')
        and coalesce(
              (select max(e.created_at) from events e
               where e.entity_type='referral' and e.entity_id=r.id::text and e.action='status_changed'),
