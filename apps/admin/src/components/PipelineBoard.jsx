@@ -141,7 +141,7 @@ export default function PipelineBoard({ referrals, onChanged, notify }) {
   };
 
   return (
-    <Card title="Pipeline" count={referrals.length} className="pipeline">
+    <Card className="pipeline">
       {referrals.length === 0 && <p className="empty">No referrals yet.</p>}
       <div className="pipeline-groups">
         {REFERRAL_STATUSES.map((status) => {

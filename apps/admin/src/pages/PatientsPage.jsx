@@ -57,7 +57,7 @@ export default function PatientsPage({ data }) {
 
   return (
     <div className="patients-layout">
-      <Card title="Patients" count={patients.length} className="patients">
+      <Card className="patients">
         {patients.length === 0 ? (
           <p className="empty">No patients yet — everyone who books through a referral link appears here.</p>
         ) : (

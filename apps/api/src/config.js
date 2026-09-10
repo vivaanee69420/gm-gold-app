@@ -21,7 +21,10 @@ export const config = {
   // sends no Origin header at all and is allowed unconditionally there — this list only ever
   // governs browsers, which means in practice it governs the admin dashboard.
   // Comma-separated so staging and production dashboards can share one deploy.
-  adminOrigins: (process.env.ADMIN_ORIGINS ?? process.env.ADMIN_URL ?? 'http://localhost:5173')
+  // The default must match apps/admin/vite.config.js (`server.port`), or a fresh checkout
+  // can't sign in locally — the browser is blocked by CORS and the dashboard reports it as
+  // "Couldn't reach the API". 5173 stays for anyone running Vite on its own default.
+  adminOrigins: (process.env.ADMIN_ORIGINS ?? process.env.ADMIN_URL ?? 'http://localhost:5174,http://localhost:5173')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean),

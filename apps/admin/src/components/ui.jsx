@@ -1,15 +1,20 @@
 // Shared dashboard primitives. Every card and list row renders through these
 // so spacing, alignment, and count badges stay consistent as cards are added.
 
+// A card with no `title` is headless on purpose: on Pipeline and Patients the shell's page
+// header already names the screen and carries its count, and repeating it inside the card
+// would put the same heading on the page twice.
 export function Card({ title, count, className, children }) {
   return (
     <section className={className ? `card ${className}` : 'card'}>
-      <header className="card-head">
-        <h3>{title}</h3>
-        {count != null && (
-          <span className={count === 0 ? 'count-badge count-badge-zero' : 'count-badge'}>{count}</span>
-        )}
-      </header>
+      {title != null && (
+        <header className="card-head">
+          <h3>{title}</h3>
+          {count != null && (
+            <span className={count === 0 ? 'count-badge count-badge-zero' : 'count-badge'}>{count}</span>
+          )}
+        </header>
+      )}
       {children}
     </section>
   );

@@ -4,6 +4,8 @@ import { isSignedIn, signOut } from './api/auth.js';
 import { errorMessage } from './copy.js';
 import SignIn from './components/SignIn.jsx';
 import ChangePassword from './components/ChangePassword.jsx';
+import Sidebar from './components/Sidebar.jsx';
+import { MenuIcon, RefreshIcon } from './components/icons.jsx';
 import PipelinePage from './pages/PipelinePage.jsx';
 import PatientsPage from './pages/PatientsPage.jsx';
 import PayoutsPage from './pages/PayoutsPage.jsx';
@@ -12,13 +14,53 @@ import ReportsPage from './pages/ReportsPage.jsx';
 
 // Managers get a strict subset of the owner's dashboard, scoped by the API to their own
 // practice (see MANAGER_ROUTES in the API's middleware/auth.js — these two lists must agree).
+// `blurb` is the one line under the page title that says what this screen is for; `count`
+// reads the loaded dashboard data so the header can carry the same figure the nav does.
 const PAGES = [
-  { path: '/', label: 'Pipeline', roles: ['admin', 'manager'] },
-  { path: '/patients', label: 'Patients', roles: ['admin', 'manager'] },
-  { path: '/payouts', label: 'Payouts', roles: ['admin', 'manager'] },
-  { path: '/operations', label: 'Operations', roles: ['admin'] },
-  { path: '/reports', label: 'Reports & Setup', roles: ['admin'] },
+  {
+    path: '/',
+    label: 'Pipeline',
+    icon: 'pipeline',
+    roles: ['admin', 'manager'],
+    blurb: 'Move each referred patient along as their treatment progresses. Treatment started credits the referrer.',
+    count: (d) => d.referrals?.length,
+  },
+  {
+    path: '/patients',
+    label: 'Patients',
+    icon: 'patients',
+    roles: ['admin', 'manager'],
+    blurb: 'Everyone who booked through a referral link — who referred them, where, and when.',
+    count: (d) => d.patients?.length,
+  },
+  {
+    path: '/payouts',
+    label: 'Payouts',
+    icon: 'payouts',
+    roles: ['admin', 'manager'],
+    blurb: 'Cash waiting to be collected at the practice, and everything already settled.',
+    count: (d) => d.payouts?.filter((p) => p.status === 'open').length,
+  },
+  {
+    path: '/operations',
+    label: 'Operations',
+    icon: 'operations',
+    roles: ['admin'],
+    blurb: 'The queues that need a decision, and the full referral record behind them.',
+    count: (d) => (d.proposals?.length ?? 0) + (d.reviews?.length ?? 0),
+  },
+  {
+    path: '/reports',
+    label: 'Reports & Setup',
+    icon: 'reports',
+    roles: ['admin'],
+    blurb: 'How the scheme is performing, and every lever that changes it.',
+  },
 ];
+
+// A nav badge means work waiting, not simply "rows exist" — a count beside Patients would be
+// noise, one beside Payouts is a queue someone has to clear.
+const BADGE_PATHS = new Set(['/payouts', '/operations']);
 
 const PAGE_COMPONENTS = {
   '/': PipelinePage,
@@ -35,12 +77,15 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [route, setRoute] = useState(window.location.pathname);
   const [showChangePassword, setShowChangePassword] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const notify = useCallback((message) => setToast(errorMessage(message)), []);
 
   const navigate = useCallback((path) => {
     window.history.pushState({}, '', path);
     setRoute(path);
+    setMenuOpen(false);
   }, []);
 
   const loadAll = useCallback(async () => {
@@ -91,6 +136,17 @@ export default function App() {
       notify(err.code ?? 'load_failed');
     }
   }, [notify, me]);
+
+  // The header's Refresh is the same load the tab already runs every 30s, just asked for by
+  // hand — the spinning glyph is the only thing that differs, so the click has a visible answer.
+  const refreshNow = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await loadAll();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadAll]);
 
   const signOutNow = useCallback(() => {
     signOut();
@@ -149,6 +205,17 @@ export default function App() {
     return () => clearInterval(timer);
   }, [signedIn, me, loadAll]);
 
+  // On a phone the sidebar is a drawer over the page; Escape closes it, the way every
+  // other dismissible layer on the web does.
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') setMenuOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [menuOpen]);
+
   if (!signedIn) return <SignIn onSignedIn={() => setSignedIn(true)} />;
 
   const toastEl = toast && (
@@ -163,53 +230,95 @@ export default function App() {
   const role = me?.role ?? null;
   const visiblePages = role ? PAGES.filter((p) => p.roles.includes(role)) : [];
   const activePath = visiblePages.some((p) => p.path === route) ? route : '/';
+  const page = visiblePages.find((p) => p.path === activePath) ?? PAGES[0];
   const Page = PAGE_COMPONENTS[activePath];
   const managerHasNoPractice = role === 'manager' && (me?.practices?.length ?? 0) === 0;
 
+  const badges = {};
+  if (data) {
+    for (const p of visiblePages) {
+      if (!BADGE_PATHS.has(p.path)) continue;
+      const n = p.count?.(data) ?? 0;
+      if (n > 0) badges[p.path] = n;
+    }
+  }
+  // Each count is shown once. A queue's figure belongs on the nav row, where it reads as work
+  // waiting from any page; a register's total belongs beside its title, where it reads as size.
+  const headerCount = data && !BADGE_PATHS.has(page.path) ? page.count?.(data) : undefined;
+
   return (
-    <div className="dashboard">
-      <header className="topbar">
-        <p className="wordmark">GM Dental</p>
-        <h1>{me?.practices?.length === 1 ? `${me.practices[0].name} · Referrals` : 'Referral Admin'}</h1>
-        <nav className="topnav">
-          {visiblePages.map(({ path, label }) => (
-            <a
-              key={path}
-              href={path}
-              className={path === activePath ? 'active' : undefined}
-              onClick={(e) => {
-                e.preventDefault();
-                navigate(path);
-              }}
+    <div className={menuOpen ? 'shell shell-menu-open' : 'shell'}>
+      <aside className="shell-side">
+        <Sidebar
+          me={me}
+          pages={visiblePages}
+          activePath={activePath}
+          navigate={navigate}
+          badges={badges}
+          changePasswordOpen={showChangePassword}
+          onChangePassword={() => {
+            setShowChangePassword((v) => !v);
+            setMenuOpen(false);
+          }}
+          onDismiss={() => setMenuOpen(false)}
+        />
+      </aside>
+      <div className="shell-scrim" aria-hidden="true" onClick={() => setMenuOpen(false)} />
+
+      <div className="shell-main">
+        <header className="topbar">
+          <button
+            type="button"
+            className="icon-button topbar-menu"
+            aria-label="Open menu"
+            onClick={() => setMenuOpen(true)}
+          >
+            <MenuIcon />
+          </button>
+          <div className="topbar-title">
+            <h1>{page.label}</h1>
+            {headerCount != null && (
+              <span className={headerCount === 0 ? 'count-badge count-badge-zero' : 'count-badge'}>
+                {headerCount}
+              </span>
+            )}
+          </div>
+          <div className="topbar-actions">
+            <button
+              type="button"
+              className={refreshing ? 'ghost ghost-icon is-refreshing' : 'ghost ghost-icon'}
+              onClick={refreshNow}
+              disabled={refreshing || !me}
             >
-              {label}
-            </a>
-          ))}
-        </nav>
-        <button className="ghost" onClick={() => setShowChangePassword((v) => !v)}>
-          Change password
-        </button>
-        <button className="ghost" onClick={signOutNow}>
-          Sign out
-        </button>
-      </header>
-      {toastEl}
-      {showChangePassword && (
-        <div className="inline-panel">
-          <ChangePassword notify={notify} onDone={() => setShowChangePassword(false)} />
-        </div>
-      )}
-      {managerHasNoPractice ? (
-        <main>
-          <p className="empty">No practice is assigned to this account — ask the owner to fix it.</p>
-        </main>
-      ) : !data ? (
-        <p className="loading">Loading…</p>
-      ) : (
-        <main>
-          <Page data={data} loadAll={loadAll} notify={notify} me={me} />
-        </main>
-      )}
+              <RefreshIcon />
+              <span>Refresh</span>
+            </button>
+            <button className="ghost" onClick={signOutNow}>Sign out</button>
+          </div>
+        </header>
+
+        <p className="page-blurb">{page.blurb}</p>
+
+        {toastEl}
+
+        {showChangePassword && (
+          <div className="inline-panel">
+            <ChangePassword notify={notify} onDone={() => setShowChangePassword(false)} />
+          </div>
+        )}
+
+        {managerHasNoPractice ? (
+          <main>
+            <p className="empty">No practice is assigned to this account — ask the owner to fix it.</p>
+          </main>
+        ) : !data ? (
+          <p className="loading">Loading…</p>
+        ) : (
+          <main>
+            <Page data={data} loadAll={loadAll} notify={notify} me={me} />
+          </main>
+        )}
+      </div>
     </div>
   );
 }
