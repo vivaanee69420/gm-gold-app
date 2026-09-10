@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import PipelineBoard from '../src/components/PipelineBoard.jsx';
 import { clearToken, setToken } from '../src/api/client.js';
@@ -80,13 +80,17 @@ describe('PipelineBoard', () => {
     expect(calls).toHaveLength(0);
   });
 
-  it('renders a column for the new treatment started stage', async () => {
+  it('renders a column for the new treatment started stage, with the referral inside it', async () => {
     const withStarted = [
       ...referrals,
       { id: 'r4', referred_name: 'Bo Barnet', referred_phone: '+447700900222', status: 'treatment_started', treatment_interest: 'implants', practice: 'Barnet', referrer: 'Sarah Lewis' },
     ];
-    render(<PipelineBoard referrals={withStarted} onChanged={vi.fn()} notify={vi.fn()} />);
-    expect(screen.getByRole('heading', { name: /treatment started/i })).toBeInTheDocument();
+    const { container } = render(<PipelineBoard referrals={withStarted} onChanged={vi.fn()} notify={vi.fn()} />);
+    // Every heading renders unconditionally now, so asserting the heading exists alone would
+    // pass even if grouping were broken — scope to the column itself and check who's in it.
+    const column = container.querySelector('[data-stage="treatment_started"]');
+    expect(column).not.toBeNull();
+    expect(within(column).getByText('Bo Barnet')).toBeInTheDocument();
   });
 
   it('renders a column for every stage even when empty', async () => {
@@ -135,5 +139,54 @@ describe('PipelineBoard', () => {
     const contactedGroup = screen.getByRole('heading', { name: /^contacted/i }).closest('.pipeline-group');
     expect(newGroup).toHaveTextContent('Jane Smith');
     expect(contactedGroup).not.toHaveTextContent('Jane Smith');
+  });
+
+  it('drops a stale optimistic override once fresh data disagrees with it', async () => {
+    const calls = stubFetchRoutes([{ method: 'PATCH', path: '/admin/referrals/r1/status' }]);
+    const { rerender } = render(<PipelineBoard referrals={referrals} onChanged={vi.fn()} notify={vi.fn()} />);
+
+    await userEvent.selectOptions(screen.getByLabelText(/status for jane smith/i), 'contacted');
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+
+    const contactedGroup = () => screen.getByRole('heading', { name: /^contacted/i }).closest('.pipeline-group');
+    expect(contactedGroup()).toHaveTextContent('Jane Smith');
+
+    // A colleague (or the Dentally sync) has since moved this same referral on to Booked. The
+    // next poll (App.jsx refetches every 30s) hands the board fresh props saying so.
+    const movedByColleague = referrals.map((r) => (r.id === 'r1' ? { ...r, status: 'booked' } : r));
+    rerender(<PipelineBoard referrals={movedByColleague} onChanged={vi.fn()} notify={vi.fn()} />);
+
+    const bookedGroup = () => screen.getByRole('heading', { name: /^booked/i }).closest('.pipeline-group');
+    await vi.waitFor(() => expect(within(bookedGroup()).getByText('Jane Smith')).toBeInTheDocument());
+    expect(contactedGroup()).not.toHaveTextContent('Jane Smith');
+  });
+
+  it('does not let a stale failed request roll back a newer successful move', async () => {
+    // Two in-flight PATCHes for the same card: the first (New -> Contacted) hangs, the second
+    // (Contacted -> Booked, fired once the confirm-lost/credit gates are out of the way) resolves
+    // first and succeeds. When the first one finally rejects, it must not undo the second.
+    let rejectFirst;
+    let resolveSecond;
+    let call = 0;
+    vi.stubGlobal('fetch', vi.fn(() => {
+      call += 1;
+      if (call === 1) return new Promise((_resolve, reject) => { rejectFirst = reject; });
+      return new Promise((resolve) => { resolveSecond = resolve; });
+    }));
+    render(<PipelineBoard referrals={referrals} onChanged={vi.fn()} notify={vi.fn()} />);
+
+    await userEvent.selectOptions(screen.getByLabelText(/status for jane smith/i), 'contacted');
+    await userEvent.selectOptions(screen.getByLabelText(/status for jane smith/i), 'booked');
+
+    const bookedGroup = () => screen.getByRole('heading', { name: /^booked/i }).closest('.pipeline-group');
+    expect(within(bookedGroup()).getByText('Jane Smith')).toBeInTheDocument();
+
+    resolveSecond(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    await vi.waitFor(() => expect(within(bookedGroup()).getByText('Jane Smith')).toBeInTheDocument());
+
+    rejectFirst(Object.assign(new Error('stale'), { code: 'invalid_transition' }));
+    // Give the rejected promise's catch a turn to (not) run.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(within(bookedGroup()).getByText('Jane Smith')).toBeInTheDocument();
   });
 });

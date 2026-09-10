@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { REFERRAL_STATUSES } from '@gm-referral/shared/schemas';
 import { api } from '../api/client.js';
 import { Card } from './ui.jsx';
@@ -27,12 +27,13 @@ const SETTLE_MS = 200;
 export default function PipelineBoard({ referrals, onChanged, notify }) {
   const [lostDrafts, setLostDrafts] = useState({}); // referralId -> reason text
   const [creditDrafts, setCreditDrafts] = useState({}); // referralId -> true while confirming
-  const [overrides, setOverrides] = useState({}); // referralId -> status, optimistic until it fails
+  const [overrides, setOverrides] = useState({}); // referralId -> { status, from }, optimistic until it fails
   const [settling, setSettling] = useState({}); // referralId -> true briefly after it lands
   const settleTimers = useRef({});
   const draggedId = useRef(null);
+  const requestTokens = useRef({}); // referralId -> the latest advance() call's token
 
-  const statusOf = (r) => overrides[r.id] ?? r.status;
+  const statusOf = (r) => overrides[r.id]?.status ?? r.status;
 
   const clear = (setter, id) => setter((d) => {
     const { [id]: _dropped, ...rest } = d;
@@ -45,11 +46,42 @@ export default function PipelineBoard({ referrals, onChanged, notify }) {
     settleTimers.current[id] = setTimeout(() => clear(setSettling, id), SETTLE_MS);
   };
 
+  // Clear every pending settle timer on unmount, rather than letting them fire setState calls
+  // against a component that's gone.
+  useEffect(() => () => {
+    Object.values(settleTimers.current).forEach(clearTimeout);
+  }, []);
+
+  // An override exists only to cover the gap between the click and the refetch. It records
+  // `from` — the prop status we saw at the moment we set it — so this effect can tell "the
+  // incoming props just haven't caught up yet" (fresh still equals `from`: keep showing our
+  // optimistic value, or the board would flicker back before flickering forward again) apart
+  // from "the props moved on" (fresh differs from `from` — whether because our own change
+  // landed, or because a colleague's move or the Dentally sync got there first: either way,
+  // props are the truth now and the override has done its job). Comparing against the
+  // override's own target status instead of `from` would under-prune: it would drop once our
+  // own change is confirmed, but keep shadowing a *different* incoming status forever, which is
+  // exactly the bug this effect exists to fix.
+  useEffect(() => {
+    setOverrides((current) => {
+      const pruned = Object.fromEntries(
+        Object.entries(current).filter(([id, entry]) => {
+          const fresh = referrals.find((r) => r.id === id);
+          return fresh && fresh.status === entry.from;
+        }),
+      );
+      return Object.keys(pruned).length === Object.keys(current).length ? current : pruned;
+    });
+  }, [referrals]);
+
   // Moves the card now, then reconciles with the server. A failure walks it back to where it
   // actually was and explains why — money didn't move, so the board shouldn't say it did.
   const advance = async (referral, status, lostReason) => {
     const previousStatus = statusOf(referral);
-    setOverrides((o) => ({ ...o, [referral.id]: status }));
+    // Stamped so a stale response can tell it's been superseded — see the catch below.
+    const token = Symbol();
+    requestTokens.current[referral.id] = token;
+    setOverrides((o) => ({ ...o, [referral.id]: { status, from: referral.status } }));
     markSettling(referral.id);
     clear(setLostDrafts, referral.id);
     clear(setCreditDrafts, referral.id);
@@ -60,7 +92,11 @@ export default function PipelineBoard({ referrals, onChanged, notify }) {
       });
       onChanged();
     } catch (err) {
-      setOverrides((o) => ({ ...o, [referral.id]: previousStatus }));
+      // A later move for this same card already started (or already succeeded) — this failure
+      // belongs to a request the board has moved on from, so it must not roll back what
+      // replaced it. It fails silently; the newer request's own outcome is what the board shows.
+      if (requestTokens.current[referral.id] !== token) return;
+      setOverrides((o) => ({ ...o, [referral.id]: { status: previousStatus, from: referral.status } }));
       markSettling(referral.id);
       notify(err.code === 'not_found' ? 'referral_not_found' : err.code ?? 'status_update_failed');
     }
