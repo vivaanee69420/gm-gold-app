@@ -37,7 +37,7 @@ import {
   referredStatusFor,
   firstNameInitial,
 } from './services/referralService.js';
-import { walletFor, requestPayout, markPayoutPaid, cancelPayout, getSetting, resolveRule } from './services/walletService.js';
+import { walletFor, requestPayout, markPayoutPaid, cancelPayout, getSetting, resolveRule, clawbackReferralCredit } from './services/walletService.js';
 import { listPatients, patientDetail } from './services/patientService.js';
 import { runSync, agingReport } from './services/dentally/syncService.js';
 import {
@@ -565,6 +565,17 @@ export function buildApp() {
       await db.query(
         `update referrals set status='lost', lost_reason='existing_patient' where id=$1`,
         [req.params.id],
+      );
+      // The manager path can credit BEFORE this review resolves (a credit fires at
+      // treatment_started, which flagExistingPatients does not exclude — only 'lost' and
+      // 'treatment_completed' are excluded from the candidate scan). If that happened here,
+      // the owner has just confirmed the referred person was already a patient — the exact
+      // failure FR-11 exists to prevent — so the commission must not stand. Reuse
+      // clawbackReferralCredit (walletService.js) rather than a second reversal path: same
+      // append-only adjustment, same idempotency key, same "never double-reverse" guarantee.
+      await clawbackReferralCredit(
+        req.params.id,
+        'commission reversed — referred person confirmed as an existing patient',
       );
     }
     await logEvent(db, {

@@ -72,7 +72,11 @@ export function ReferralsScreen() {
     }, [load]),
   );
 
-  const lifetime = referrals.filter((r) => r.status === 'treatment_completed').length;
+  // Commission now fires at treatment_started (the manager-credit path), not only at
+  // treatment_completed — mirrors apps/api/src/app.js's funnel treatmentCompleted stat, which
+  // made the same change for the same reason. Counting only treatment_completed here would read
+  // "0 completed" on the same screen the Wallet tab shows real, already-paid money on.
+  const lifetime = referrals.filter((r) => r.status === 'treatment_started' || r.status === 'treatment_completed').length;
 
   return (
     <Screen scroll={false}>
@@ -80,7 +84,10 @@ export function ReferralsScreen() {
       <Title>{referrals.length ? `${referrals.length} friends referred` : 'No referrals yet'}</Title>
       <Body muted style={{ marginBottom: space(4) }}>
         {referrals.length
-          ? `${lifetime} completed treatment. We’ll message you as each friend moves along.`
+          // "Started treatment" (not "completed") is truthful for both counted statuses —
+          // completing entails having started — and matches the commission ledger's own wording
+          // (walletService.js walletFor note text) for the same underlying event.
+          ? `${lifetime} started treatment. We’ll message you as each friend moves along.`
           : 'Show your card to a friend — their journey will appear here.'}
       </Body>
       <FlatList

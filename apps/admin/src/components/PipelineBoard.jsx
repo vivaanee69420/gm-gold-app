@@ -14,10 +14,14 @@ const LABELS = {
   lost: 'Lost',
 };
 
-// Moving a card here credits the referrer's wallet — real money, and irreversible from this
-// screen. It is the only transition that takes a second, deliberate click, shown inline
-// (never window.confirm — a browser dialog would block the whole tab).
-const CREDITS_COMMISSION = 'treatment_started';
+// Moving a card to EITHER of these credits the referrer's wallet — real money, and irreversible
+// from this screen. updateStatus (referralService.js) credits on treatment_started OR
+// treatment_completed (the "at or past" rule, so a privileged jump straight to Completed still
+// pays), and every status here renders as both a droppable column and a <select> option — so a
+// one-click move straight to Completed must raise the same confirm as treatment_started, or it's
+// a bypass. Both take a second, deliberate click, shown inline (never window.confirm — a browser
+// dialog would block the whole tab).
+const CREDITS_COMMISSION = new Set(['treatment_started', 'treatment_completed']);
 
 // How long the "card settles into its new column" animation runs. Only a card the user just
 // moved gets this class, and only for this long — never the initial board render — so motion
@@ -26,7 +30,7 @@ const SETTLE_MS = 200;
 
 export default function PipelineBoard({ referrals, onChanged, notify }) {
   const [lostDrafts, setLostDrafts] = useState({}); // referralId -> reason text
-  const [creditDrafts, setCreditDrafts] = useState({}); // referralId -> true while confirming
+  const [creditDrafts, setCreditDrafts] = useState({}); // referralId -> the target crediting status while confirming
   const [overrides, setOverrides] = useState({}); // referralId -> { status, from }, optimistic until it fails
   const [settling, setSettling] = useState({}); // referralId -> true briefly after it lands
   const settleTimers = useRef({});
@@ -109,9 +113,9 @@ export default function PipelineBoard({ referrals, onChanged, notify }) {
       setLostDrafts((d) => ({ ...d, [referral.id]: '' }));
       return;
     }
-    if (status === CREDITS_COMMISSION) {
+    if (CREDITS_COMMISSION.has(status)) {
       clear(setLostDrafts, referral.id);
-      setCreditDrafts((d) => ({ ...d, [referral.id]: true }));
+      setCreditDrafts((d) => ({ ...d, [referral.id]: status }));
       return;
     }
     clear(setLostDrafts, referral.id);
@@ -124,7 +128,7 @@ export default function PipelineBoard({ referrals, onChanged, notify }) {
   // instead of snapping back to the current status.
   const displayValue = (r) => {
     if (lostDrafts[r.id] !== undefined) return 'lost';
-    if (creditDrafts[r.id]) return CREDITS_COMMISSION;
+    if (creditDrafts[r.id]) return creditDrafts[r.id];
     return statusOf(r);
   };
 
@@ -198,7 +202,7 @@ export default function PipelineBoard({ referrals, onChanged, notify }) {
                         <span className="meta">
                           This credits {r.referrer}'s commission and can't be undone here.
                         </span>
-                        <button className="btn-primary" onClick={() => advance(r, CREDITS_COMMISSION)}>
+                        <button className="btn-primary" onClick={() => advance(r, creditDrafts[r.id])}>
                           Credit {r.referrer}'s commission
                         </button>
                         <button className="ghost" onClick={() => clear(setCreditDrafts, r.id)}>

@@ -67,6 +67,28 @@ describe('PipelineBoard', () => {
     ]);
   });
 
+  it('also asks for confirmation moving straight to Completed — not just treatment_started', async () => {
+    // updateStatus credits on EITHER treatment_started or treatment_completed (the "at or past"
+    // rule), and every status renders as both a droppable column and a <select> option — so a
+    // manager could previously jump a card straight to Completed and credit the same money with
+    // one click and no confirmation. That must raise the identical inline confirm.
+    const calls = stubFetchRoutes([{ method: 'PATCH', path: '/admin/referrals/r3/status' }]);
+    const withAgreed = [
+      ...referrals,
+      { id: 'r3', referred_name: 'Ann Ford', referred_phone: '+447700900111', status: 'treatment_started', treatment_interest: 'veneers', practice: 'Ashford', referrer: 'Sarah Lewis' },
+    ];
+    render(<PipelineBoard referrals={withAgreed} onChanged={vi.fn()} notify={vi.fn()} />);
+
+    await userEvent.selectOptions(screen.getByLabelText(/status for ann ford/i), 'treatment_completed');
+    expect(calls, 'money must not move on a single click, even for Completed').toHaveLength(0);
+
+    await userEvent.click(screen.getByRole('button', { name: /credit .*commission/i }));
+
+    expect(calls).toEqual([
+      { method: 'PATCH', path: '/admin/referrals/r3/status', body: { status: 'treatment_completed' } },
+    ]);
+  });
+
   it('lets the confirmation be cancelled without sending anything', async () => {
     const calls = stubFetchRoutes([{ method: 'PATCH', path: '/admin/referrals/r3/status' }]);
     const withAgreed = [

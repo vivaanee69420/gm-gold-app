@@ -158,6 +158,60 @@ describe('referral review queue (FR-25)', () => {
     expect(again.body.error).toBe('not_in_review');
   });
 
+  it('reverses a credit already issued at treatment_started when the review confirms existing_patient (FIX 3)', async () => {
+    // A manager can now credit at treatment_started, which flagExistingPatients' candidate scan
+    // does NOT exclude (only 'lost' and 'treatment_completed' are) — so FR-11 can flag, and the
+    // owner can confirm, an existing patient AFTER the commission has already been paid. Left
+    // unreversed, the referrer keeps money for a patient the owner just confirmed was already
+    // theirs — the exact failure FR-11 exists to prevent.
+    const referrer = await signIn('07700 900820');
+    await request(app).post('/me/role').set(auth(referrer.token)).send({ role: 'referrer' });
+    const code = (await request(app).get('/me').set(auth(referrer.token))).body.user.referralCode;
+
+    const friend = await signIn('07700 900821');
+    await request(app).post('/me/role').set(auth(friend.token)).send({ role: 'referred' });
+    const sub = await request(app).post('/referrals').set(auth(friend.token)).send({
+      code,
+      fullName: 'Vic Existing',
+      treatmentInterest: 'implants',
+      preferredPracticeId: agents.practiceId,
+      consent: true,
+      consentVersion: 'referred-v1-2026-08',
+    });
+    expect(sub.status).toBe(200);
+    const referralId = sub.body.referral.id;
+
+    const started = await request(app)
+      .patch(`/admin/referrals/${referralId}/status`)
+      .set(auth(agents.admin))
+      .send({ status: 'treatment_started' });
+    expect(started.status).toBe(200);
+    expect(started.body.credit, 'sanity check — this referral must actually be credited').toBeTruthy();
+
+    const balance = async () => (await request(app).get('/wallet').set(auth(referrer.token))).body.wallet.balancePennies;
+    expect(await balance()).toBeGreaterThan(0);
+
+    // The evidence arrives late, as FR-11 expects it can.
+    await db.query(`update referrals set review_status='existing_patient_suspect' where id=$1`, [referralId]);
+
+    const decide = await request(app)
+      .post(`/admin/referral-review/${referralId}/decide`)
+      .set(auth(agents.admin))
+      .send({ decision: 'existing_patient' });
+    expect(decide.status).toBe(200);
+
+    const { rows } = await db.query(`select status, lost_reason from referrals where id=$1`, [referralId]);
+    expect(rows[0].status).toBe('lost');
+    expect(rows[0].lost_reason).toBe('existing_patient');
+
+    expect(await balance()).toBe(0);
+
+    const { rows: ledger } = await db.query(
+      `select kind, amount_pennies from wallet_ledger where referral_id=$1 order by created_at`, [referralId]);
+    expect(ledger.map((l) => l.kind)).toEqual(['credit', 'adjustment']);
+    expect(ledger[1].amount_pennies).toBe(-ledger[0].amount_pennies);
+  });
+
   it('rejects unknown decisions', async () => {
     const res = await request(app)
       .post(`/admin/referral-review/${agents.referralId}/decide`)

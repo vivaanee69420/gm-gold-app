@@ -669,6 +669,80 @@ describe('booking re-attributes the lead to the practice it happened at', () => 
   });
 });
 
+describe('FIX 4: a manager marking Booked by hand is confirmed by reality, not stuck', () => {
+  it('the poller adopts the appointment and re-attributes the practice, even though appointment_dentally_id was null', async () => {
+    const practices = (await request(app).get('/practices')).body.practices;
+    const formPractice = practices[0];
+    const bookedPractice = practices[1];
+
+    const ref = await signIn('+447700903010');
+    await request(app).post('/me/profile').set(auth(ref.token))
+      .send({ firstName: 'Manual', lastName: 'Referrer', notifyOptIn: false });
+    const role = await request(app).post('/me/role').set(auth(ref.token)).send({ role: 'referrer' });
+
+    const friendPhone = '+447700903011';
+    const friend = await signIn(friendPhone);
+    await request(app).post('/me/profile').set(auth(friend.token))
+      .send({ firstName: 'Manual', lastName: 'Friend', notifyOptIn: false });
+    await request(app).post('/me/role').set(auth(friend.token)).send({ role: 'referred' });
+    const sub = await request(app).post('/referrals').set(auth(friend.token)).send({
+      code: role.body.user.referralCode,
+      fullName: 'Manual Friend',
+      treatmentInterest: 'implants',
+      preferredPracticeId: formPractice.id,
+      consent: true,
+      consentVersion: 'referred-v1-2026-08',
+    });
+    expect(sub.status).toBe(200);
+    const referralId = sub.body.referral.id;
+
+    // The manager marks it Booked by hand, BEFORE the poller ever sees a Dentally appointment —
+    // adjacent transitions only, so new -> contacted -> booked. This writes no
+    // appointment_dentally_id and no booked_practice_id (updateStatus never touches either).
+    for (const status of ['contacted', 'booked']) {
+      const res = await request(app).patch(`/admin/referrals/${referralId}/status`)
+        .set(auth(agents.admin)).send({ status });
+      expect(res.status).toBe(200);
+    }
+    const { rows: manual } = await db.query(
+      `select status, appointment_dentally_id, booked_practice_id from referrals where id=$1`, [referralId],
+    );
+    expect(manual[0].status).toBe('booked');
+    expect(manual[0].appointment_dentally_id).toBeNull();
+    expect(manual[0].booked_practice_id).toBeNull();
+
+    // The poller then sees the REAL appointment, at a different practice than the form said.
+    await db.query(`update practices set dentally_site_id=$1 where id=$1::uuid`, [bookedPractice.id]);
+    stub.stubAddBookedAppointment({
+      phone: friendPhone,
+      siteId: bookedPractice.id,
+      startsAt: new Date(base + 8 * 86_400_000).toISOString(),
+      updatedAt: ts(),
+    });
+    const summary = await runSync('test');
+    expect(summary.bookingsDetected, 'must be treated as a new booking, not silently skipped').toBe(1);
+
+    const { rows } = await db.query(
+      `select status, appointment_dentally_id, booked_practice_id, preferred_practice_id
+       from referrals where id = $1`,
+      [referralId],
+    );
+    expect(rows[0].status).toBe('booked');
+    expect(rows[0].appointment_dentally_id).toMatch(/^appointment-/);
+    expect(rows[0].booked_practice_id).toBe(bookedPractice.id);
+    expect(rows[0].preferred_practice_id).toBe(formPractice.id);
+
+    const { rows: events } = await db.query(
+      `select action, from_value, to_value from events
+        where entity_type = 'referral' and entity_id = $1 and action = 'practice_reassigned'`,
+      [referralId],
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0].from_value).toBe(formPractice.id);
+    expect(events[0].to_value).toBe(bookedPractice.id);
+  });
+});
+
 describe('confirmProposal resolves the reward-rule practice via booked_practice_id, not just the form choice', () => {
   it('a practice-scoped rule at the booked practice wins over the global rule when treating_practice_id is unset', async () => {
     const practices = (await request(app).get('/practices')).body.practices;

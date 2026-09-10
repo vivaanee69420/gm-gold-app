@@ -244,6 +244,15 @@ async function processCompletedPage(client, appointments) {
  * a phone with an open referral (new/contacted) confirms the friend's Dentally booking:
  * the referral moves to 'booked' with the appointment time, the app's "Your appointment"
  * page fills in, and the referrer is notified. Rebooking refreshes the stored time.
+ *
+ * A referral that is already 'booked' but carries NO appointment_dentally_id is treated as a
+ * new booking too, not a reschedule — that is a manager's manual "Booked" mark (which writes no
+ * appointment id and no booked_practice_id) being confirmed by reality once Dentally actually
+ * sees the appointment. Without this, such a referral is permanently stuck: the reschedule guard
+ * below only refreshes the SAME appointment id, so a null one can never match, the row never
+ * gets booked_practice_id, the lead stays attributed to the form's practice instead of wherever
+ * they actually book, and the referral ages forever in the status filter ('new','contacted',
+ * 'booked') below. The reschedule guard still applies once a DIFFERENT appointment id is on file.
  */
 async function processBookedPage(client, appointments) {
   const upcoming = appointments.filter((a) => a.startsAt && !a.completedAt && !a.cancelled && a.patientId);
@@ -271,8 +280,10 @@ async function processBookedPage(client, appointments) {
     if (!patient?.phone && !patient?.email) continue;
     for (const referral of referrals.filter((r) => matchesPatient(r, patient))) {
       const fromStatus = referral.status;
-      const isNewBooking = fromStatus !== 'booked';
-      // Already booked: only refresh the time for the SAME appointment (a reschedule).
+      const isNewBooking = fromStatus !== 'booked' || !referral.appointment_dentally_id;
+      // Already booked WITH a stored appointment: only refresh the time for the SAME
+      // appointment (a reschedule). A null appointment_dentally_id means isNewBooking is
+      // already true above, so this guard never fires for it.
       if (!isNewBooking && referral.appointment_dentally_id !== `appointment-${appointment.id}`) continue;
 
       // Where the appointment actually is. This is what puts the lead in front of the manager
