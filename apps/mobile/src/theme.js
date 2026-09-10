@@ -12,6 +12,9 @@ export const colors = {
   mistFaint: 'rgba(143,167,159,0.25)',
   success: '#7FB069', // Completed chips only
   danger: '#C97361',
+  dangerFaint: 'rgba(201,115,97,0.12)', // error slot fill — readable without shouting
+  dangerEdge: 'rgba(201,115,97,0.45)',
+  goldFaint: 'rgba(201,169,97,0.14)', // focus ring, pressed states
   black: '#06201C',
 };
 

@@ -5,10 +5,16 @@
 // so it is still required — just captured after we know who someone is rather than as the
 // claim of who they are. Verification needs BOTH to match one Dental OS contact, so knowing
 // somebody's mobile number is no longer enough to collect their rewards.
+//
+// All four screens are built as one object: the gold card being issued (components/AuthPanel).
+// The seam across the panel's top edge fills a quarter per step, so the flow reads as the
+// card's foil edging going on rather than as four unrelated forms.
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, Switch, Text, View } from 'react-native';
+import { Platform, StyleSheet, Switch, Text, View } from 'react-native';
 import { normalizePhone } from '@gm-referral/shared/phone';
-import { Body, Eyebrow, Field, GoldButton, Screen, Title } from '../components/ui';
+import { Body, Field, GoldButton, Notice, Screen, Title } from '../components/ui';
+import { AuthPanel } from '../components/AuthPanel';
+import { describeSendFailure, isAddressProblem } from '../lib/authErrors';
 import { colors, space } from '../theme';
 import { useAppState } from '../state/AppState';
 
@@ -20,54 +26,63 @@ export function LoginScreen({ navigation }) {
   const { sendCode } = useAppState();
   const [email, setEmail] = useState('');
   const [error, setError] = useState(null);
+  // Separate from `error` on purpose: most send failures are nothing to do with the address,
+  // so most of them must not put a red edge on the field. See isAddressProblem.
+  const [badAddress, setBadAddress] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  const edit = (value) => {
+    setEmail(value);
+    if (badAddress) setBadAddress(false); // typing is an attempt to fix it; stop shouting
+  };
 
   const submit = async () => {
     const address = email.trim().toLowerCase();
     if (!looksLikeEmail(address)) {
       setError('That doesn’t look like an email address.');
+      setBadAddress(true);
       return;
     }
     setError(null);
+    setBadAddress(false);
     setBusy(true);
     try {
       await sendCode(address);
       navigation.navigate('Verify');
     } catch (err) {
-      // Supabase rate-limits sends per address and per IP. Say so plainly rather than
-      // inviting someone to hammer the button.
-      setError(
-        err?.status === 429
-          ? 'Too many codes requested. Wait a minute and try again.'
-          : 'Could not send the code. Check the address and try again.',
-      );
+      // Who can actually fix it? Rate limit, dead connection, bad address and "our SMTP is
+      // misconfigured" are four different problems, and only one of them is the address.
+      setError(describeSendFailure(err));
+      setBadAddress(isAddressProblem(err));
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <Screen>
-      <View style={{ flex: 1, justifyContent: 'center' }}>
-        <Eyebrow>GM Dental · Gold Card</Eyebrow>
-        <Title>Your smile pays{'\n'}you back.</Title>
-        <Body muted style={{ marginBottom: space(6) }}>
-          Sign in with your email. We’ll send you a 6-digit code.
+    <Screen center>
+      <AuthPanel step={1}>
+        <Title style={styles.title}>Your smile pays{'\n'}you back.</Title>
+        <Body muted style={styles.lede}>
+          Refer a friend to GM Dental and earn credit toward your own treatment.
         </Body>
         <Field
           label="Email address"
           value={email}
-          onChangeText={setEmail}
+          onChangeText={edit}
+          invalid={badAddress}
           placeholder="sarah@example.com"
           keyboardType="email-address"
           autoComplete="email"
           autoCapitalize="none"
           autoCorrect={false}
           onSubmitEditing={submit}
+          hint={`We’ll send a ${OTP_LENGTH}-digit code. No password to remember.`}
         />
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-        <GoldButton label="Send my code" onPress={submit} disabled={busy || !email.trim()} />
-      </View>
+        <Notice>{error}</Notice>
+        <GoldButton label="Send my code" onPress={submit} busy={busy} disabled={busy || !email.trim()} />
+      </AuthPanel>
+      <Text style={styles.footnote}>Already a patient? Use the address the practice has on file.</Text>
     </Screen>
   );
 }
@@ -78,10 +93,25 @@ export function LoginScreen({ navigation }) {
 // app is broken and gives up on the spot.
 const RESEND_COOLDOWN_SECONDS = 60;
 
+// SUPABASE OWNS THIS NUMBER — Authentication → Sign In / Providers → Email → "Email OTP
+// Length". Keep OTP_LENGTH in step with the dashboard; it only drives the copy.
+//
+// The field accepts up to OTP_MAX_LENGTH (Supabase's ceiling) rather than exactly
+// OTP_LENGTH, and that is deliberate. On 2026-09-10 the dashboard was set to 8 while this
+// file said 6: `maxLength={6}` silently swallowed the last two digits, the button then
+// looked perfectly happy, and Supabase rejected the truncated code as "wrong or expired" —
+// blaming the patient for a setting only we can see. A client that hard-truncates a value
+// the server defines will always turn a config drift into a lie about the user's input.
+const OTP_LENGTH = 6;
+const OTP_MAX_LENGTH = 10;
+
 export function VerifyScreen({ navigation }) {
   const { verifyCode, pendingEmail, sendCode } = useAppState();
   const [code, setCode] = useState('');
   const [error, setError] = useState(null);
+  // Only a rejected code reddens the code field. A failed RESEND is a mail-server problem —
+  // the six digits sitting in the box have nothing to do with it.
+  const [badCode, setBadCode] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState(null);
   const [cooldown, setCooldown] = useState(RESEND_COOLDOWN_SECONDS);
@@ -101,10 +131,7 @@ export function VerifyScreen({ navigation }) {
       setCooldown(RESEND_COOLDOWN_SECONDS);
       setNotice('New code sent. Check your inbox.');
     } catch (err) {
-      // 429 means we asked again too soon — tell them to wait rather than failing silently.
-      setError(err?.status === 429
-        ? 'Please wait a moment before asking for another code.'
-        : 'Could not send another code. Check your connection and try again.');
+      setError(describeSendFailure(err, { resend: true }));
       setCooldown(RESEND_COOLDOWN_SECONDS);
     }
   };
@@ -126,38 +153,44 @@ export function VerifyScreen({ navigation }) {
       setError(wrongCode
         ? 'Wrong or expired code — check your email and try again.'
         : 'Something went wrong. Try again.');
+      setBadCode(wrongCode);
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <Screen>
-      <View style={{ flex: 1, justifyContent: 'center' }}>
-        <Eyebrow>Check your inbox</Eyebrow>
-        <Title>Enter your code</Title>
-        <Body muted style={{ marginBottom: space(6) }}>
-          Sent to {pendingEmail}. It expires in 10 minutes — check spam if it hasn’t arrived.
+    <Screen center>
+      <AuthPanel step={2}>
+        <Title style={styles.title}>Enter your code</Title>
+        {/* pendingEmail lives in memory, so a browser refresh on this screen loses it and the
+            sentence used to render as a bare "Sent to .". */}
+        <Body muted style={styles.lede}>
+          {pendingEmail ? `Sent to ${pendingEmail}.` : 'Check your inbox.'} It expires in 10 minutes.
         </Body>
+        {/* Typed where the card's serial sits — mono, foil gold, tracked wide. */}
         <Field
-          label="6-digit code"
+          label={`${OTP_LENGTH}-digit code`}
           value={code}
-          onChangeText={setCode}
-          placeholder="••••••"
+          onChangeText={(v) => { setCode(v); if (badCode) setBadCode(false); }}
+          serial
+          invalid={badCode}
+          placeholder={'—'.repeat(OTP_LENGTH)}
           keyboardType="number-pad"
-          maxLength={6}
+          maxLength={OTP_MAX_LENGTH}
+          autoFocus
           onSubmitEditing={submit}
+          hint="Not arrived? Check your spam folder."
         />
-        {notice ? <Text style={styles.notice}>{notice}</Text> : null}
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-        <GoldButton label="Sign in" onPress={submit} disabled={busy || code.trim().length !== 6} />
+        <Notice tone={error ? 'error' : 'success'}>{error || notice}</Notice>
+        <GoldButton label="Sign in" onPress={submit} busy={busy} disabled={busy || code.trim().length < OTP_LENGTH} />
         <GoldButton
           label={cooldown > 0 ? `Email it again in ${cooldown}s` : 'Email it again'}
           variant="ghost"
           onPress={resend}
           disabled={cooldown > 0}
         />
-      </View>
+      </AuthPanel>
     </Screen>
   );
 }
@@ -169,15 +202,19 @@ export function ProfileScreen({ navigation }) {
   const [phone, setPhone] = useState(user?.phone ?? '');
   const [notifyOptIn, setNotifyOptIn] = useState(user?.notifyOptIn ?? true);
   const [error, setError] = useState(null);
+  // A dropped connection while saving isn't the phone number's fault; a duplicate is.
+  const [badPhone, setBadPhone] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const submit = async () => {
     const e164 = normalizePhone(phone);
     if (!e164) {
       setError('That doesn’t look like a phone number. Try 07700 900123.');
+      setBadPhone(true);
       return;
     }
     setError(null);
+    setBadPhone(false);
     setBusy(true);
     try {
       await saveProfile({ firstName: firstName.trim(), lastName: lastName.trim(), phone: e164, notifyOptIn });
@@ -186,52 +223,78 @@ export function ProfileScreen({ navigation }) {
       // users.phone is unique. Two accounts claiming one number is a real case now that
       // identity is email — someone signing up twice with different addresses, or typing a
       // number that is not theirs.
-      setError(err.payload?.error === 'phone_taken'
+      const taken = err.payload?.error === 'phone_taken';
+      setError(taken
         ? 'That number is already on another account. Use the number the practice has for you.'
         : 'Could not save your details. Check your connection and try again.');
+      setBadPhone(taken);
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <Screen>
-      <View style={{ flex: 1, justifyContent: 'center' }}>
-        <Eyebrow>Nearly there</Eyebrow>
-        <Title>What’s your name?</Title>
-        <Body muted style={{ marginBottom: space(6) }}>
-          So the practice knows who to thank. Your mobile number is how we match you to your
-          patient record — use the one the practice has on file.
+    <Screen center>
+      <AuthPanel step={3}>
+        <Title style={styles.title}>What’s your name?</Title>
+        <Body muted style={styles.lede}>
+          This is the name that goes on your card.
         </Body>
-        <Field label="First name" value={firstName} onChangeText={setFirstName} placeholder="Sarah" autoComplete="given-name" />
-        <Field label="Last name" value={lastName} onChangeText={setLastName} placeholder="Lewis" autoComplete="family-name" />
+        <View style={styles.nameRow}>
+          <Field
+            label="First name"
+            value={firstName}
+            onChangeText={setFirstName}
+            placeholder="Sarah"
+            autoComplete="given-name"
+            style={styles.nameField}
+          />
+          <Field
+            label="Last name"
+            value={lastName}
+            onChangeText={setLastName}
+            placeholder="Lewis"
+            autoComplete="family-name"
+            style={styles.nameField}
+          />
+        </View>
         <Field
           label="Mobile number"
           value={phone}
-          onChangeText={setPhone}
+          onChangeText={(v) => { setPhone(v); if (badPhone) setBadPhone(false); }}
+          invalid={badPhone}
           placeholder="07700 900123"
           keyboardType="phone-pad"
           autoComplete="tel"
+          hint="How we match you to your patient record — use the number the practice has on file."
         />
         <View style={styles.optRow}>
           <View style={{ flex: 1, paddingRight: space(3) }}>
-          <Body>Message me about my referrals and rewards</Body>
-          <Body muted style={{ fontSize: 12, marginTop: 2 }}>By email. You can turn this off any time.</Body>
+            <Body style={styles.optLabel}>Message me about my referrals and rewards</Body>
+            <Body muted style={styles.optHint}>By email. You can turn this off any time.</Body>
           </View>
           <Switch
             value={notifyOptIn}
             onValueChange={setNotifyOptIn}
             trackColor={{ true: colors.gold, false: colors.mistFaint }}
             thumbColor={colors.ivory}
+            // react-native-web ignores thumbColor/trackColor for the ON state and falls back
+            // to its own green, which lands as a teal pill in the middle of a gold card.
+            // These two props are web-only; Platform.select keeps them off native.
+            {...Platform.select({
+              web: { activeThumbColor: colors.ivory, activeTrackColor: colors.gold },
+              default: {},
+            })}
           />
         </View>
-        {error ? <Text style={styles.error}>{error}</Text> : null}
+        <Notice>{error}</Notice>
         <GoldButton
           label="Continue"
           onPress={submit}
+          busy={busy}
           disabled={busy || !firstName.trim() || !lastName.trim() || !phone.trim()}
         />
-      </View>
+      </AuthPanel>
     </Screen>
   );
 }
@@ -254,30 +317,50 @@ export function RolePickerScreen() {
   };
 
   return (
-    <Screen>
-      <View style={{ flex: 1, justifyContent: 'center' }}>
-        <Eyebrow>One question</Eyebrow>
-        <Title>How did you get here?</Title>
-        <Body muted style={{ marginBottom: space(6) }}>
+    <Screen center>
+      <AuthPanel step={4}>
+        <Title style={styles.title}>How did you get here?</Title>
+        <Body muted style={styles.lede}>
           You can do both later — this just sets up your first screen.
         </Body>
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-        <GoldButton label="I’m a GM Dental patient — I want to refer friends" onPress={() => choose('referrer')} disabled={busy} />
-        <GoldButton label="A friend referred me — I have their code" variant="ghost" onPress={() => choose('referred')} disabled={busy} />
-      </View>
+        <Notice>{error}</Notice>
+        <GoldButton
+          label="I’m a patient — I want to refer friends"
+          onPress={() => choose('referrer')}
+          disabled={busy}
+        />
+        <GoldButton
+          label="A friend referred me — I have their code"
+          variant="ghost"
+          onPress={() => choose('referred')}
+          disabled={busy}
+        />
+      </AuthPanel>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  error: { color: colors.danger, marginBottom: space(2) },
-  notice: { color: colors.success, marginBottom: space(2) },
+  title: { fontSize: 30, lineHeight: 36, marginBottom: space(2) },
+  lede: { marginBottom: space(6), fontSize: 14, lineHeight: 21 },
+  footnote: {
+    color: colors.mist,
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: 'center',
+    marginTop: space(5),
+    paddingHorizontal: space(4),
+  },
+  nameRow: { flexDirection: 'row', gap: space(3) },
+  nameField: { flex: 1 },
   optRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.cardface,
+    backgroundColor: colors.boardroom,
     borderRadius: 12,
     padding: space(4),
-    marginBottom: space(2),
+    marginBottom: space(4),
   },
+  optLabel: { fontSize: 14, lineHeight: 20 },
+  optHint: { fontSize: 12, lineHeight: 17, marginTop: 2 },
 });

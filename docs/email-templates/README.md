@@ -33,6 +33,18 @@ Magic links and OTPs are the same mechanism in Supabase; the template decides wh
 patient gets. `{{ .Token }}` renders the six-digit code. Q3 chose codes over links because a
 code works when the mail client opens on a different device from the app.
 
+## Set the code LENGTH to match the app
+
+`{{ .Token }}` renders however many digits **Email OTP Length** is set to under Authentication
+→ Sign In / Providers → Email. Supabase allows 6–10; the app expects **6** (`OTP_LENGTH` in
+`apps/mobile/src/screens/auth.js`).
+
+On 2026-09-10 the dashboard was on 8 while the app said 6, and the failure was silent in the
+worst way: the code field truncated the last two digits, the Sign in button lit up as if the
+code were complete, and Supabase rejected it as "wrong or expired" — which reads to a patient
+as *you typed it wrong*. The field now accepts up to 10 so a mismatch can never truncate, but
+the two numbers must still agree or the label lies.
+
 ## Set the expiry to match the copy
 
 These templates say the code expires in **10 minutes**. Supabase's default is 3600 seconds.

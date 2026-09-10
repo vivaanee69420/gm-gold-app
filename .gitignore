@@ -11,3 +11,6 @@ web-build/
 coverage/
 .gstack/
 apps/api/data/
+
+# Added by ggshield
+.cache_ggshield

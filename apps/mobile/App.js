@@ -15,7 +15,12 @@ import { LoginScreen, VerifyScreen, ProfileScreen, RolePickerScreen } from './sr
 import { CardScreen, ReferralsScreen, WalletScreen } from './src/screens/referrer';
 import { EnterCodeScreen, BookingFormScreen, ReferredStatusScreen } from './src/screens/referred';
 import { isMockMode } from './src/api/client';
+import { installWebStyles } from './src/lib/webStyles';
 import { colors } from './src/theme';
+
+// Autofill colours, focus rings and the page background — things StyleSheet can't reach on
+// web. No-op on native. Called at module scope so it lands before the first paint.
+installWebStyles();
 
 const Stack = createNativeStackNavigator();
 const Tabs = createBottomTabNavigator();
