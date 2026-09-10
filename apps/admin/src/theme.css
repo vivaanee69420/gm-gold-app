@@ -661,3 +661,122 @@ button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: de
   color: var(--mist);
   max-width: 52ch;
 }
+
+/* ---- patients: register + side panel with stage timeline ----
+   The panel sits beside the table (never over it) once a row is open, and collapses back to
+   one column when there's nothing to show. Its own card treatment matches .card exactly —
+   same radius, same hairline, no shadow — so it reads as this system's card, not a new one. */
+
+.patients-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+  align-items: start;
+}
+@media (min-width: 60rem) {
+  .patients-layout:has(.patient-detail) {
+    grid-template-columns: 1fr 340px;
+  }
+}
+
+/* A referred name doubling as the open-detail control: reads as a link, not a button,
+   because that's what it does — takes you to more about this one row. */
+.linklike {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--boardroom);
+  text-decoration: underline;
+  text-decoration-color: var(--hairline);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.linklike:hover { text-decoration-color: var(--gold); }
+
+/* Opening the panel is a direct response to that click, so it's the one entrance animation on
+   this screen — the table and its rows never animate. */
+.patient-detail {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  padding: 18px 20px 20px;
+  animation: patient-detail-in 180ms ease-out both;
+}
+@keyframes patient-detail-in {
+  from { opacity: 0; transform: translateX(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.patient-detail header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.patient-detail h3 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--boardroom);
+}
+.patient-detail h4 {
+  margin: 18px 0 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mist);
+}
+
+.patient-detail dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 9px 14px;
+  margin: 0;
+  font-size: 13.5px;
+}
+.patient-detail dt {
+  padding-top: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mist);
+}
+.patient-detail dd { margin: 0; }
+.patient-detail dd .meta { margin-top: 2px; }
+
+.patient-detail-error { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.patient-detail-error p { margin: 0; max-width: 40ch; font-size: 13.5px; color: var(--mist); }
+
+/* The stage timeline: a genuine chronological trail, so a connected line of markers is real
+   structure here, not decoration — but the markers stay quiet (hairline ring, paper fill),
+   never gold and never one colour per stage. Gold on this page stays where the system already
+   reserves it: the commission amount and the card count above. */
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding-left: 16px;
+  border-left: 1px solid var(--hairline);
+}
+.timeline li { position: relative; padding: 0 0 14px 4px; }
+.timeline li:last-child { padding-bottom: 0; }
+.timeline li::before {
+  content: '';
+  position: absolute;
+  left: -20px;
+  top: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--mist);
+}
+.timeline-when { display: block; font-size: 11px; color: var(--mist); }
+.timeline-what { display: block; margin-top: 1px; font-size: 13.5px; color: var(--ink); }
