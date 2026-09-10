@@ -38,7 +38,11 @@ export async function confirmProposal(proposalId, adminId) {
   if (referral.review_status === 'existing_patient_suspect') throw httpError('review_pending', 409); // FR-17
   if (referral.status === 'lost') throw httpError('invalid_transition', 409);
 
-  const practiceId = proposal.treating_practice_id ?? referral.preferred_practice_id;
+  // Canonical owning-practice resolution (same coalesce order as referralService.js,
+  // digestService.js and app.js): the actual booked practice outranks the form's original
+  // choice. treating_practice_id (the Dentally appointment site) outranks both — it is what
+  // the treatment actually happened at.
+  const practiceId = proposal.treating_practice_id ?? referral.booked_practice_id ?? referral.preferred_practice_id;
   const rule = await resolveRule(practiceId);
   if (!rule) throw httpError('no_active_rule', 409);
 
@@ -50,11 +54,35 @@ export async function confirmProposal(proposalId, adminId) {
     );
     if (!decided[0]) throw httpError('proposal_not_open', 409); // raced another admin click
 
+    // The manager path may have credited this referral already. That is success, not a
+    // conflict: mark the proposal resolved, advance the referral to its final stage, and
+    // write no second ledger row.
+    const { rows: existing } = await client.query(
+      `select id from wallet_ledger where referral_id = $1 and kind = 'credit' limit 1`,
+      [referral.id],
+    );
+
     const { rows: transitioned } = await client.query(
       `update referrals set status='treatment_completed'
        where id=$1 and status not in ('lost','treatment_completed') returning status`,
       [referral.id],
     );
+
+    if (existing[0]) {
+      await logEvent(client, {
+        actorId: adminId, actorKind: 'admin', entityType: 'proposal', entityId: proposalId,
+        action: 'confirmed', toValue: referral.id,
+        reason: 'already credited by manager — no second credit written',
+      });
+      if (transitioned[0]) {
+        await logEvent(client, {
+          actorId: adminId, actorKind: 'admin', entityType: 'referral', entityId: referral.id,
+          action: 'status_changed', fromValue: referral.status, toValue: 'treatment_completed',
+          reason: 'dentally proposal confirmed (already credited)',
+        });
+      }
+      return { ok: true, credit: null, alreadyCredited: true };
+    }
 
     let credit;
     try {
@@ -102,7 +130,7 @@ export async function confirmProposal(proposalId, adminId) {
       actorId: adminId, actorKind: 'admin', entityType: 'wallet', entityId: referral.referrer_id,
       action: 'credit', toValue: String(rule.amount_pennies), reason: `proposal ${proposalId}`,
     });
-    return { ok: true, credit: { amountPennies: credit.amount_pennies } };
+    return { ok: true, credit: { amountPennies: credit.amount_pennies }, alreadyCredited: false };
   });
 }
 

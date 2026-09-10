@@ -197,6 +197,16 @@ async function processCompletedPage(client, appointments) {
       }
       if (!paidInvoice) continue; // no paid invoice for this treatment yet — not creditable
 
+      // A manager already credited this one — the outcome the proposal exists to produce has
+      // happened. Filing it anyway just puts a chore in the owner's queue for settled work.
+      // Note: `client` here is the Dentally SOURCE client (listInvoices/getPatient above) —
+      // this check, like the completion_proposals insert below it, needs the module-level `db`.
+      const { rows: alreadyCredited } = await db.query(
+        `select 1 from wallet_ledger where referral_id = $1 and kind = 'credit' limit 1`,
+        [referral.id],
+      );
+      if (alreadyCredited[0]) continue;
+
       const invoiceState = `paid${paidInvoice.paidOn ? ` ${paidInvoice.paidOn}` : ''}${
         paidInvoice.amountPennies != null ? ` £${(paidInvoice.amountPennies / 100).toFixed(2)}` : ''
       }`;

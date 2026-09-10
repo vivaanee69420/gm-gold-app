@@ -41,6 +41,20 @@ const submitReferral = (token, fullName, extra = {}) =>
     ...extra,
   });
 
+/**
+ * A referral (attributed to the shared agents.referrer/agents.code, same as every other
+ * fixture in this file) ready to be completed in Dentally. Submitted via agents.referrer's own
+ * token with a phone override — the established pattern here (see "New Then Treated" /
+ * "Domestic Format" above) since POST /referrals only requires an authenticated user, not a
+ * "referred"-role account matching the phone.
+ */
+async function referredFriendReadyToComplete(friendPhone) {
+  const sub = await submitReferral(agents.referrer, 'Safety Net', { phone: friendPhone });
+  expect(sub.status, 'referral submission for the safety-net fixture').toBe(200);
+  const { rows } = await db.query(`select referred_phone from referrals where id=$1`, [sub.body.referral.id]);
+  return { referralId: sub.body.referral.id, friendPhone: rows[0].referred_phone };
+}
+
 beforeAll(async () => {
   // DENTALLY_* env goes through bootTestApp rather than module scope: config.js reads it
   // once at import, and anything left in process.env leaks into whichever suite runs next
@@ -197,18 +211,22 @@ describe('FR-17 proposal confirm/reject', () => {
     expect(again.status).toBe(409); // double-click safe
   });
 
-  it('row 26: the second proposal for the same referral can never double-credit', async () => {
+  it('row 26: the second proposal for the same referral resolves cleanly and can never double-credit', async () => {
+    // Task 7: confirming a proposal for an already-credited referral no longer 409s. It
+    // resolves cleanly — the proposal is marked confirmed with no second ledger row — since
+    // that IS the outcome a duplicate Dentally event's proposal exists to produce.
     const res = await request(app).post(`/admin/proposals/${agents.secondProposalId}/confirm`).set(auth(agents.admin));
-    expect(res.status).toBe(409);
-    expect(res.body.error).toBe('already_credited');
+    expect(res.status).toBe(200);
+    expect(res.body.alreadyCredited).toBe(true);
+    expect(res.body.credit).toBeNull();
 
-    const noReason = await request(app).post(`/admin/proposals/${agents.secondProposalId}/reject`).set(auth(agents.admin)).send({});
-    expect(noReason.status).toBe(422);
+    // Already resolved (confirmed), not left open for a reject.
     const rejected = await request(app)
       .post(`/admin/proposals/${agents.secondProposalId}/reject`)
       .set(auth(agents.admin))
       .send({ reason: 'duplicate event — already credited' });
-    expect(rejected.status).toBe(200);
+    expect(rejected.status).toBe(409);
+    expect(rejected.body.error).toBe('proposal_not_open');
 
     const wallet = await request(app).get('/wallet').set(auth(agents.referrer));
     expect(wallet.body.wallet.balancePennies).toBe(2000); // unchanged
@@ -590,5 +608,73 @@ describe('booking re-attributes the lead to the practice it happened at', () => 
     expect(events).toHaveLength(1);
     expect(events[0].from_value).toBe(formPractice.id);
     expect(events[0].to_value).toBe(bookedPractice.id);
+  });
+});
+
+describe('the poller is a safety net, not a second payer', () => {
+  // Managers can now credit directly (treatment_started, privileged). The poller must not
+  // compete with that path: no proposal for work that is already settled, and confirming a
+  // stale proposal for settled work must resolve cleanly rather than 409.
+  //
+  // Fixtures here call stub.stubAddCompletedTreatment directly (not the /dev/dentally/... dev
+  // endpoint) with completedAt/updatedAt from this file's ts() clock, not the endpoint's
+  // real-wall-clock default — by this point in the suite the APPTS_CURSOR watermark, advanced
+  // entirely off ts() calls, sits ahead of real "now", so a real-time fixture would be
+  // silently filtered out by drainPages' `updatedAt > watermark` check and never seen.
+
+  it('files no proposal for a referral a manager already credited', async () => {
+    const { referralId, friendPhone } = await referredFriendReadyToComplete('07700 904001');
+
+    const started = await request(app).patch(`/admin/referrals/${referralId}/status`)
+      .set(auth(agents.admin)).send({ status: 'treatment_started' });
+    expect(started.status).toBe(200);
+
+    stub.stubAddCompletedTreatment({
+      phone: friendPhone, siteId: agents.practiceId, amountPennies: 52000, completedAt: ts(), updatedAt: ts(),
+    });
+    const sync = await runSync('test');
+    expect(sync.proposalsCreated).toBe(0);
+
+    const { rows } = await db.query(
+      `select count(*)::int as n from completion_proposals where referral_id = $1`,
+      [referralId],
+    );
+    expect(rows[0].n, 'a credited referral is done — the owner needs no chore for it').toBe(0);
+  });
+
+  it('resolves an open proposal cleanly when a manager credits first', async () => {
+    const { referralId, friendPhone } = await referredFriendReadyToComplete('07700 904002');
+
+    // Proposal filed first...
+    stub.stubAddCompletedTreatment({
+      phone: friendPhone, siteId: agents.practiceId, amountPennies: 52000, completedAt: ts(), updatedAt: ts(),
+    });
+    const sync = await runSync('test');
+    expect(sync.proposalsCreated).toBe(1);
+    const { rows: [proposal] } = await db.query(
+      `select id from completion_proposals where referral_id = $1 and status = 'open'`,
+      [referralId],
+    );
+    expect(proposal).toBeDefined();
+
+    // ...then a manager credits before anyone clicks it.
+    const startedAgain = await request(app).patch(`/admin/referrals/${referralId}/status`)
+      .set(auth(agents.admin)).send({ status: 'treatment_started' });
+    expect(startedAgain.status).toBe(200);
+
+    const confirm = await request(app)
+      .post(`/admin/proposals/${proposal.id}/confirm`).set(auth(agents.admin));
+    expect(confirm.status, 'must not 409 — the outcome the poller wanted already happened').toBe(200);
+    expect(confirm.body.alreadyCredited).toBe(true);
+    expect(confirm.body.credit).toBeNull();
+
+    const { rows: credits } = await db.query(
+      `select count(*)::int as n from wallet_ledger where referral_id = $1 and kind = 'credit'`,
+      [referralId],
+    );
+    expect(credits[0].n).toBe(1);
+
+    const { rows: [ref] } = await db.query(`select status from referrals where id = $1`, [referralId]);
+    expect(ref.status).toBe('treatment_completed');
   });
 });
