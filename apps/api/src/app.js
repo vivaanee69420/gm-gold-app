@@ -252,7 +252,7 @@ export function buildApp() {
   }));
 
   // ---- team management (FR-24): admin-only — the manager fence in middleware/auth.js
-  // (MANAGER_ALLOWED) blocks every /admin/team* route before it reaches here. Every
+  // (MANAGER_ROUTES) blocks every /admin/team* route before it reaches here. Every
   // mutation logs an events row (entity_type 'admin_user') so who-changed-what is auditable.
   app.get('/admin/team', requireAdmin, wrap(async (_req, res) => {
     res.json({ team: await listAdmins() });
@@ -295,7 +295,7 @@ export function buildApp() {
     res.json(await setActive({ id: req.params.id, active: req.body.active, actorId: req.admin.id }));
   }));
 
-  // Both roles reach this one (see MANAGER_ALLOWED): { currentPassword, newPassword } — wrong
+  // Both roles reach this one (see MANAGER_ROUTES): { currentPassword, newPassword } — wrong
   // current -> 401 wrong_password; on success, sessions_revoked_at is bumped for THIS admin
   // too, so the response carries a fresh token in the same breath.
   app.post('/admin/me/password', requireAdmin, wrap(async (req, res) => {

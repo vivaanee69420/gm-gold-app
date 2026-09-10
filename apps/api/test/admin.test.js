@@ -272,10 +272,12 @@ describe('admin_users practice scoping (FR-24)', () => {
     expect(payouts.status).toBe(200);
     expect(payouts.body.payouts).toEqual([]); // Sarah's payout sits at the first practice
 
-    // Managers are fenced to /admin/me + /admin/payouts*; referrals is off-limits entirely.
+    // 2026-09-10: managers now reach GET /admin/referrals (MANAGER_ROUTES), but scoped to
+    // their own practice — the referrals seeded in this suite live at agents.practiceId, not
+    // agents.otherPracticeId, so this manager sees none of them rather than getting a 403.
     const referrals = await request(app).get('/admin/referrals').set(auth(managerToken));
-    expect(referrals.status).toBe(403);
-    expect(referrals.body.error).toBe('forbidden');
+    expect(referrals.status).toBe(200);
+    expect(referrals.body.referrals).toEqual([]);
 
     const all = await request(app).get('/admin/payouts').set(auth(agents.admin));
     expect(all.body.payouts.length).toBeGreaterThan(0); // an unscoped admin sees every practice

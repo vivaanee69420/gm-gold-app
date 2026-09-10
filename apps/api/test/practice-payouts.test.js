@@ -158,8 +158,12 @@ describe('manager is fenced to their practice', () => {
     expect(res.status).toBe(403);
   });
 
-  it('is locked out of every other admin surface', async () => {
-    for (const path of ['/admin/referrals', '/admin/stats', '/admin/proposals', '/admin/settings']) {
+  // /admin/referrals and /admin/stats moved off this list in the 2026-09-10 manager-pipeline
+  // decision (MANAGER_ROUTES in middleware/auth.js) — a manager now reaches both, scoped to
+  // their own practice. manager-routes.test.js is what actually enforces the allowlist against
+  // the live router; this just spot-checks a couple of admin-only surfaces that stayed closed.
+  it('is locked out of admin surfaces outside the manager allowlist', async () => {
+    for (const path of ['/admin/proposals', '/admin/settings']) {
       const res = await request(app).get(path).set(auth(t.managerA));
       expect(res.status, path).toBe(403);
       expect(res.body.error, path).toBe('forbidden');

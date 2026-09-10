@@ -64,10 +64,27 @@ export async function requireUser(req, res, next) {
   }
 }
 
-// A manager gets a payouts-only dashboard (2026-08-28 decision): everything else 403s.
-// /admin/me/password is listed explicitly even though the prefix match already covers it,
-// so the allowed set stays legible as intent, not an accident of regex precedence.
-const MANAGER_ALLOWED = /^\/admin\/(me\/password|me|payouts)(\/|$)/;
+// A manager gets a practice-scoped subset of the dashboard (2026-09-10 decision, superseding
+// the 2026-08-28 payouts-only rule): their practice's pipeline, patients, payouts and stats.
+//
+// This is an explicit list rather than a path regex so that the answer to "can a manager reach
+// this?" is a line you can read, and so manager-routes.test.js can enforce that every
+// registered /admin route has an answer. Fail closed: anything absent from this list is 403.
+//
+// Keys are "<METHOD> <express route path>" — the route PATTERN (with :id), not the request url.
+export const MANAGER_ROUTES = new Set([
+  'GET /admin/me',
+  'POST /admin/me/password',
+  'GET /admin/payouts',
+  'POST /admin/payouts/:id/mark-paid',
+  'POST /admin/payouts/:id/cancel',
+  'GET /admin/referrals',
+  'PATCH /admin/referrals/:id/status',
+  // Restored in the patients-page commit — the routes do not exist yet.
+  // 'GET /admin/patients',
+  // 'GET /admin/patients/:id',
+  'GET /admin/stats',
+]);
 
 // Standalone (no requireUser first): admin identity lives entirely in admin_users, keyed
 // by its own uuid — never by a patient's users.id. Patient tokens are rejected outright.
@@ -81,7 +98,11 @@ export async function requireAdmin(req, res, next) {
     const admin = await loadAdminForToken(payload);
     if (!admin) return res.status(401).json({ error: 'unauthorized' });
     req.admin = admin;
-    if (admin.role === 'manager' && !MANAGER_ALLOWED.test(req.path)) {
+    // req.route is set by Express before route-level middleware runs, so this sees the
+    // PATTERN (e.g. /admin/payouts/:id/cancel), not the concrete url. The `?? req.path`
+    // fallback can only produce a string with a real uuid in it, which never matches the
+    // Set — so an unexpected mounting still fails closed.
+    if (admin.role === 'manager' && !MANAGER_ROUTES.has(`${req.method} ${req.route?.path ?? req.path}`)) {
       return res.status(403).json({ error: 'forbidden' });
     }
     return next();
