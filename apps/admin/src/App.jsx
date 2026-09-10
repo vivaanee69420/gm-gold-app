@@ -10,7 +10,7 @@ import PipelinePage from './pages/PipelinePage.jsx';
 import PatientsPage from './pages/PatientsPage.jsx';
 import PayoutsPage from './pages/PayoutsPage.jsx';
 import OperationsPage from './pages/OperationsPage.jsx';
-import ReportsPage from './pages/ReportsPage.jsx';
+import OverviewPage from './pages/OverviewPage.jsx';
 import SettingsPage from './pages/SettingsPage.jsx';
 
 // Managers get a strict subset of the owner's dashboard, scoped by the API to their own
@@ -55,12 +55,12 @@ const PAGES = [
     count: (d) => (d.proposals?.length ?? 0) + (d.reviews?.length ?? 0),
   },
   {
-    path: '/reports',
-    key: 'reports',
-    label: 'Reports & Setup',
+    path: '/overview',
+    key: 'overview',
+    label: 'Overview',
     icon: 'reports',
     roles: ['admin'],
-    blurb: 'How the scheme is performing, and the reward levers that change it.',
+    blurb: 'Where the scheme stands, where the referrals come from, and what a referral is worth.',
   },
   {
     path: '/settings',
@@ -101,7 +101,7 @@ const PAGE_COMPONENTS = {
   '/patients': PatientsPage,
   '/payouts': PayoutsPage,
   '/operations': OperationsPage,
-  '/reports': ReportsPage,
+  '/overview': OverviewPage,
   '/settings': SettingsPage,
 };
 

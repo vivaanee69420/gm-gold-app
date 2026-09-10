@@ -37,7 +37,7 @@ body {
 }
 
 button { font: inherit; cursor: pointer; }
-input, select { font: inherit; color: var(--ink); }
+input, select, textarea { font: inherit; color: var(--ink); }
 
 :focus-visible {
   outline: 2px solid var(--gold);
@@ -394,6 +394,51 @@ main {
   max-width: 460px;
 }
 
+/* ---- overview metrics ----
+   One figure per card, so the eye can land on any of them without reading a table. The lead
+   card is the liability — the one number the owner checks first — and it keeps the gold seam
+   the ledger line used to carry. Everything else stays quiet. */
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(216px, 1fr));
+  gap: 16px;
+}
+
+.metric {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  padding: 16px 18px 18px;
+}
+
+.metric-lead {
+  border-top: 2px solid transparent;
+  border-image: var(--seam) 1;
+}
+
+.metric-label {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--mist);
+}
+
+.metric-value {
+  margin: 8px 0 0;
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 30px;
+  line-height: 1.1;
+  color: var(--boardroom);
+  font-variant-numeric: tabular-nums;
+}
+.metric-lead .metric-value { font-size: 36px; }
+
+.metric .meta { margin-top: 6px; }
+
 /* ---- cards ---- */
 
 .card {
@@ -490,13 +535,17 @@ label {
   color: var(--mist);
 }
 
-input, select {
+input, select, textarea {
   width: 100%;
   padding: 8px 10px;
   background: #fff;
   border: 1px solid var(--hairline);
   border-radius: 8px;
 }
+
+/* A textarea inherits a monospace face and a 20-column default width from the browser unless
+   it is told otherwise. It is a text field, and should look like the ones beside it. */
+textarea { resize: vertical; line-height: 1.5; }
 
 /* A checkbox is not a text field: the full-width rule above stretched it into a bar. */
 input[type='checkbox'] {
@@ -505,7 +554,7 @@ input[type='checkbox'] {
   padding: 0;
   accent-color: var(--boardroom);
 }
-input:focus, select:focus { border-color: var(--gold); }
+input:focus, select:focus, textarea:focus { border-color: var(--gold); }
 
 /* solid boardroom action; .btn-gold is the money action (mark paid) */
 button[type='submit'], .btn-primary {
@@ -1324,6 +1373,16 @@ tr:hover .row-actions button,
 }
 .timeline-when { display: block; font-size: 11px; color: var(--mist); }
 .timeline-what { display: block; margin-top: 1px; font-size: 13.5px; color: var(--ink); }
+
+/* A block of the form that sits below a rule, because everything under it is something you
+   can change — used by the record dialog's note box and the team member's password field. */
+.panel-field {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--hairline-soft);
+}
+.panel-field label { margin-top: 0; }
+.panel-field button { margin-top: 10px; }
 
 /* ---- the referral dialog: one patient's whole record, in the middle of the screen ----
    A dialog rather than a panel beside the board, because this is a place you go into and come

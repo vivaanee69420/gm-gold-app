@@ -60,7 +60,7 @@ describe('App', () => {
 
     expect(screen.queryAllByRole('link')).toHaveLength(0);
     expect(screen.queryByRole('link', { name: /^operations$/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: /reports & setup/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /^overview$/i })).not.toBeInTheDocument();
     expect(screen.getByText(/loading/i)).toBeInTheDocument();
   });
 
@@ -75,7 +75,7 @@ describe('App', () => {
     expect(screen.queryByRole('heading', { name: /payout requests/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /existing-patient review/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /referral record/i })).not.toBeInTheDocument();
-    // Reports & Setup content lives on the other page.
+    // Overview content lives on its own page.
     expect(screen.queryByRole('heading', { name: /^funnel$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /reward levers/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /top referrers/i })).not.toBeInTheDocument();
@@ -110,23 +110,28 @@ describe('App', () => {
     expect(window.location.pathname).toBe('/payouts');
   });
 
-  it('switches to the reports & setup page via the topbar nav', async () => {
+  it('leads the overview with the figures, then what is behind them', async () => {
     setToken('tok');
     stubDashboardRoutes();
     render(<App />);
     await screen.findByText('£460.00');
 
-    await userEvent.click(screen.getByRole('link', { name: /reports & setup/i }));
+    await userEvent.click(screen.getByRole('link', { name: /^overview$/i }));
 
+    // Cards first: what is owed, what has been paid out, what a referral is worth.
+    expect(screen.getByText(/owed to referrers/i)).toBeInTheDocument();
+    expect(screen.getByText(/credited to date/i)).toBeInTheDocument();
+    expect(screen.getByText(/^per referral$/i)).toBeInTheDocument();
+    // Then the reports behind them.
     expect(screen.getByRole('heading', { name: /^funnel$/i })).toBeInTheDocument();
     expect(screen.getByText('50%')).toBeInTheDocument(); // tripwire
     expect(screen.getByRole('heading', { name: /reward levers/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /top referrers/i })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /payout requests/i })).not.toBeInTheDocument();
-    // Team and the Dentally connection are configuration, and live on Settings now.
+    // Team and the Dentally connection are configuration, and live on Settings.
     expect(screen.queryByRole('heading', { name: /^dentally$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /^team$/i })).not.toBeInTheDocument();
-    expect(window.location.pathname).toBe('/reports');
+    expect(window.location.pathname).toBe('/overview');
   });
 
   it('makes Settings its own place, with its own sidebar and sections', async () => {
@@ -200,7 +205,7 @@ describe('App', () => {
     stubDashboardRoutes();
     render(<App />);
     await screen.findByText('£460.00');
-    await userEvent.click(screen.getByRole('link', { name: /reports & setup/i }));
+    await userEvent.click(screen.getByRole('link', { name: /^overview$/i }));
 
     // Simulate the Back button: the browser restores the URL, then fires popstate.
     window.history.replaceState({}, '', '/');
@@ -210,9 +215,9 @@ describe('App', () => {
     expect(screen.queryByRole('heading', { name: /^funnel$/i })).not.toBeInTheDocument();
   });
 
-  it('renders the reports & setup page when loading /reports directly', async () => {
+  it('renders the overview when loading /overview directly', async () => {
     setToken('tok');
-    window.history.replaceState({}, '', '/reports');
+    window.history.replaceState({}, '', '/overview');
     stubDashboardRoutes();
     render(<App />);
 
@@ -267,7 +272,7 @@ describe('role-driven navigation', () => {
     expect(await screen.findByRole('link', { name: /pipeline/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /patients/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /payouts/i })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: /reports & setup/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /^overview$/i })).not.toBeInTheDocument();
 
     // A manager must never trigger a request they are not allowed to make. Asserted as an
     // exact set (not a denylist of the known-forbidden ones) so any call to an endpoint not on
