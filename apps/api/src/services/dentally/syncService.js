@@ -395,6 +395,29 @@ async function flagExistingPatients(client) {
  *
  * null from the client means COULD NOT CHECK — skipped, never treated as a refund. Clawing back
  * money because Dentally was briefly unreachable would be far worse than catching it late.
+ *
+ * Eligibility ALSO requires a confirmed completion_proposals row for the referral — this is not
+ * an optimisation, it is the fix for a real money-destroying bug. This function used to run over
+ * every credited referral with no further condition, on the invariant that a credit could only
+ * exist after confirmProposal, which itself required the poller to have already found a
+ * completed appointment AND a paid invoice. The manager-credit path (treatment_started, task 5+)
+ * broke that invariant: a manager can credit BEFORE Dentally has any invoice at all, which means
+ * "is there a paid invoice?" legitimately answers false — the SAME answer a genuine refund
+ * produces. Without this condition, every manager-issued credit gets clawed back on the very
+ * next sync pass, and because the original credit row survives and the one-credit-per-referral
+ * index is unconditional, that referral could then never be credited again.
+ *
+ * A confirmed completion_proposals row is positive evidence that a qualifying paid invoice once
+ * existed (the poller only files a proposal when it found one, and only an admin confirming it
+ * marks it 'confirmed'), so requiring one here restores the original invariant instead of
+ * assuming it:
+ *   - a manager-issued credit has no confirmed proposal (scanCompletions deliberately skips
+ *     filing one once a referral is already credited) — never eligible, correctly, because there
+ *     was never an invoice here to reverse;
+ *   - a proposal-confirmed referral whose invoice is later refunded is still caught, exactly as
+ *     before (FR-16) — no regression there;
+ *   - "no invoice yet" and "invoice reversed" are no longer indistinguishable, which was the
+ *     actual defect.
  */
 async function clawbackRefunded(client) {
   const { rows: credited } = await db.query(
@@ -404,6 +427,10 @@ async function clawbackRefunded(client) {
       where not exists (
         select 1 from wallet_ledger c
          where c.referral_id = r.id and c.idempotency_key = 'clawback:' || r.id::text
+      )
+      and exists (
+        select 1 from completion_proposals cp
+         where cp.referral_id = r.id and cp.status = 'confirmed'
       )`,
   );
   let clawedBack = 0;

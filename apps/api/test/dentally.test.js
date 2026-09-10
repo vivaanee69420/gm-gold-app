@@ -780,3 +780,52 @@ describe('the poller is a safety net, not a second payer', () => {
     expect(ref.status).toBe('treatment_completed');
   });
 });
+
+describe('FIX 1: clawback must not reverse a manager-issued credit (no confirmed proposal)', () => {
+  // The bug: clawbackRefunded used to run over EVERY credited referral, on the invariant that a
+  // credit could only exist after confirmProposal — which itself required a paid invoice to
+  // exist. The manager path breaks that invariant: a manager credits at treatment_started with
+  // NO invoice in Dentally at all yet, so "is there a paid invoice?" legitimately (and, in the
+  // deployed dentalos/stub modes, non-null-ly) answers false — indistinguishable from a genuine
+  // refund. Without the fix, this credit gets clawed back on the very next sync pass, and because
+  // the credit row survives and wallet_ledger_one_credit_per_referral is unconditional, the
+  // referral could then never be credited again.
+  it('a manager credit with no paid invoice anywhere in Dentally survives a sync pass', async () => {
+    const { referralId, friendPhone: _friendPhone } = await referredFriendReadyToComplete('07700 904005');
+
+    // Credit at treatment_started — deliberately with NOTHING added to the stub for this phone,
+    // so hasQualifyingPaidInvoice finds no matching patient/invoice at all and answers `false`,
+    // not null. That `false` is exactly what a real refund would also produce; only the (missing)
+    // confirmed completion_proposals row tells them apart.
+    const started = await request(app).patch(`/admin/referrals/${referralId}/status`)
+      .set(auth(agents.admin)).send({ status: 'treatment_started' });
+    expect(started.status).toBe(200);
+    expect(started.body.credit, 'sanity check — this referral must actually be credited').toBeTruthy();
+
+    const { rows: referralRow } = await db.query(`select referrer_id from referrals where id=$1`, [referralId]);
+    const referrerId = referralRow[0].referrer_id;
+
+    const { rows: before } = await db.query(
+      `select coalesce(sum(amount_pennies),0)::int as bal from wallet_ledger where user_id=$1`, [referrerId]);
+    expect(before[0].bal).toBeGreaterThan(0);
+
+    const sync = await runSync('test');
+    expect(sync.clawedBack, 'this MUST be 0 — there was never an invoice to reverse').toBe(0);
+
+    const { rows: after } = await db.query(
+      `select coalesce(sum(amount_pennies),0)::int as bal from wallet_ledger where user_id=$1`, [referrerId]);
+    expect(after[0].bal).toBe(before[0].bal);
+
+    const { rows: adjustments } = await db.query(
+      `select count(*)::int as n from wallet_ledger where referral_id=$1 and kind='adjustment'`, [referralId]);
+    expect(adjustments[0].n).toBe(0);
+
+    // Belt and braces: confirm there really is no confirmed proposal backing this credit — that
+    // absence is the entire basis for the fix.
+    const { rows: proposals } = await db.query(
+      `select count(*)::int as n from completion_proposals where referral_id=$1 and status='confirmed'`,
+      [referralId],
+    );
+    expect(proposals[0].n).toBe(0);
+  });
+});
