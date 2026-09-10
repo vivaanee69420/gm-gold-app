@@ -69,6 +69,18 @@ describe('GET /admin/patients', () => {
     expect(res.status).toBe(200);
     expect(res.body.patients.map((p) => p.id)).not.toContain(referralId);
   });
+
+  it('shows an in-scope manager their own practice\'s patient', async () => {
+    // practiceScope(req) is null for an admin — the previous two tests never exercise the
+    // `= any($1::uuid[])` branch. This does: a manager genuinely scoped to the referral's
+    // owning practice (practices[0], via preferred_practice_id) must still see it.
+    const { token } = await adminSession(app, {
+      email: 'patients-inscope@gmdental.co.uk', role: 'manager', practiceIds: [practices[0].id],
+    });
+    const res = await request(app).get('/admin/patients').set(auth(token));
+    expect(res.status).toBe(200);
+    expect(res.body.patients.map((p) => p.id)).toContain(referralId);
+  });
 });
 
 describe('GET /admin/patients/:id', () => {
@@ -85,6 +97,17 @@ describe('GET /admin/patients/:id', () => {
     expect(changes.at(-1)).toMatchObject({ to: 'contacted', actorKind: 'admin' });
   });
 
+  it('shows an in-scope manager the patient detail', async () => {
+    // Proves $1/$2 are not transposed: a transposed bind would find nothing and 404 here,
+    // not merely return the wrong rows.
+    const { token } = await adminSession(app, {
+      email: 'patients-detail-inscope@gmdental.co.uk', role: 'manager', practiceIds: [practices[0].id],
+    });
+    const res = await request(app).get(`/admin/patients/${referralId}`).set(auth(token));
+    expect(res.status).toBe(200);
+    expect(res.body.patient.name).toBe('Percy Patient');
+  });
+
   it('404s a manager asking for another practice\'s patient', async () => {
     const { token } = await adminSession(app, {
       email: 'patients-detail-scope@gmdental.co.uk', role: 'manager', practiceIds: [practices[1].id],
@@ -98,5 +121,31 @@ describe('GET /admin/patients/:id', () => {
     const res = await request(app)
       .get('/admin/patients/00000000-0000-4000-8000-000000000000').set(auth(adminToken));
     expect(res.status).toBe(404);
+    expect(res.body.error).toBe('not_found');
+  });
+
+  // This test mutates referralId's booked_practice_id and must run last in the file: every
+  // test above assumes it stays null (e.g. `practice: { ..., booked: null }` above).
+  it('prefers the booked practice over the form practice when they diverge', async () => {
+    // The form said practices[0]; Dental Os now says the appointment is at practices[2].
+    await db.query('update referrals set booked_practice_id = $2 where id = $1', [referralId, practices[2].id]);
+
+    const { token: bookedManager } = await adminSession(app, {
+      email: 'patients-booked-practice@gmdental.co.uk', role: 'manager', practiceIds: [practices[2].id],
+    });
+    const seenList = await request(app).get('/admin/patients').set(auth(bookedManager));
+    expect(seenList.body.patients.map((p) => p.id)).toContain(referralId);
+    const seenDetail = await request(app).get(`/admin/patients/${referralId}`).set(auth(bookedManager));
+    expect(seenDetail.status).toBe(200);
+    expect(seenDetail.body.patient.name).toBe('Percy Patient');
+
+    const { token: formManager } = await adminSession(app, {
+      email: 'patients-form-practice@gmdental.co.uk', role: 'manager', practiceIds: [practices[0].id],
+    });
+    const notSeenList = await request(app).get('/admin/patients').set(auth(formManager));
+    expect(notSeenList.body.patients.map((p) => p.id)).not.toContain(referralId);
+    const notSeenDetail = await request(app).get(`/admin/patients/${referralId}`).set(auth(formManager));
+    expect(notSeenDetail.status).toBe(404);
+    expect(notSeenDetail.body.error).toBe('not_found');
   });
 });
