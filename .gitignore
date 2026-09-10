@@ -11,6 +11,8 @@ web-build/
 coverage/
 .gstack/
 apps/api/data/
+# Subagent-driven-development scratch: ledgers, task briefs, review packages.
+.superpowers/
 
 # Added by ggshield
 .cache_ggshield
