@@ -311,11 +311,13 @@ export function buildApp() {
     const { rows } = await db.query(
       `select r.id, r.referred_name, r.referred_phone, r.referred_email, r.status, r.treatment_interest,
               r.appointment_starts_at, r.created_at::date::text as created_at, r.source,
-              p.name as practice, u.first_name || ' ' || coalesce(u.last_name,'') as referrer,
+              coalesce(bp.name, pp.name) as practice,
+              u.first_name || ' ' || coalesce(u.last_name,'') as referrer,
               u.phone as referrer_phone, rc.code as referrer_code,
               wl.amount_pennies as commission_pennies, wl.created_at::date::text as commission_at
        from referrals r
-       left join practices p on p.id = r.preferred_practice_id
+       left join practices pp on pp.id = r.preferred_practice_id
+       left join practices bp on bp.id = r.booked_practice_id
        join users u on u.id = r.referrer_id
        left join lateral (
          select code from referral_codes
@@ -323,7 +325,7 @@ export function buildApp() {
          order by created_at desc limit 1
        ) rc on true
        left join wallet_ledger wl on wl.referral_id = r.id and wl.kind = 'credit'
-       ${scope ? 'where r.preferred_practice_id = any($1::uuid[])' : ''}
+       ${scope ? 'where coalesce(r.booked_practice_id, r.preferred_practice_id) = any($1::uuid[])' : ''}
        order by r.created_at desc`,
       scope ? [scope] : [],
     );
@@ -438,18 +440,43 @@ export function buildApp() {
     res.json({ ok: true, updated: entries.map(([k]) => k) });
   }));
 
-  app.get('/admin/stats', requireAdmin, wrap(async (_req, res) => {
+  // A manager sees their own practice's numbers. Company-wide liability (every member's
+  // unpaid wallet balance) does not decompose by practice and is not a manager's business,
+  // so it comes back null for them, with credited-at-this-practice in its place.
+  app.get('/admin/stats', requireAdmin, wrap(async (req, res) => {
+    const scope = practiceScope(req);
     const rule = await resolveRule(null);
-    const liability = await db.query(
-      `select coalesce(sum(balance),0)::int as total from
-         (select sum(amount_pennies)::int as balance from wallet_ledger group by user_id) b
-       where balance > 0`,
+
+    let liabilityPennies = null;
+    if (scope === null) {
+      const liability = await db.query(
+        `select coalesce(sum(balance),0)::int as total from
+           (select sum(amount_pennies)::int as balance from wallet_ledger group by user_id) b
+         where balance > 0`,
+      );
+      liabilityPennies = liability.rows[0].total;
+    }
+
+    const owning = 'coalesce(r.booked_practice_id, r.preferred_practice_id)';
+    const counts = await db.query(
+      `select r.status, count(*)::int as n from referrals r
+       ${scope ? `where ${owning} = any($1::uuid[])` : ''}
+       group by r.status`,
+      scope ? [scope] : [],
     );
-    const counts = await db.query(`select status, count(*)::int as n from referrals group by status`);
+    const credited = await db.query(
+      `select coalesce(sum(l.amount_pennies),0)::int as total
+         from wallet_ledger l join referrals r on r.id = l.referral_id
+        where l.kind = 'credit'
+        ${scope ? `and ${owning} = any($1::uuid[])` : ''}`,
+      scope ? [scope] : [],
+    );
+
     res.json({
       stats: {
         commissionPennies: rule?.amount_pennies ?? null,
-        liabilityPennies: liability.rows[0].total,
+        liabilityPennies,
+        creditedPennies: credited.rows[0].total,
         referralCounts: Object.fromEntries(counts.rows.map((r) => [r.status, r.n])),
       },
     });

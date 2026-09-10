@@ -315,3 +315,59 @@ describe('error boundary', () => {
     expect(res.body).toEqual({ error: 'not_found' });
   });
 });
+
+describe('manager-visible reads are practice-scoped', () => {
+  it('scopes referral counts and hides company liability from a manager', async () => {
+    const practices = (await request(app).get('/practices')).body.practices;
+    const { token: manager } = await adminSession(app, {
+      email: 'scoped-stats@gmdental.co.uk',
+      role: 'manager',
+      practiceIds: [practices[1].id],
+    });
+
+    const asAdmin = await request(app).get('/admin/stats').set(auth(agents.admin));
+    expect(asAdmin.status).toBe(200);
+    expect(asAdmin.body.stats.liabilityPennies).toEqual(expect.any(Number));
+
+    const asManager = await request(app).get('/admin/stats').set(auth(manager));
+    expect(asManager.status).toBe(200);
+    // Company-wide liability is not a manager's number.
+    expect(asManager.body.stats.liabilityPennies).toBeNull();
+    expect(asManager.body.stats.creditedPennies).toEqual(expect.any(Number));
+
+    const adminTotal = Object.values(asAdmin.body.stats.referralCounts)
+      .reduce((a, b) => a + b, 0);
+    const managerTotal = Object.values(asManager.body.stats.referralCounts)
+      .reduce((a, b) => a + b, 0);
+    expect(managerTotal).toBeLessThanOrEqual(adminTotal);
+  });
+
+  it('scopes /admin/referrals on the practice the patient actually booked at', async () => {
+    const practices = (await request(app).get('/practices')).body.practices;
+    const { rows: [referral] } = await db.query(
+      `select id, preferred_practice_id from referrals
+        where preferred_practice_id is not null limit 1`,
+    );
+    // The form said practice A; Dental Os says the appointment is at practice B.
+    const otherPractice = practices.find((p) => p.id !== referral.preferred_practice_id);
+    await db.query(`update referrals set booked_practice_id = $2 where id = $1`,
+      [referral.id, otherPractice.id]);
+
+    const { token: bookedManager } = await adminSession(app, {
+      email: 'booked-practice@gmdental.co.uk',
+      role: 'manager',
+      practiceIds: [otherPractice.id],
+    });
+    const seen = await request(app).get('/admin/referrals').set(auth(bookedManager));
+    expect(seen.status).toBe(200);
+    expect(seen.body.referrals.map((r) => r.id)).toContain(referral.id);
+
+    const { token: formManager } = await adminSession(app, {
+      email: 'form-practice@gmdental.co.uk',
+      role: 'manager',
+      practiceIds: [referral.preferred_practice_id],
+    });
+    const notSeen = await request(app).get('/admin/referrals').set(auth(formManager));
+    expect(notSeen.body.referrals.map((r) => r.id)).not.toContain(referral.id);
+  });
+});
