@@ -528,3 +528,67 @@ describe('clawback: commission reversed when the payment is refunded', () => {
     expect(alreadyDone).toBeNull();
   });
 });
+
+describe('booking re-attributes the lead to the practice it happened at', () => {
+  it('sets booked_practice_id and moves the lead into that practice scope', async () => {
+    const practices = (await request(app).get('/practices')).body.practices;
+    const formPractice = practices[0];
+    const bookedPractice = practices[1];
+
+    // A referral whose form said formPractice.
+    const ref = await signIn('+447700903001');
+    await request(app).post('/me/profile').set(auth(ref.token))
+      .send({ firstName: 'Reattrib', lastName: 'Referrer', notifyOptIn: false });
+    const role = await request(app).post('/me/role').set(auth(ref.token)).send({ role: 'referrer' });
+
+    const friendPhone = '+447700903002';
+    const friend = await signIn(friendPhone);
+    await request(app).post('/me/profile').set(auth(friend.token))
+      .send({ firstName: 'Reattrib', lastName: 'Friend', notifyOptIn: false });
+    await request(app).post('/me/role').set(auth(friend.token)).send({ role: 'referred' });
+    const sub = await request(app).post('/referrals').set(auth(friend.token)).send({
+      code: role.body.user.referralCode,
+      fullName: 'Reattrib Friend',
+      treatmentInterest: 'implants',
+      preferredPracticeId: formPractice.id,
+      consent: true,
+      consentVersion: 'referred-v1-2026-08',
+    });
+    expect(sub.status).toBe(200);
+    const referralId = sub.body.referral.id;
+
+    // In stub mode a practice's dentally_site_id is its own uuid, so booking "at" bookedPractice
+    // means pointing the stub site id at that practice — the same write
+    // /dev/dentally/book-appointment does for practiceId. updatedAt uses the file's synthetic
+    // ts() clock, not wall time: by this point in the suite the cursor watermark has already
+    // been advanced past real "now" by earlier tests' ts() calls, so a real-time timestamp here
+    // would be seen as stale and silently skipped by drainPages.
+    await db.query(`update practices set dentally_site_id=$1 where id=$1::uuid`, [bookedPractice.id]);
+    stub.stubAddBookedAppointment({
+      phone: friendPhone,
+      siteId: bookedPractice.id,
+      startsAt: new Date(base + 7 * 86_400_000).toISOString(),
+      updatedAt: ts(),
+    });
+    const summary = await runSync('test');
+    expect(summary.bookingsDetected).toBe(1);
+
+    const { rows } = await db.query(
+      `select status, booked_practice_id, preferred_practice_id from referrals where id = $1`,
+      [referralId],
+    );
+    expect(rows[0].status).toBe('booked');
+    expect(rows[0].booked_practice_id).toBe(bookedPractice.id);
+    // The form's choice is retained, not overwritten — a commission dispute needs it.
+    expect(rows[0].preferred_practice_id).toBe(formPractice.id);
+
+    const { rows: events } = await db.query(
+      `select action, from_value, to_value from events
+        where entity_type = 'referral' and entity_id = $1 and action = 'practice_reassigned'`,
+      [referralId],
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0].from_value).toBe(formPractice.id);
+    expect(events[0].to_value).toBe(bookedPractice.id);
+  });
+});

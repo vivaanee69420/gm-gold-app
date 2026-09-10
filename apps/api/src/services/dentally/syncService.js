@@ -246,7 +246,8 @@ async function processBookedPage(client, appointments) {
   const { phones, emails } = patientKeys(patients);
   if (!phones.length && !emails.length) return 0;
   const { rows: referrals } = await db.query(
-    `select id, referrer_id, referred_name, referred_phone, referred_email, status, appointment_dentally_id
+    `select id, referrer_id, referred_name, referred_phone, referred_email, status,
+            appointment_dentally_id, booked_practice_id, preferred_practice_id
      from referrals
      where (referred_phone = any($1) or lower(referred_email) = any($2))
        and status in ('new','contacted','booked')`,
@@ -263,10 +264,17 @@ async function processBookedPage(client, appointments) {
       const isNewBooking = fromStatus !== 'booked';
       // Already booked: only refresh the time for the SAME appointment (a reschedule).
       if (!isNewBooking && referral.appointment_dentally_id !== `appointment-${appointment.id}`) continue;
+
+      // Where the appointment actually is. This is what puts the lead in front of the manager
+      // who can advance them — the referral form's choice is often not where they booked.
+      const bookedPracticeId = await practiceIdForSite(appointment.siteId);
+      const previousOwner = referral.booked_practice_id ?? referral.preferred_practice_id;
+
       const { rows: updated } = await db.query(
-        `update referrals set status='booked', appointment_dentally_id=$2, appointment_starts_at=$3
+        `update referrals set status='booked', appointment_dentally_id=$2, appointment_starts_at=$3,
+                              booked_practice_id=coalesce($4, booked_practice_id)
          where id=$1 and status in ('new','contacted','booked') returning id`,
-        [referral.id, `appointment-${appointment.id}`, appointment.startsAt],
+        [referral.id, `appointment-${appointment.id}`, appointment.startsAt, bookedPracticeId],
       );
       if (!updated[0] || !isNewBooking) continue;
       booked += 1;
@@ -277,6 +285,18 @@ async function processBookedPage(client, appointments) {
         entityType: 'referral', entityId: referral.id, action: 'status_changed',
         fromValue: fromStatus, toValue: 'booked', reason: `dentally appointment-${appointment.id}`,
       });
+      if (bookedPracticeId && bookedPracticeId !== previousOwner) {
+        await logEvent(db, {
+          actorKind: 'system',
+          entityType: 'referral',
+          entityId: referral.id,
+          action: 'practice_reassigned',
+          fromValue: previousOwner,
+          toValue: bookedPracticeId,
+          reason: `dentally appointment-${appointment.id}`,
+        });
+      }
+      referral.booked_practice_id = bookedPracticeId ?? referral.booked_practice_id;
       await db.query(
         `insert into notification_outbox (recipient_kind, recipient_id, template, payload)
          values ('user',$1,'friend_booked',$2)`,
