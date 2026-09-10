@@ -149,7 +149,8 @@ describe('TeamCard', () => {
     expect(ownerRow.queryByLabelText(/new password/i)).not.toBeInTheDocument();
     expect(ownerRow.queryByRole('button', { name: /save password/i })).not.toBeInTheDocument();
     expect(ownerRow.queryByRole('button', { name: /deactivate/i })).not.toBeInTheDocument();
-    expect(ownerRow.getByText(/change password/i)).toBeInTheDocument(); // points at the header
+    // Points at the Change password card, which sits above this table on the Settings page.
+    expect(ownerRow.getByText(/change your own password above/i)).toBeInTheDocument();
 
     // Everyone else's row is untouched.
     const managerRow = within(screen.getByText('manager@gmdental.co.uk').closest('tr'));

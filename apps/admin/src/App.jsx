@@ -4,7 +4,6 @@ import { api, onUnauthorized } from './api/client.js';
 import { isSignedIn, signOut } from './api/auth.js';
 import { errorMessage } from './copy.js';
 import SignIn from './components/SignIn.jsx';
-import ChangePassword from './components/ChangePassword.jsx';
 import Sidebar from './components/Sidebar.jsx';
 import { MenuIcon, RefreshIcon } from './components/icons.jsx';
 import PipelinePage from './pages/PipelinePage.jsx';
@@ -12,6 +11,7 @@ import PatientsPage from './pages/PatientsPage.jsx';
 import PayoutsPage from './pages/PayoutsPage.jsx';
 import OperationsPage from './pages/OperationsPage.jsx';
 import ReportsPage from './pages/ReportsPage.jsx';
+import SettingsPage from './pages/SettingsPage.jsx';
 
 // Managers get a strict subset of the owner's dashboard, scoped by the API to their own
 // practice (see MANAGER_ROUTES in the API's middleware/auth.js — these two lists must agree).
@@ -60,7 +60,19 @@ const PAGES = [
     label: 'Reports & Setup',
     icon: 'reports',
     roles: ['admin'],
-    blurb: 'How the scheme is performing, and every lever that changes it.',
+    blurb: 'How the scheme is performing, and the reward levers that change it.',
+  },
+  {
+    path: '/settings',
+    key: 'settings',
+    label: 'Settings',
+    icon: 'settings',
+    roles: ['admin', 'manager'],
+    // Never gated by a page grant: every account must be able to change its own password,
+    // including a manager the owner has granted no screens at all.
+    always: true,
+    foot: true,
+    blurb: 'Your password, who can sign in, and the systems this dashboard talks to.',
   },
 ];
 
@@ -83,6 +95,7 @@ const PAGE_COMPONENTS = {
   '/payouts': PayoutsPage,
   '/operations': OperationsPage,
   '/reports': ReportsPage,
+  '/settings': SettingsPage,
 };
 
 export default function App() {
@@ -91,7 +104,6 @@ export default function App() {
   const [data, setData] = useState(null);
   const [toast, setToast] = useState(null);
   const [route, setRoute] = useState(window.location.pathname);
-  const [showChangePassword, setShowChangePassword] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -198,7 +210,9 @@ export default function App() {
   }, []);
 
   // Landing back from Dentally's OAuth approval screen (?dentally=connected|error).
-  // The Dentally card lives on the Reports & Setup page, so land there.
+  // The Dentally card lives on Settings → Integrations, so land there — this has to move
+  // with the card, or the person who just approved the connection arrives on a page that
+  // says nothing about it.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const outcome = params.get('dentally');
@@ -208,8 +222,8 @@ export default function App() {
         ? 'Dentally connected — completed treatments will now be proposed automatically.'
         : `Dentally connection failed: ${params.get('reason') ?? 'unknown error'}. Try again or check the API log.`,
     );
-    window.history.replaceState({}, '', '/reports');
-    setRoute('/reports');
+    window.history.replaceState({}, '', '/settings');
+    setRoute('/settings');
   }, []);
 
   // FR-24: fetch role + practice scope first — a manager's `loadAll` scopes itself to
@@ -258,16 +272,21 @@ export default function App() {
   const role = me?.role ?? null;
   const granted = grantedPages(me);
   const visiblePages = role
-    ? PAGES.filter((p) => p.roles.includes(role) && (role === 'admin' || granted.includes(p.key)))
+    ? PAGES.filter(
+        (p) => p.roles.includes(role) && (role === 'admin' || p.always || granted.includes(p.key)),
+      )
     : [];
-  // With no granted page there is nowhere to land, so `activePath` must not fall back to '/'
-  // and render the pipeline anyway — a nav we removed is not a page we may show.
-  const fallbackPath = visiblePages[0]?.path ?? null;
+  const navPages = visiblePages.filter((p) => !p.foot);
+  const footerPage = visiblePages.find((p) => p.foot) ?? null;
+  // A page we removed from the nav is not a page we may render, so this must not fall back to
+  // '/' — for a manager granted nothing, the first page they have is Settings, which is where
+  // they land and where they can still change their own password.
+  const fallbackPath = (navPages[0] ?? footerPage)?.path ?? null;
   const activePath = visiblePages.some((p) => p.path === route) ? route : fallbackPath;
   const page = visiblePages.find((p) => p.path === activePath) ?? null;
   const Page = activePath ? PAGE_COMPONENTS[activePath] : null;
   const managerHasNoPractice = role === 'manager' && (me?.practices?.length ?? 0) === 0;
-  const managerHasNoPages = role === 'manager' && visiblePages.length === 0;
+  const managerHasNoPages = role === 'manager' && navPages.length === 0;
 
   const badges = {};
   if (data) {
@@ -286,15 +305,11 @@ export default function App() {
       <aside className="shell-side">
         <Sidebar
           me={me}
-          pages={visiblePages}
+          pages={navPages}
+          footerPage={footerPage}
           activePath={activePath}
           navigate={navigate}
           badges={badges}
-          changePasswordOpen={showChangePassword}
-          onChangePassword={() => {
-            setShowChangePassword((v) => !v);
-            setMenuOpen(false);
-          }}
           onDismiss={() => setMenuOpen(false)}
         />
       </aside>
@@ -311,7 +326,7 @@ export default function App() {
             <MenuIcon />
           </button>
           <div className="topbar-title">
-            <h1>{page?.label ?? (managerHasNoPages ? 'No access yet' : 'Referrals')}</h1>
+            <h1>{page?.label ?? 'Referrals'}</h1>
             {headerCount != null && (
               <span className={headerCount === 0 ? 'count-badge count-badge-zero' : 'count-badge'}>
                 {headerCount}
@@ -336,25 +351,22 @@ export default function App() {
 
         {toastEl}
 
-        {showChangePassword && (
-          <div className="inline-panel">
-            <ChangePassword notify={notify} onDone={() => setShowChangePassword(false)} />
-          </div>
-        )}
-
         {managerHasNoPractice ? (
           <main>
             <p className="empty">No practice is assigned to this account — ask the owner to fix it.</p>
-          </main>
-        ) : managerHasNoPages ? (
-          <main>
-            <p className="empty">No screens have been shared with this account yet — ask the owner to add one.</p>
           </main>
         ) : !data || !Page ? (
           <p className="loading">Loading…</p>
         ) : (
           <main>
-            <Page data={data} loadAll={loadAll} patchReferral={patchReferral} notify={notify} me={me} />
+            <Page
+              data={data}
+              loadAll={loadAll}
+              patchReferral={patchReferral}
+              notify={notify}
+              me={me}
+              noGrantedPages={managerHasNoPages}
+            />
           </main>
         )}
       </div>

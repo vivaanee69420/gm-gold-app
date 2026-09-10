@@ -230,7 +230,7 @@ export default function TeamCard({ practices, meId, notify }) {
                     <td>{t.lastLoginAt ? new Date(t.lastLoginAt).toLocaleDateString('en-GB') : 'Never'}</td>
                     <td>
                       {isSelf ? (
-                        <span className="muted">Use “Change password” in the header.</span>
+                        <span className="muted">Change your own password above.</span>
                       ) : (
                         <>
                           <label htmlFor={`team-newpw-${t.id}`}>New password</label>

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { api, setToken } from '../api/client.js';
 import { Card } from './ui.jsx';
 
-// Both roles reach this — a header ghost button toggles it inline in both dashboard shells.
+// Both roles reach this, at the top of Settings — the one page no page grant can take away.
 // The API bumps sessions_revoked_at on success and hands back a fresh token in the same
 // response, so we must store it here or the very next request would 401 the admin out.
 export default function ChangePassword({ notify, onDone }) {

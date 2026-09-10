@@ -43,6 +43,7 @@ const ERRORS = {
   // Not an error: the Team card notifies through the same channel, and a bare "Saved." is
   // clearer than silence after a password reset or a re-scope.
   team_saved: 'Saved.',
+  password_saved: 'Password changed.',
 };
 
 export const errorMessage = (code) => ERRORS[code] ?? code;

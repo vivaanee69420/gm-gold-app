@@ -225,28 +225,6 @@ input, select { font: inherit; color: var(--ink); }
   border-top: 1px solid var(--hairline-soft);
 }
 
-.sidefoot-button {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  width: 100%;
-  padding: 9px 12px;
-  background: none;
-  border: 0;
-  border-radius: 9px;
-  color: var(--ink);
-  font-size: 13.5px;
-  text-align: left;
-  transition: background-color 140ms ease;
-}
-.sidefoot-button svg { flex: none; color: var(--mist); }
-.sidefoot-button:hover { background: rgba(11, 43, 38, 0.05); }
-.sidefoot-button.active {
-  background: rgba(11, 43, 38, 0.075);
-  color: var(--boardroom);
-  font-weight: 600;
-}
-.sidefoot-button.active svg { color: var(--boardroom); }
 
 /* ---- topbar: the section you're in, and the two things you do from anywhere ---- */
 
@@ -839,12 +817,12 @@ button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: de
 .payouts .credits-list { margin: 4px 0 0; padding: 0; font-size: 12px; color: var(--mist); }
 .payouts .credits-list li { padding: 1px 0; border: none; }
 
-/* ---- inline panel: change password, dropped directly under either shell's header ---- */
+/* ---- settings: a form, not a dashboard ----
+   The password card takes a form's width rather than the page's, so the fields stay a
+   readable length instead of stretching to the far edge of a wide screen. */
 
-.inline-panel {
-  max-width: 420px;
-  margin: 20px 32px 0;
-}
+.settings-narrow { max-width: 460px; }
+.settings-note { margin-bottom: 14px; }
 
 /* ---- toast ---- */
 
@@ -972,7 +950,7 @@ button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: de
   .ghost-icon { padding: 5px 10px; }
   .page-blurb { padding: 14px 18px 0; }
   main { padding: 18px 18px 56px; gap: 30px; }
-  .inline-panel { margin: 16px 18px 0; max-width: none; }
+  .settings-narrow { max-width: none; }
   .stat-value { font-size: 36px; }
   .stat-counts { justify-content: flex-start; }
   .overview { align-items: flex-start; flex-direction: column; gap: 14px; }

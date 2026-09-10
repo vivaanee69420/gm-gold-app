@@ -1,4 +1,4 @@
-import { NAV_ICONS, CloseIcon, LockIcon } from './icons.jsx';
+import { NAV_ICONS, CloseIcon } from './icons.jsx';
 
 const ROLE_LABEL = { admin: 'Owner', manager: 'Manager' };
 
@@ -24,14 +24,33 @@ function scopeOf(me) {
   return { name: 'GM Dental Group', kind: 'All practices', mark: 'GM' };
 }
 
+// One nav row, rendered the same whether it sits in the list or pinned to the foot.
+function NavLink({ page, activePath, navigate, badge }) {
+  const Icon = NAV_ICONS[page.icon];
+  return (
+    <a
+      href={page.path}
+      aria-current={page.path === activePath ? 'page' : undefined}
+      className={page.path === activePath ? 'active' : undefined}
+      onClick={(e) => {
+        e.preventDefault();
+        navigate(page.path);
+      }}
+    >
+      <Icon />
+      <span>{page.label}</span>
+      {badge ? <span className="nav-badge">{badge}</span> : null}
+    </a>
+  );
+}
+
 export default function Sidebar({
   me,
   pages,
+  footerPage,
   activePath,
   navigate,
   badges,
-  onChangePassword,
-  changePasswordOpen,
   onDismiss,
 }) {
   const scope = me ? scopeOf(me) : null;
@@ -70,39 +89,24 @@ export default function Sidebar({
       )}
 
       <nav className="sidenav" aria-label="Sections">
-        {pages.map(({ path, label, icon }) => {
-          const Icon = NAV_ICONS[icon];
-          const badge = badges?.[path];
-          return (
-            <a
-              key={path}
-              href={path}
-              aria-current={path === activePath ? 'page' : undefined}
-              className={path === activePath ? 'active' : undefined}
-              onClick={(e) => {
-                e.preventDefault();
-                navigate(path);
-              }}
-            >
-              <Icon />
-              <span>{label}</span>
-              {badge ? <span className="nav-badge">{badge}</span> : null}
-            </a>
-          );
-        })}
+        {pages.map((page) => (
+          <NavLink
+            key={page.path}
+            page={page}
+            activePath={activePath}
+            navigate={navigate}
+            badge={badges?.[page.path]}
+          />
+        ))}
       </nav>
 
-      <div className="sidebar-foot">
-        <button
-          type="button"
-          className={changePasswordOpen ? 'sidefoot-button active' : 'sidefoot-button'}
-          aria-expanded={changePasswordOpen}
-          onClick={onChangePassword}
-        >
-          <LockIcon />
-          <span>Change password</span>
-        </button>
-      </div>
+      {/* Settings sits apart from the work: it configures the dashboard rather than being
+          somewhere you do the day's job. It is also the one row no page grant removes. */}
+      {footerPage && (
+        <nav className="sidenav sidebar-foot" aria-label="Settings">
+          <NavLink page={footerPage} activePath={activePath} navigate={navigate} />
+        </nav>
+      )}
     </div>
   );
 }

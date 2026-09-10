@@ -120,20 +120,37 @@ describe('App', () => {
     expect(screen.getByText('50%')).toBeInTheDocument(); // tripwire
     expect(screen.getByRole('heading', { name: /reward levers/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /top referrers/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /^dentally$/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /^team$/i })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /payout requests/i })).not.toBeInTheDocument();
+    // Team and the Dentally connection are configuration, and live on Settings now.
+    expect(screen.queryByRole('heading', { name: /^dentally$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /^team$/i })).not.toBeInTheDocument();
     expect(window.location.pathname).toBe('/reports');
   });
 
-  it('toggles the change password form from the header ghost button and stores the new token', async () => {
+  it('gathers password, team and integrations on the settings page', async () => {
+    setToken('tok');
+    stubDashboardRoutes();
+    render(<App />);
+    await screen.findByText('£460.00');
+
+    await userEvent.click(screen.getByRole('link', { name: /^settings$/i }));
+
+    expect(screen.getByRole('heading', { name: /change password/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^team$/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^dentally$/i })).toBeInTheDocument();
+    // Reports content stays on Reports.
+    expect(screen.queryByRole('heading', { name: /^funnel$/i })).not.toBeInTheDocument();
+    expect(window.location.pathname).toBe('/settings');
+  });
+
+  it('changes the password from the settings page and stores the new token', async () => {
     setToken('tok');
     stubDashboardRoutes();
     render(<App />);
     await screen.findByText('£460.00');
 
     expect(screen.queryByRole('heading', { name: /change password/i })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: /change password/i }));
+    await userEvent.click(screen.getByRole('link', { name: /^settings$/i }));
     expect(screen.getByRole('heading', { name: /change password/i })).toBeInTheDocument();
 
     stubFetchRoutes([
@@ -143,8 +160,12 @@ describe('App', () => {
     await userEvent.type(screen.getByLabelText(/new password/i), 'brandnewpassword1');
     await userEvent.click(screen.getByRole('button', { name: /save password/i }));
 
+    // The API bumps sessions_revoked_at and hands back a replacement token in the same
+    // response; not storing it would 401 the admin out on their very next request.
     await vi.waitFor(() => expect(getToken()).toBe('new-tok'));
-    expect(screen.queryByRole('heading', { name: /change password/i })).not.toBeInTheDocument();
+    // The form stays put — it is a page now, not a panel that closes — and says what happened.
+    expect(await screen.findByText(/password changed/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /change password/i })).toBeInTheDocument();
   });
 
   it('returns to the pipeline page when the browser goes back', async () => {
@@ -172,7 +193,9 @@ describe('App', () => {
     expect(screen.queryByRole('heading', { name: /payout requests/i })).not.toBeInTheDocument();
   });
 
-  it('starts on the reports & setup page when returning from Dentally OAuth', async () => {
+  it('starts on the settings page when returning from Dentally OAuth', async () => {
+    // This landing has to follow the Dentally card. Sending someone who just approved the
+    // connection to a page that says nothing about it is the whole failure mode.
     setToken('tok');
     window.history.replaceState({}, '', '/?dentally=connected');
     stubDashboardRoutes();
@@ -180,7 +203,7 @@ describe('App', () => {
 
     expect(await screen.findByText(/dentally connected/i)).toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: /^dentally$/i })).toBeInTheDocument();
-    expect(window.location.pathname).toBe('/reports');
+    expect(window.location.pathname).toBe('/settings');
     expect(window.location.search).toBe('');
   });
 
@@ -256,9 +279,10 @@ describe('role-driven navigation', () => {
     });
   });
 
-  it('tells a manager granted nothing why the dashboard is empty, instead of showing the pipeline', async () => {
+  it('lands a manager granted nothing on Settings, with an explanation and no other nav', async () => {
     // An empty grant is a real answer. Falling back to '/' here would render the pipeline to
-    // someone the API will 403 — the nav and the page must fail closed together.
+    // someone the API will 403 — the nav and the page must fail closed together. Settings is
+    // the exception no grant removes: they can still change their own password.
     stubFetchRoutes([
       {
         method: 'GET',
@@ -270,8 +294,12 @@ describe('role-driven navigation', () => {
     setToken('tok');
     render(<App />);
 
-    expect(await screen.findByText(/no screens have been shared with this account yet/i)).toBeInTheDocument();
-    expect(screen.queryAllByRole('link')).toHaveLength(0);
+    expect(await screen.findByText(/no other screens have been shared with this account yet/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /change password/i })).toBeInTheDocument();
+    // Settings is the only link, and none of the admin-only cards come with it.
+    expect(screen.getAllByRole('link').map((a) => a.getAttribute('href'))).toEqual(['/settings']);
+    expect(screen.queryByRole('heading', { name: /^team$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /^dentally$/i })).not.toBeInTheDocument();
   });
 
   it('shows the manager their practice name', async () => {

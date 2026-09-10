@@ -66,6 +66,15 @@ export const LockIcon = (props) => (
   </svg>
 );
 
+export const SettingsIcon = (props) => (
+  <svg {...base} {...props}>
+    {/* Teeth hugging the hub, not rays reaching for the edge — the long-spoke version of
+        this reads as a sun. */}
+    <circle cx="12" cy="12" r="3.4" />
+    <path d="M12 4.6v2.8M12 16.6v2.8M4.6 12h2.8M16.6 12h2.8M6.77 6.77l1.98 1.98M15.25 15.25l1.98 1.98M17.23 6.77l-1.98 1.98M8.75 15.25l-1.98 1.98" />
+  </svg>
+);
+
 export const RefreshIcon = (props) => (
   <svg {...base} {...props}>
     <path d="M20 12a8 8 0 1 1-2.6-5.9" />
@@ -91,4 +100,5 @@ export const NAV_ICONS = {
   payouts: PayoutsIcon,
   operations: OperationsIcon,
   reports: ReportsIcon,
+  settings: SettingsIcon,
 };
