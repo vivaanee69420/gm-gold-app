@@ -215,16 +215,20 @@ export function SignUpScreen({ navigation, route }) {
 const RESEND_COOLDOWN_SECONDS = 60;
 
 // SUPABASE OWNS THIS NUMBER — Authentication → Sign In / Providers → Email → "Email OTP
-// Length". Keep OTP_LENGTH in step with the dashboard; it only drives the copy.
+// Length". OTP_LENGTH matches what the dashboard is set to today (8) and drives the copy and
+// the placeholder; it is not a validation rule.
 //
-// The field accepts up to OTP_MAX_LENGTH (Supabase's ceiling) rather than exactly
-// OTP_LENGTH, and that is deliberate. On 2026-09-10 the dashboard was set to 8 while this
-// file said 6: `maxLength={6}` silently swallowed the last two digits, the button then
+// Validation deliberately spans a RANGE instead. On 2026-09-10 this file said 6 while the
+// dashboard said 8: `maxLength={6}` silently swallowed the last two digits, the button then
 // looked perfectly happy, and Supabase rejected the truncated code as "wrong or expired" —
-// blaming the patient for a setting only we can see. A client that hard-truncates a value
-// the server defines will always turn a config drift into a lie about the user's input.
-const OTP_LENGTH = 6;
-const OTP_MAX_LENGTH = 10;
+// blaming the patient for a setting only we can see. So the field accepts up to Supabase's
+// ceiling and submits from its floor, which means changing the dashboard to 6 (or 10) keeps
+// working on every already-installed build; only the label goes stale, and that is a one-line
+// fix rather than a lockout. A client that hard-codes a length the server owns will always
+// turn config drift into a lie about the user's input.
+const OTP_LENGTH = 8;
+const OTP_MIN_LENGTH = 6; // Supabase's floor — never gate the button above this
+const OTP_MAX_LENGTH = 10; // Supabase's ceiling
 
 export function VerifyScreen({ navigation }) {
   const { verifyCode, pendingEmail, sendCode } = useAppState();
@@ -313,7 +317,7 @@ export function VerifyScreen({ navigation }) {
           hint="Not arrived? Check your spam folder."
         />
         <Notice tone={error ? 'error' : 'success'}>{error || notice}</Notice>
-        <GoldButton label="Sign in" onPress={submit} busy={busy} disabled={busy || code.trim().length < OTP_LENGTH} />
+        <GoldButton label="Sign in" onPress={submit} busy={busy} disabled={busy || code.trim().length < OTP_MIN_LENGTH} />
         <GoldButton
           label={cooldown > 0 ? `Email it again in ${cooldown}s` : 'Email it again'}
           variant="ghost"
