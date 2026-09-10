@@ -78,7 +78,7 @@ export const templates = {
     const content = {
       heading: `${amount} added to your card`,
       lines: [
-        `A friend you referred has completed their treatment, so <strong style="color:${GOLD_BRIGHT};">${amount}</strong> is now on your Gold Card.`,
+        `A friend you referred has started their treatment, so <strong style="color:${GOLD_BRIGHT};">${amount}</strong> is now on your Gold Card.`,
         'Open the app to see your balance and request a payout whenever you are ready.',
       ],
       footnote: 'Payouts are handled at your practice. There is nothing you need to do right now.',

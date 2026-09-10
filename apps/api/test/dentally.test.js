@@ -261,6 +261,33 @@ describe('FR-25 aging report (row 13)', () => {
   });
 });
 
+describe('the aging report watches treatment_started', () => {
+  it('surfaces a patient parked at treatment_started', async () => {
+    // A dedicated referral, not `where status = 'treatment_started' limit 1`: agingReport
+    // excludes any referral with a completion_proposals row, and other tests in this file
+    // create exactly those, so an arbitrary pick risks landing on an excluded row and failing
+    // for an unrelated reason.
+    const { referralId } = await referredFriendReadyToComplete('07700 904004');
+
+    const started = await request(app).patch(`/admin/referrals/${referralId}/status`)
+      .set(auth(agents.admin)).send({ status: 'treatment_started' });
+    expect(started.status).toBe(200);
+
+    // Backdate the last status change so it is past the (default 7-day) aging window.
+    await db.query(
+      `update events set created_at = now() - interval '30 days'
+        where entity_type = 'referral' and entity_id = $1`,
+      [String(referralId)],
+    );
+    await db.query(`update referrals set created_at = now() - interval '30 days' where id = $1`,
+      [referralId]);
+
+    const res = await request(app).get('/admin/aging').set(auth(agents.admin));
+    expect(res.status).toBe(200);
+    expect(res.body.aging.map((a) => a.id)).toContain(referralId);
+  });
+});
+
 describe('POST /webhooks/dentally', () => {
   const body = JSON.stringify({ event: 'appointment.updated', object: 'appointment', data: { id: 1 } });
 

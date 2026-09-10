@@ -595,8 +595,10 @@ export function buildApp() {
         // Reached-booked-or-beyond; lost referrals drop out (MVP approximation from current status).
         consultBooked:
           (byStatus.booked ?? 0) + (byStatus.attended ?? 0) + (byStatus.treatment_agreed ?? 0) +
-          (byStatus.treatment_completed ?? 0),
-        treatmentCompleted: byStatus.treatment_completed ?? 0,
+          (byStatus.treatment_started ?? 0) + (byStatus.treatment_completed ?? 0),
+        // Treatment started is the commercial outcome — it is what pays the referrer. A
+        // patient mid-course has converted just as much as one who has finished.
+        treatmentCompleted: (byStatus.treatment_started ?? 0) + (byStatus.treatment_completed ?? 0),
         commissionsCredited: credits.n,
         payoutsPaid: paid.n,
         // FR-28 tripwire: code_entered → referral_submitted completion. Null until
@@ -610,7 +612,7 @@ export function buildApp() {
     const { rows } = await db.query(
       `select u.id, u.first_name || ' ' || coalesce(u.last_name,'') as name,
               count(distinct r.id)::int as referrals,
-              count(distinct r.id) filter (where r.status = 'treatment_completed')::int as completed,
+              count(distinct r.id) filter (where r.status in ('treatment_started','treatment_completed'))::int as completed,
               coalesce(sum(l.amount_pennies),0)::int as credited_pennies
        from users u
        join referrals r on r.referrer_id = u.id

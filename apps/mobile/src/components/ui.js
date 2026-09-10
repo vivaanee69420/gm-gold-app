@@ -156,6 +156,7 @@ const STATUS_LABELS = {
   booked: 'Booked',
   attended: 'Attended',
   treatment_agreed: 'Treatment agreed',
+  treatment_started: 'Treatment started',
   treatment_completed: 'Completed',
   lost: 'Closed',
 };

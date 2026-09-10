@@ -238,12 +238,13 @@ export function ReferredStatusScreen() {
     ['booked', 'Consultation booked'],
     ['attended', 'Consultation done'],
     ['treatment_agreed', 'Treatment planned'],
+    ['treatment_started', 'Treatment started'],
     ['treatment_completed', 'Treatment complete'],
   ];
   const currentIndex = Math.max(0, stages.findIndex(([key]) => key === status?.status));
   const alreadyReferrer = user?.roles?.includes('referrer');
   const appt = status?.appointmentStartsAt ? new Date(status.appointmentStartsAt) : null;
-  const showAppt = appt && ['booked', 'attended', 'treatment_agreed'].includes(status?.status);
+  const showAppt = appt && ['booked', 'attended', 'treatment_agreed', 'treatment_started'].includes(status?.status);
   const awaitingBooking = !showAppt && status?.status === 'new';
   const completed = status?.status === 'treatment_completed';
 

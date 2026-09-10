@@ -385,3 +385,20 @@ describe('manager-visible reads are practice-scoped', () => {
     expect(notSeen.body.referrals.map((r) => r.id)).not.toContain(referral.id);
   });
 });
+
+describe('reports understand treatment_started', () => {
+  it('counts a started treatment in the funnel', async () => {
+    const before = (await request(app).get('/admin/reports/funnel').set(auth(agents.admin)))
+      .body.funnel.treatmentCompleted;
+
+    const { rows: [referral] } = await db.query(
+      `select id from referrals where status not in ('lost','treatment_started','treatment_completed') limit 1`,
+    );
+    await request(app).patch(`/admin/referrals/${referral.id}/status`)
+      .set(auth(agents.admin)).send({ status: 'treatment_started' });
+
+    const after = (await request(app).get('/admin/reports/funnel').set(auth(agents.admin)))
+      .body.funnel.treatmentCompleted;
+    expect(after, 'a started treatment has converted — the funnel must not drop it').toBe(before + 1);
+  });
+});

@@ -473,7 +473,7 @@ export async function runSync(trigger = 'manual') {
   }
 }
 
-/** FR-25 aging report: referrals sitting at booked/treatment_agreed ≥ N days with no proposal. */
+/** FR-25 aging report: referrals sitting at booked/treatment_agreed/treatment_started ≥ N days with no proposal. */
 export async function agingReport(days = 7) {
   const { rows } = await db.query(
     `select r.id, r.referred_name, r.referred_phone, r.status, p.name as practice,
@@ -485,7 +485,7 @@ export async function agingReport(days = 7) {
      from referrals r
      join users u on u.id = r.referrer_id
      left join practices p on p.id = r.preferred_practice_id
-     where r.status in ('booked','treatment_agreed')
+     where r.status in ('booked','treatment_agreed','treatment_started')
        and not exists (select 1 from completion_proposals cp where cp.referral_id = r.id)
        and coalesce(
              (select max(e.created_at) from events e

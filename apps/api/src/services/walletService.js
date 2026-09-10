@@ -104,9 +104,14 @@ export async function walletFor(userId) {
         id: l.id,
         kind: l.kind,
         amountPennies: l.amount_pennies,
+        // A credit fires at treatment_started in the normal flow, or from a privileged jump
+        // straight to treatment_completed that skips it. "Started treatment" is truthful in
+        // both cases — completing entails having started — so it reads correctly without
+        // parsing the free-form `reason` column (which isn't guaranteed stable: older/test
+        // rows may carry a different string, or none at all).
         note:
           l.kind === 'credit'
-            ? `${l.referred_name ? firstNameInitial(l.referred_name) : 'Referral'} completed treatment`
+            ? `${l.referred_name ? firstNameInitial(l.referred_name) : 'Referral'} started treatment`
             : l.kind === 'debit'
               ? `Collected at ${l.practice_name ?? 'practice'}`
               : (l.reason ?? 'Adjustment'),
