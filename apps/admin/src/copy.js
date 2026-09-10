@@ -10,6 +10,9 @@ const ERRORS = {
   no_active_rule: 'No commission amount is set — save one in Reward levers first.',
   proposal_not_open: 'This proposal was already decided (maybe by a colleague just now).',
   review_pending: 'This referral is flagged for existing-patient review — resolve that first.',
+  // The pipeline board scopes referrals to the manager's practice; a card that another
+  // practice (or a stale list) still shows hits this on the status PATCH.
+  referral_not_found: "That referral isn't in your practice any more — refresh the list.",
   reason_required: 'A rejection needs a short reason.',
   not_pending: 'This member is no longer waiting for verification.',
   dentally_not_configured: "Dentally OAuth isn't configured yet — add DENTALLY_CLIENT_ID and DENTALLY_CLIENT_SECRET to the API's .env.",
@@ -21,12 +24,13 @@ const ERRORS = {
   not_found: 'That account no longer exists.',
   validation: "Some of those values didn't validate — check and try again.",
   load_failed: "Couldn't reach the API — is it running?",
-  // The four codes a component invents when a request never landed at all (fetch threw, or the
+  // The codes a component invents when a request never landed at all (fetch threw, or the
   // response carried no error code). They all mean the same thing to the person at the desk.
   sign_in_failed: "Couldn't reach the API — check your connection and try again.",
   save_failed: "Couldn't reach the API — check your connection and try again.",
   create_failed: "Couldn't reach the API — check your connection and try again.",
   request_failed: "Couldn't reach the API — check your connection and try again.",
+  status_update_failed: "Couldn't reach the API — check your connection and try again.",
   invalid_credentials: 'Email or password is wrong.',
   rate_limited: 'Too many attempts — wait 15 minutes and try again.',
   email_taken: 'An account with that email already exists.',

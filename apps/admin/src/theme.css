@@ -359,20 +359,36 @@ button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: de
 .invites-form input { max-width: 120px; }
 .invites-form button { margin-top: 0; }
 
-/* ---- pipeline ---- */
+/* ---- pipeline ----
+   Every stage is always a column, including empty ones — a board with holes in it reads as
+   broken. They sit in one scrolling row, like a card wall, rather than wrapping and changing
+   column count as stages empty and fill. */
 
 .pipeline-groups {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(220px, 1fr);
   gap: 14px;
   align-items: start;
+  overflow-x: auto;
+  padding-bottom: 4px;
 }
 
 .pipeline-group {
   background: rgba(244, 239, 228, 0.55);
   border: 1px solid var(--hairline-soft);
+  border-top: 2px solid var(--hairline-soft);
   border-radius: 10px;
   padding: 12px;
+}
+
+/* The one product-specific move: gold already means money here (the patient gold card, counts
+   and figures elsewhere). treatment_started is the only stage that releases it — a real credit
+   to the referrer's wallet — so it alone gets the gold seam that echoes the topbar's, instead
+   of the plain hairline every other column keeps. No other stage gets a colour of its own. */
+.pipeline-group[data-stage='treatment_started'] {
+  border-top: 2px solid transparent;
+  border-image: var(--seam) 1;
 }
 
 .pipeline-group h4 {
@@ -390,8 +406,9 @@ button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: de
 .pipeline-group .count {
   font-family: var(--display);
   font-size: 14px;
-  color: var(--gold);
+  color: var(--mist);
 }
+.pipeline-group[data-stage='treatment_started'] .count { color: var(--gold); }
 
 .pipeline-group li {
   background: #fff;
@@ -399,13 +416,41 @@ button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: de
   border-radius: 8px;
   padding: 10px 12px;
   margin-bottom: 10px;
+  cursor: grab;
 }
 .pipeline-group li:last-child { margin-bottom: 0; }
+.pipeline-group li:active { cursor: grabbing; }
 .pipeline-group li > div { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
 .pipeline-group li .meta { overflow-wrap: anywhere; }
 .pipeline-group select { margin-top: 8px; }
 .pipeline-group .lost-confirm input { margin-top: 2px; }
 .pipeline-group .lost-confirm button { margin-top: 8px; }
+
+/* A card the manager just moved (by select or drag) settles into its new column — a short,
+   quiet cue for what changed. Only a card that was just moved gets this class, so the board
+   never puts on a show at page load. */
+.pipeline-group li.is-settling {
+  animation: pipeline-card-settle 200ms ease-out both;
+}
+@keyframes pipeline-card-settle {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Confirming the money-moving stage: names the referrer and the consequence, and animates in
+   so it reads as a direct response to the click that opened it. */
+.credit-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  animation: pipeline-confirm-in 160ms ease-out both;
+}
+.credit-confirm .btn-primary, .credit-confirm .ghost { margin-top: 0; }
+@keyframes pipeline-confirm-in {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: none; }
+}
 
 /* ---- referral record: the audit register ---- */
 
@@ -583,7 +628,10 @@ button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: de
 }
 
 @media (prefers-reduced-motion: reduce) {
-  * { transition: none !important; }
+  /* Covers both properties this system animates: the transitions used throughout (funnel bars,
+     buttons, inputs) and the pipeline board's card-settle / confirm-in keyframes. One block —
+     not two competing ones. */
+  * { transition: none !important; animation: none !important; }
 }
 
 /* Verification queue: why a referrer is waiting, and what to do about it.
