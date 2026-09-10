@@ -19,8 +19,9 @@ afterEach(() => vi.unstubAllGlobals());
 describe('PipelineBoard', () => {
   it('advances a referral to an adjacent status', async () => {
     const calls = stubFetchRoutes([{ method: 'PATCH', path: '/admin/referrals/r1/status' }]);
+    const onMoved = vi.fn();
     const onChanged = vi.fn();
-    render(<PipelineBoard referrals={referrals} onChanged={onChanged} notify={vi.fn()} />);
+    render(<PipelineBoard referrals={referrals} onMoved={onMoved} onChanged={onChanged} notify={vi.fn()} />);
 
     expect(screen.getByText('Jane Smith')).toBeInTheDocument();
     expect(screen.getByText('Tom Hall')).toBeInTheDocument();
@@ -30,7 +31,60 @@ describe('PipelineBoard', () => {
     expect(calls).toEqual([
       { method: 'PATCH', path: '/admin/referrals/r1/status', body: { status: 'contacted' } },
     ]);
-    expect(onChanged).toHaveBeenCalled();
+    // One row moved, so one row is patched. Reloading the whole dashboard here cost eleven
+    // requests against a remote database and left the board waiting on the slowest of them.
+    await vi.waitFor(() => expect(onMoved).toHaveBeenCalledWith('r1', 'contacted'));
+    expect(onChanged, 'an ordinary move must not trigger a full dashboard reload').not.toHaveBeenCalled();
+  });
+
+  it('does reload the dashboard when the move credits commission — the money figures moved too', async () => {
+    const withAgreed = [
+      ...referrals,
+      { id: 'r3', referred_name: 'Ann Ford', referred_phone: '+447700900111', status: 'treatment_agreed', treatment_interest: 'veneers', practice: 'Ashford', referrer: 'Sarah Lewis' },
+    ];
+    stubFetchRoutes([{ method: 'PATCH', path: '/admin/referrals/r3/status' }]);
+    const onChanged = vi.fn();
+    render(<PipelineBoard referrals={withAgreed} onMoved={vi.fn()} onChanged={onChanged} notify={vi.fn()} />);
+
+    await userEvent.selectOptions(screen.getByLabelText(/status for ann ford/i), 'treatment_started');
+    await userEvent.click(screen.getByRole('button', { name: /credit .*commission/i }));
+
+    // The liability figure above the board and the payout queue behind it are both stale now.
+    await vi.waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it('offers only the moves the API will actually accept', async () => {
+    // updateStatus allows the next stage, either crediting stage ahead of the card, or lost.
+    // Every other option answered 409, so listing them made the control lie.
+    render(<PipelineBoard referrals={referrals} onMoved={vi.fn()} onChanged={vi.fn()} notify={vi.fn()} />);
+
+    const options = (name) =>
+      [...screen.getByLabelText(new RegExp(`status for ${name}`, 'i')).options].map((o) => o.value);
+
+    // Jane is New: Contacted next, the two crediting stages, and Lost — never a step backwards.
+    expect(options('jane smith')).toEqual(['new', 'contacted', 'treatment_started', 'treatment_completed', 'lost']);
+    // Tom is Booked, so New and Contacted are behind him and must not be offered.
+    expect(options('tom hall')).toEqual(['booked', 'attended', 'treatment_started', 'treatment_completed', 'lost']);
+  });
+
+  it('shows no move control at all on a card that has nowhere left to go', async () => {
+    const finished = [
+      { id: 'r5', referred_name: 'Dee Done', referred_phone: '+447700900333', status: 'treatment_completed', treatment_interest: 'implants', practice: 'Barnet', referrer: 'Sarah Lewis' },
+      { id: 'r6', referred_name: 'Lee Lost', referred_phone: '+447700900444', status: 'lost', treatment_interest: 'implants', practice: 'Barnet', referrer: 'Sarah Lewis' },
+    ];
+    render(<PipelineBoard referrals={finished} onMoved={vi.fn()} onChanged={vi.fn()} notify={vi.fn()} />);
+
+    expect(screen.queryByLabelText(/status for dee done/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/status for lee lost/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/completed — no further moves/i)).toBeInTheDocument();
+    expect(screen.getByText(/lost — no further moves/i)).toBeInTheDocument();
+  });
+
+  it('never sends the raw column value to the screen', async () => {
+    // `not_sure` is a stored enum, not something to show a person.
+    render(<PipelineBoard referrals={[{ ...referrals[0], treatment_interest: 'not_sure' }]} onMoved={vi.fn()} onChanged={vi.fn()} notify={vi.fn()} />);
+    expect(screen.queryByText(/not_sure/)).not.toBeInTheDocument();
+    expect(screen.getByText(/undecided/i)).toBeInTheDocument();
   });
 
   it('requires a reason before marking a referral lost', async () => {
@@ -133,8 +187,8 @@ describe('PipelineBoard', () => {
 
     await userEvent.selectOptions(screen.getByLabelText(/status for jane smith/i), 'contacted');
 
-    const contactedGroup = screen.getByRole('heading', { name: /^contacted/i }).closest('.pipeline-group');
-    const newGroup = screen.getByRole('heading', { name: /^new/i }).closest('.pipeline-group');
+    const contactedGroup = screen.getByRole('heading', { name: /^contacted/i }).closest('.board-col');
+    const newGroup = screen.getByRole('heading', { name: /^new/i }).closest('.board-col');
     // The card is under Contacted right away — the request is still pending.
     expect(contactedGroup).toHaveTextContent('Jane Smith');
     expect(newGroup).not.toHaveTextContent('Jane Smith');
@@ -157,8 +211,8 @@ describe('PipelineBoard', () => {
     // The request fails, so the card returns to New and the failure is explained with copy for
     // this screen, not the account-scoped "not_found" message reused elsewhere in the app.
     await vi.waitFor(() => expect(notify).toHaveBeenCalledWith('referral_not_found'));
-    const newGroup = screen.getByRole('heading', { name: /^new/i }).closest('.pipeline-group');
-    const contactedGroup = screen.getByRole('heading', { name: /^contacted/i }).closest('.pipeline-group');
+    const newGroup = screen.getByRole('heading', { name: /^new/i }).closest('.board-col');
+    const contactedGroup = screen.getByRole('heading', { name: /^contacted/i }).closest('.board-col');
     expect(newGroup).toHaveTextContent('Jane Smith');
     expect(contactedGroup).not.toHaveTextContent('Jane Smith');
   });
@@ -170,7 +224,7 @@ describe('PipelineBoard', () => {
     await userEvent.selectOptions(screen.getByLabelText(/status for jane smith/i), 'contacted');
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
-    const contactedGroup = () => screen.getByRole('heading', { name: /^contacted/i }).closest('.pipeline-group');
+    const contactedGroup = () => screen.getByRole('heading', { name: /^contacted/i }).closest('.board-col');
     expect(contactedGroup()).toHaveTextContent('Jane Smith');
 
     // A colleague (or the Dentally sync) has since moved this same referral on to Booked. The
@@ -178,7 +232,7 @@ describe('PipelineBoard', () => {
     const movedByColleague = referrals.map((r) => (r.id === 'r1' ? { ...r, status: 'booked' } : r));
     rerender(<PipelineBoard referrals={movedByColleague} onChanged={vi.fn()} notify={vi.fn()} />);
 
-    const bookedGroup = () => screen.getByRole('heading', { name: /^booked/i }).closest('.pipeline-group');
+    const bookedGroup = () => screen.getByRole('heading', { name: /^booked/i }).closest('.board-col');
     await vi.waitFor(() => expect(within(bookedGroup()).getByText('Jane Smith')).toBeInTheDocument());
     expect(contactedGroup()).not.toHaveTextContent('Jane Smith');
   });
@@ -200,7 +254,7 @@ describe('PipelineBoard', () => {
     await userEvent.selectOptions(screen.getByLabelText(/status for jane smith/i), 'contacted');
     await userEvent.selectOptions(screen.getByLabelText(/status for jane smith/i), 'booked');
 
-    const bookedGroup = () => screen.getByRole('heading', { name: /^booked/i }).closest('.pipeline-group');
+    const bookedGroup = () => screen.getByRole('heading', { name: /^booked/i }).closest('.board-col');
     expect(within(bookedGroup()).getByText('Jane Smith')).toBeInTheDocument();
 
     resolveSecond(new Response(JSON.stringify({ ok: true }), { status: 200 }));

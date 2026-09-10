@@ -85,6 +85,21 @@ export const MANAGER_ROUTES = new Set([
   'GET /admin/stats',
 ]);
 
+// Which dashboard page each manager route sits behind (0017). A route mapped to a page is
+// reachable only by a manager the owner granted that page — revoking a tab closes the data
+// behind it, not just the link to it. Routes absent from this map are reachable by any
+// manager who passes MANAGER_ROUTES above: identity, their own password, and the practice
+// figures the shell itself renders.
+export const ROUTE_PAGE = new Map([
+  ['GET /admin/referrals', 'pipeline'],
+  ['PATCH /admin/referrals/:id/status', 'pipeline'],
+  ['GET /admin/patients', 'patients'],
+  ['GET /admin/patients/:id', 'patients'],
+  ['GET /admin/payouts', 'payouts'],
+  ['POST /admin/payouts/:id/mark-paid', 'payouts'],
+  ['POST /admin/payouts/:id/cancel', 'payouts'],
+]);
+
 // Standalone (no requireUser first): admin identity lives entirely in admin_users, keyed
 // by its own uuid — never by a patient's users.id. Patient tokens are rejected outright.
 export async function requireAdmin(req, res, next) {
@@ -102,8 +117,15 @@ export async function requireAdmin(req, res, next) {
     // unexpected — treat that as no match rather than falling back to req.path, which for the
     // param-free entries is character-identical to the pattern and would grant access.
     const routeKey = req.route?.path ? `${req.method} ${req.route.path}` : null;
-    if (admin.role === 'manager' && (routeKey === null || !MANAGER_ROUTES.has(routeKey))) {
-      return res.status(403).json({ error: 'forbidden' });
+    if (admin.role === 'manager') {
+      if (routeKey === null || !MANAGER_ROUTES.has(routeKey)) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      // Second fence, same fail-closed shape: a route behind a page needs that page granted.
+      const page = ROUTE_PAGE.get(routeKey);
+      if (page && !admin.pages.includes(page)) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
     }
     return next();
   } catch {

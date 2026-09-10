@@ -93,3 +93,11 @@ export const adminCreateSchema = z.object({
   role: z.enum(['admin', 'manager']),
   practiceId: z.string().uuid().optional(),
 });
+
+// The screens an owner can hand to a manager, one key per dashboard page. An admin is never
+// filtered by this list — they own every screen. Managers are, and the API enforces it on the
+// routes behind each page (ROUTE_PAGE in apps/api/src/middleware/auth.js), so revoking a tab
+// closes the data behind it too, not just the link to it.
+export const MANAGER_PAGES = ['pipeline', 'patients', 'payouts'];
+
+export const managerPagesSchema = z.array(z.enum(MANAGER_PAGES)).max(MANAGER_PAGES.length);

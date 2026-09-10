@@ -230,6 +230,50 @@ describe('role-driven navigation', () => {
     });
   });
 
+  it('shows a manager only the tabs the owner granted, and asks for nothing behind the rest', async () => {
+    // 0017: the owner hands out screens per account. A revoked tab must not appear AND must
+    // not be fetched — the API 403s it, which would raise an error toast on every poll.
+    const calls = stubFetchRoutes([
+      {
+        method: 'GET',
+        path: '/admin/me',
+        body: { id: 'm3', email: 'm3@x.co', role: 'manager', pages: ['payouts'], practices: [{ id: 'p1', name: 'Ashford' }] },
+      },
+      { method: 'GET', path: '/admin/stats', body: { stats: { commissionPennies: 0, liabilityPennies: null, creditedPennies: 0, referralCounts: {} } } },
+      { method: 'GET', path: '/admin/payouts', body: { payouts: [] } },
+    ]);
+    setToken('tok');
+    render(<App />);
+
+    expect(await screen.findByRole('link', { name: /payouts/i })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /pipeline/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /patients/i })).not.toBeInTheDocument();
+
+    await vi.waitFor(() => {
+      expect([...new Set(calls.map((c) => c.path))].sort()).toEqual(
+        ['/admin/me', '/admin/payouts', '/admin/stats'].sort(),
+      );
+    });
+  });
+
+  it('tells a manager granted nothing why the dashboard is empty, instead of showing the pipeline', async () => {
+    // An empty grant is a real answer. Falling back to '/' here would render the pipeline to
+    // someone the API will 403 — the nav and the page must fail closed together.
+    stubFetchRoutes([
+      {
+        method: 'GET',
+        path: '/admin/me',
+        body: { id: 'm4', email: 'm4@x.co', role: 'manager', pages: [], practices: [{ id: 'p1', name: 'Ashford' }] },
+      },
+      { method: 'GET', path: '/admin/stats', body: { stats: { commissionPennies: 0, liabilityPennies: null, creditedPennies: 0, referralCounts: {} } } },
+    ]);
+    setToken('tok');
+    render(<App />);
+
+    expect(await screen.findByText(/no screens have been shared with this account yet/i)).toBeInTheDocument();
+    expect(screen.queryAllByRole('link')).toHaveLength(0);
+  });
+
   it('shows the manager their practice name', async () => {
     stubFetchRoutes(managerRoutes);
     setToken('tok');

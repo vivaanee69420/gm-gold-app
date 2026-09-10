@@ -60,6 +60,7 @@ const ADMIN_ROUTE_SNAPSHOT = [
   'POST /admin/sync/run',
   'POST /admin/team',
   'POST /admin/team/:id/active',
+  'POST /admin/team/:id/pages',
   'POST /admin/team/:id/password',
   'POST /admin/team/:id/practice',
   'POST /admin/users/:id/revoke-sessions',
@@ -119,5 +120,89 @@ describe('manager route allowlist', () => {
   // to MANAGER_ROUTES, or add it here to record that managers must not reach it.
   it('the admin route surface matches the committed snapshot', () => {
     expect(registeredAdminRoutes(app)).toEqual(ADMIN_ROUTE_SNAPSHOT);
+  });
+});
+
+// The second fence (0017): the allowlist above says which routes a manager MAY reach; this
+// says which of those THIS manager reaches, from the pages the owner granted them. Revoking a
+// tab has to close the data behind it — otherwise the tab is a hidden link, not a permission.
+describe('per-manager page grants', () => {
+  let ownerToken;
+  let scopedToken;
+  let scopedId;
+
+  beforeAll(async () => {
+    ({ token: ownerToken } = await adminSession(app, { email: 'pages-owner@gmdental.co.uk' }));
+    const practices = (await request(app).get('/practices')).body.practices;
+    const session = await adminSession(app, {
+      email: 'pages-manager@gmdental.co.uk',
+      role: 'manager',
+      practiceIds: [practices[0].id],
+    });
+    scopedToken = session.token;
+    scopedId = session.admin.id;
+  });
+
+  it('starts a new manager with every page, so 0017 changes nobody', async () => {
+    expect((await request(app).get('/admin/me').set(auth(scopedToken))).body.pages)
+      .toEqual(['pipeline', 'patients', 'payouts']);
+    expect((await request(app).get('/admin/payouts').set(auth(scopedToken))).status).toBe(200);
+    expect((await request(app).get('/admin/patients').set(auth(scopedToken))).status).toBe(200);
+  });
+
+  it('403s the routes behind a page the owner revoked, and keeps the rest open', async () => {
+    const granted = await request(app)
+      .post(`/admin/team/${scopedId}/pages`)
+      .set(auth(ownerToken))
+      .send({ pages: ['pipeline'] });
+    expect(granted.status).toBe(200);
+
+    // Revoked: both the list and the row behind it, not just the nav link.
+    expect((await request(app).get('/admin/payouts').set(auth(scopedToken))).status).toBe(403);
+    expect((await request(app).get('/admin/patients').set(auth(scopedToken))).status).toBe(403);
+    expect((await request(app).get('/admin/patients/00000000-0000-4000-8000-000000000000')
+      .set(auth(scopedToken))).status).toBe(403);
+    // A write is a route too — the one that moves money must be closed with its page.
+    expect((await request(app).post('/admin/payouts/00000000-0000-4000-8000-000000000000/mark-paid')
+      .set(auth(scopedToken)).send({ amountPennies: 100 })).status).toBe(403);
+
+    // Kept: the granted page, and the routes no page gates at all.
+    expect((await request(app).get('/admin/referrals').set(auth(scopedToken))).status).toBe(200);
+    expect((await request(app).get('/admin/me').set(auth(scopedToken))).status).toBe(200);
+    expect((await request(app).get('/admin/stats').set(auth(scopedToken))).status).toBe(200);
+  });
+
+  it('accepts an empty grant as a real answer, not a missing one', async () => {
+    expect((await request(app).post(`/admin/team/${scopedId}/pages`)
+      .set(auth(ownerToken)).send({ pages: [] })).status).toBe(200);
+    expect((await request(app).get('/admin/me').set(auth(scopedToken))).body.pages).toEqual([]);
+    expect((await request(app).get('/admin/referrals').set(auth(scopedToken))).status).toBe(403);
+    // Still their own account: sign in, see who they are, change their password.
+    expect((await request(app).get('/admin/me').set(auth(scopedToken))).status).toBe(200);
+
+    // A missing field is a 422 — never read as "revoke everything".
+    expect((await request(app).post(`/admin/team/${scopedId}/pages`)
+      .set(auth(ownerToken)).send({})).status).toBe(422);
+    // An unknown page name is rejected outright rather than silently dropped.
+    expect((await request(app).post(`/admin/team/${scopedId}/pages`)
+      .set(auth(ownerToken)).send({ pages: ['operations'] })).status).toBe(422);
+  });
+
+  it('refuses to narrow an admin — they own every screen by construction', async () => {
+    const me = await request(app).get('/admin/me').set(auth(ownerToken));
+    expect(me.body.pages).toEqual(['pipeline', 'patients', 'payouts']);
+    expect((await request(app).post(`/admin/team/${me.body.id}/pages`)
+      .set(auth(ownerToken)).send({ pages: ['pipeline'] })).status).toBe(422);
+  });
+
+  it('closes a manager route the moment its page grant is gone, without a new login', async () => {
+    // The grant is read from admin_users on every request (loadAdminForToken), not baked into
+    // the token — so revoking a page takes effect now, not when the manager next signs in.
+    await request(app).post(`/admin/team/${scopedId}/pages`)
+      .set(auth(ownerToken)).send({ pages: ['payouts'] });
+    expect((await request(app).get('/admin/payouts').set(auth(scopedToken))).status).toBe(200);
+    await request(app).post(`/admin/team/${scopedId}/pages`)
+      .set(auth(ownerToken)).send({ pages: [] });
+    expect((await request(app).get('/admin/payouts').set(auth(scopedToken))).status).toBe(403);
   });
 });

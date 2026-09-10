@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { MANAGER_PAGES } from '@gm-referral/shared/schemas';
 import { api, onUnauthorized } from './api/client.js';
 import { isSignedIn, signOut } from './api/auth.js';
 import { errorMessage } from './copy.js';
@@ -19,6 +20,7 @@ import ReportsPage from './pages/ReportsPage.jsx';
 const PAGES = [
   {
     path: '/',
+    key: 'pipeline',
     label: 'Pipeline',
     icon: 'pipeline',
     roles: ['admin', 'manager'],
@@ -27,6 +29,7 @@ const PAGES = [
   },
   {
     path: '/patients',
+    key: 'patients',
     label: 'Patients',
     icon: 'patients',
     roles: ['admin', 'manager'],
@@ -35,6 +38,7 @@ const PAGES = [
   },
   {
     path: '/payouts',
+    key: 'payouts',
     label: 'Payouts',
     icon: 'payouts',
     roles: ['admin', 'manager'],
@@ -43,6 +47,7 @@ const PAGES = [
   },
   {
     path: '/operations',
+    key: 'operations',
     label: 'Operations',
     icon: 'operations',
     roles: ['admin'],
@@ -51,6 +56,7 @@ const PAGES = [
   },
   {
     path: '/reports',
+    key: 'reports',
     label: 'Reports & Setup',
     icon: 'reports',
     roles: ['admin'],
@@ -61,6 +67,15 @@ const PAGES = [
 // A nav badge means work waiting, not simply "rows exist" — a count beside Patients would be
 // noise, one beside Payouts is a queue someone has to clear.
 const BADGE_PATHS = new Set(['/payouts', '/operations']);
+
+// What this account may reach. An admin owns every screen; a manager gets what the owner
+// granted. An older API that doesn't send `pages` yet means "all of them" — the same default
+// the API itself applies to a manager whose grant was never set.
+function grantedPages(me) {
+  if (!me) return [];
+  if (me.role === 'admin') return MANAGER_PAGES;
+  return me.pages ?? MANAGER_PAGES;
+}
 
 const PAGE_COMPONENTS = {
   '/': PipelinePage,
@@ -96,14 +111,19 @@ export default function App() {
     // don't hit the API just to render nothing; show the explicit state below instead.
     if (isManager && me.practices.length === 0) return;
     try {
-      // Every manager-reachable endpoint, and for an admin the rest of the dashboard too.
-      const shared = await Promise.all([
+      // Only what this account is allowed to ask for. A manager's granted pages (0017) decide
+      // which lists load: requesting a revoked one would 403 and raise an error toast on every
+      // poll, so the dashboard must not ask in the first place.
+      const granted = grantedPages(me);
+      const wanted = isManager
+        ? MANAGER_PAGES.filter((page) => granted.includes(page))
+        : MANAGER_PAGES;
+      const [stats, payouts, referrals, patients] = await Promise.all([
         api('/admin/stats'),
-        api('/admin/payouts'),
-        api('/admin/referrals'),
-        api('/admin/patients'),
+        wanted.includes('payouts') ? api('/admin/payouts') : { payouts: [] },
+        wanted.includes('pipeline') ? api('/admin/referrals') : { referrals: [] },
+        wanted.includes('patients') ? api('/admin/patients') : { patients: [] },
       ]);
-      const [stats, payouts, referrals, patients] = shared;
       const base = {
         stats: stats.stats,
         payouts: payouts.payouts,
@@ -136,6 +156,14 @@ export default function App() {
       notify(err.code ?? 'load_failed');
     }
   }, [notify, me]);
+
+  // One referral moved, so patch that one row rather than reloading the whole dashboard.
+  // Reloading cost eleven requests against a remote database for a change we already know the
+  // shape of, and the board sat behind the slowest of them; the poll below still reconciles
+  // with the server on its own schedule.
+  const patchReferral = useCallback((id, status) => {
+    setData((d) => (d ? { ...d, referrals: d.referrals.map((r) => (r.id === id ? { ...r, status } : r)) } : d));
+  }, []);
 
   // The header's Refresh is the same load the tab already runs every 30s, just asked for by
   // hand — the spinning glyph is the only thing that differs, so the click has a visible answer.
@@ -228,11 +256,18 @@ export default function App() {
   // Fail closed: until /admin/me tells us the role, show no navigation at all. Defaulting to
   // 'admin' here would flash Operations and Reports & Setup at a manager on every sign-in.
   const role = me?.role ?? null;
-  const visiblePages = role ? PAGES.filter((p) => p.roles.includes(role)) : [];
-  const activePath = visiblePages.some((p) => p.path === route) ? route : '/';
-  const page = visiblePages.find((p) => p.path === activePath) ?? PAGES[0];
-  const Page = PAGE_COMPONENTS[activePath];
+  const granted = grantedPages(me);
+  const visiblePages = role
+    ? PAGES.filter((p) => p.roles.includes(role) && (role === 'admin' || granted.includes(p.key)))
+    : [];
+  // With no granted page there is nowhere to land, so `activePath` must not fall back to '/'
+  // and render the pipeline anyway — a nav we removed is not a page we may show.
+  const fallbackPath = visiblePages[0]?.path ?? null;
+  const activePath = visiblePages.some((p) => p.path === route) ? route : fallbackPath;
+  const page = visiblePages.find((p) => p.path === activePath) ?? null;
+  const Page = activePath ? PAGE_COMPONENTS[activePath] : null;
   const managerHasNoPractice = role === 'manager' && (me?.practices?.length ?? 0) === 0;
+  const managerHasNoPages = role === 'manager' && visiblePages.length === 0;
 
   const badges = {};
   if (data) {
@@ -244,7 +279,7 @@ export default function App() {
   }
   // Each count is shown once. A queue's figure belongs on the nav row, where it reads as work
   // waiting from any page; a register's total belongs beside its title, where it reads as size.
-  const headerCount = data && !BADGE_PATHS.has(page.path) ? page.count?.(data) : undefined;
+  const headerCount = data && page && !BADGE_PATHS.has(page.path) ? page.count?.(data) : undefined;
 
   return (
     <div className={menuOpen ? 'shell shell-menu-open' : 'shell'}>
@@ -276,7 +311,7 @@ export default function App() {
             <MenuIcon />
           </button>
           <div className="topbar-title">
-            <h1>{page.label}</h1>
+            <h1>{page?.label ?? (managerHasNoPages ? 'No access yet' : 'Referrals')}</h1>
             {headerCount != null && (
               <span className={headerCount === 0 ? 'count-badge count-badge-zero' : 'count-badge'}>
                 {headerCount}
@@ -297,7 +332,7 @@ export default function App() {
           </div>
         </header>
 
-        <p className="page-blurb">{page.blurb}</p>
+        {page && <p className="page-blurb">{page.blurb}</p>}
 
         {toastEl}
 
@@ -311,11 +346,15 @@ export default function App() {
           <main>
             <p className="empty">No practice is assigned to this account — ask the owner to fix it.</p>
           </main>
-        ) : !data ? (
+        ) : managerHasNoPages ? (
+          <main>
+            <p className="empty">No screens have been shared with this account yet — ask the owner to add one.</p>
+          </main>
+        ) : !data || !Page ? (
           <p className="loading">Loading…</p>
         ) : (
           <main>
-            <Page data={data} loadAll={loadAll} notify={notify} me={me} />
+            <Page data={data} loadAll={loadAll} patchReferral={patchReferral} notify={notify} me={me} />
           </main>
         )}
       </div>

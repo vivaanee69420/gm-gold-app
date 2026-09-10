@@ -519,6 +519,14 @@ input, select {
   border: 1px solid var(--hairline);
   border-radius: 8px;
 }
+
+/* A checkbox is not a text field: the full-width rule above stretched it into a bar. */
+input[type='checkbox'] {
+  width: auto;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--boardroom);
+}
 input:focus, select:focus { border-color: var(--gold); }
 
 /* solid boardroom action; .btn-gold is the money action (mark paid) */
@@ -575,77 +583,121 @@ button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: de
 .invites-form input { max-width: 120px; }
 .invites-form button { margin-top: 0; }
 
-/* ---- pipeline ----
-   Every stage is always a column, including empty ones — a board with holes in it reads as
-   broken. They sit in one scrolling row, like a card wall, rather than wrapping and changing
-   column count as stages empty and fill. */
+/* ---- pipeline: the stage board ----
+   No frame around it and no box under each column. What the eye needs here is the cards and
+   which column they are in, so the only structure is a rule over each stage's name — the
+   columns share the page's ground and the board runs the full width of the content area.
+   Every stage is always a column, including empty ones: a board with holes in it reads as
+   broken, and an empty column is where you drop the next card. */
 
-.pipeline-groups {
+.board {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: minmax(220px, 1fr);
-  gap: 14px;
+  grid-auto-columns: minmax(206px, 1fr);
+  gap: 18px;
   align-items: start;
   overflow-x: auto;
-  padding-bottom: 4px;
+  padding-bottom: 6px;
 }
 
-.pipeline-group {
-  background: rgba(244, 239, 228, 0.55);
-  border: 1px solid var(--hairline-soft);
-  border-top: 2px solid var(--hairline-soft);
-  border-radius: 10px;
-  padding: 12px;
+.board-col {
+  min-width: 0;
+  border-top: 2px solid var(--hairline);
+  padding-top: 10px;
+  border-radius: 2px;
+  transition: background-color 120ms ease;
 }
 
 /* The one product-specific move: gold already means money here (the patient gold card, counts
    and figures elsewhere). treatment_started is the only stage that releases it — a real credit
-   to the referrer's wallet — so it alone gets the gold seam that echoes the topbar's, instead
-   of the plain hairline every other column keeps. No other stage gets a colour of its own. */
-.pipeline-group[data-stage='treatment_started'] {
-  border-top: 2px solid transparent;
+   to the referrer's wallet — so it alone gets the gold seam, instead of the plain rule every
+   other column keeps. No other stage gets a colour of its own. */
+.board-col[data-stage='treatment_started'] {
+  border-top-color: transparent;
   border-image: var(--seam) 1;
 }
 
-.pipeline-group h4 {
-  margin: 0 0 10px;
+/* Where a dragged card would land. It fades in under the cursor and is gone the moment the
+   card is dropped — the only thing on this board that reacts to a pointer alone. */
+.board-col.is-target { background: rgba(11, 43, 38, 0.05); }
+
+.board-col h4 {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  font-size: 12px;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--mist);
 }
 
-.pipeline-group .count {
+.board-col .count {
   font-family: var(--display);
   font-size: 14px;
+  font-variant-numeric: tabular-nums;
   color: var(--mist);
 }
-.pipeline-group[data-stage='treatment_started'] .count { color: var(--gold); }
+.board-col[data-stage='treatment_started'] .count { color: var(--gold); }
 
-.pipeline-group li {
+.board-col ul { list-style: none; margin: 0; padding: 0; }
+
+.board-col li {
   background: #fff;
   border: 1px solid var(--hairline-soft);
-  border-radius: 8px;
-  padding: 10px 12px;
-  margin-bottom: 10px;
+  border-radius: 10px;
+  padding: 11px 12px 12px;
+  margin-bottom: 8px;
   cursor: grab;
 }
-.pipeline-group li:last-child { margin-bottom: 0; }
-.pipeline-group li:active { cursor: grabbing; }
-.pipeline-group li > div { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
-.pipeline-group li .meta { overflow-wrap: anywhere; }
-.pipeline-group select { margin-top: 8px; }
-.pipeline-group .lost-confirm input { margin-top: 2px; }
-.pipeline-group .lost-confirm button { margin-top: 8px; }
+.board-col li:last-child { margin-bottom: 0; }
+.board-col li:active { cursor: grabbing; }
+
+.board-col li strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--boardroom);
+  overflow-wrap: anywhere;
+}
+.board-col li .meta { margin: 3px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+
+/* The move control sits quiet until it is wanted: a line of text under the card until you
+   point at it or tab to it, at which point it takes the border of a real control. */
+.board-col select {
+  margin-top: 9px;
+  padding: 4px 6px;
+  background: none;
+  border-color: transparent;
+  font-size: 12.5px;
+  color: var(--mist);
+  transition: border-color 120ms ease, color 120ms ease, background-color 120ms ease;
+}
+.board-col li:hover select,
+.board-col select:focus {
+  background: #fff;
+  border-color: var(--hairline);
+  color: var(--ink);
+}
+
+/* A card that has nowhere left to go says so, rather than showing a control that can only
+   fail. Completed and Lost are both ends of the line. */
+.board-col .board-final {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline-soft);
+  font-size: 12px;
+}
+
+.board-col .lost-confirm input { margin-top: 2px; }
+.board-col .lost-confirm button { margin-top: 8px; }
 
 /* A card the manager just moved (by select or drag) settles into its new column — a short,
    quiet cue for what changed. Only a card that was just moved gets this class, so the board
    never puts on a show at page load. */
-.pipeline-group li.is-settling {
+.board-col li.is-settling {
   animation: pipeline-card-settle 200ms ease-out both;
 }
 @keyframes pipeline-card-settle {
@@ -663,6 +715,7 @@ button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: de
   animation: pipeline-confirm-in 160ms ease-out both;
 }
 .credit-confirm .btn-primary, .credit-confirm .ghost { margin-top: 0; }
+.credit-confirm .btn-primary, .credit-confirm .ghost { padding: 6px 10px; font-size: 12.5px; }
 @keyframes pipeline-confirm-in {
   from { opacity: 0; transform: translateY(-2px); }
   to   { opacity: 1; transform: none; }
@@ -729,11 +782,49 @@ button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: de
 
 /* ---- team: reuses .record-table, just condenses the per-row set-password
    controls so a label+input+two buttons fits on one line inside a table cell ---- */
-.team-card .record-table td:last-child { white-space: nowrap; }
-.team-card .record-table td:last-child label { display: inline-block; margin: 0 8px 0 0; }
-.team-card .record-table td:last-child input { display: inline-block; width: 140px; margin-right: 8px; }
-.team-card .record-table td:last-child button { margin-right: 6px; }
+/* The row's destructive controls: a label, a password field and two buttons. Stacked rather
+   than strung out on one line — laid out inline they pushed the row past the card's edge and
+   got clipped mid-button. */
+.team-card .record-table td:last-child label { display: block; margin: 0 0 4px; }
+.team-card .record-table td:last-child input { display: block; width: 100%; max-width: 190px; margin: 0 0 8px; }
+.team-card .record-table td:last-child button { margin: 0 6px 0 0; }
+.team-card .record-table td:last-child .muted { display: inline-block; max-width: 22ch; }
 .team-add-form { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--hairline-soft); }
+
+/* Which screens a manager gets: three plain tickboxes, no field-set chrome. The legend is
+   the accessible name for the group and is read, not seen — the column header says "Tabs". */
+.team-tabs fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0 0 8px;
+  padding: 0;
+  border: 0;
+}
+.team-tabs legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.team-card .team-tabs label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: auto;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.team-card .team-tabs input { width: auto; margin: 0; }
+.team-card .team-tabs button { margin: 0; white-space: nowrap; }
 
 /* ---- payouts settled drawer ---- */
 

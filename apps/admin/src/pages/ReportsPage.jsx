@@ -29,9 +29,16 @@ export default function ReportsPage({ data, loadAll, notify, me }) {
             notify={notify}
           />
           <DentallyCard status={data.dentally} onChanged={loadAll} notify={notify} />
-          {me?.role === 'admin' && <TeamCard practices={me.practices} meId={me.id} notify={notify} />}
         </div>
       </Zone>
+      {/* Its own full-width zone: the team table carries an email, a practice picker, three
+          tab checkboxes and two destructive controls per row, and none of that fits in half
+          a page beside another card. */}
+      {me?.role === 'admin' && (
+        <Zone label="Accounts">
+          <TeamCard practices={me.practices} meId={me.id} notify={notify} />
+        </Zone>
+      )}
     </>
   );
 }

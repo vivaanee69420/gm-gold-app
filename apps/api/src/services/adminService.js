@@ -5,7 +5,12 @@ import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
-import { adminCreateSchema, adminPasswordSchema } from '@gm-referral/shared/schemas';
+import {
+  adminCreateSchema,
+  adminPasswordSchema,
+  managerPagesSchema,
+  MANAGER_PAGES,
+} from '@gm-referral/shared/schemas';
 import { db, logEvent, withTransaction } from '../db.js';
 import { tokenRevoked } from './userService.js';
 import { config } from '../config.js';
@@ -51,6 +56,19 @@ const normalizeEmail = (email) => String(email ?? '').trim().toLowerCase();
 export function normalizePracticeIds(raw) {
   if (Array.isArray(raw)) return raw;
   return String(raw ?? '{}').replace(/[{}"]/g, '').split(',').filter(Boolean);
+}
+
+// admin_users.pages: null means "every manager page" — the state every account predating
+// 0017 is in, and the state a newly created manager starts in. An empty array is different
+// and deliberate: a manager the owner has granted no screens at all. Anything not on
+// MANAGER_PAGES is dropped rather than trusted, so a stale row can never widen access.
+export function normalizePages(raw, role) {
+  if (role === 'admin') return [...MANAGER_PAGES];
+  if (raw === null || raw === undefined) return [...MANAGER_PAGES];
+  const list = Array.isArray(raw)
+    ? raw
+    : String(raw).replace(/[{}"]/g, '').split(',').filter(Boolean);
+  return MANAGER_PAGES.filter((page) => list.includes(page));
 }
 
 export async function practicesForAdmin({ role, practiceIds }) {
@@ -242,7 +260,13 @@ export async function loadAdminForToken(payload) {
   // FR-03-equivalent for admins: tokens issued before a revocation are dead, judged to the
   // millisecond via the token's iatMs claim (see tokenRevoked in userService.js).
   if (tokenRevoked(payload, row.sessions_revoked_at)) return null;
-  return { id: row.id, email: row.email, role: row.role, practiceIds: normalizePracticeIds(row.practice_ids) };
+  return {
+    id: row.id,
+    email: row.email,
+    role: row.role,
+    practiceIds: normalizePracticeIds(row.practice_ids),
+    pages: normalizePages(row.pages, row.role),
+  };
 }
 
 // ---- shape ----
@@ -252,6 +276,9 @@ export function publicAdmin(row, practices) {
     email: row.email,
     role: row.role,
     practices: practices.map((p) => ({ id: p.id, name: p.name })),
+    // The dashboard builds its nav from this, and the API gates the routes behind each page
+    // on the same list — one answer to "what can this account reach", not two that can drift.
+    pages: normalizePages(row.pages, row.role),
   };
 }
 
@@ -259,7 +286,7 @@ export function publicAdmin(row, practices) {
 // off every /admin/team* route before any of this runs) ----
 export async function listAdmins() {
   const { rows } = await db.query(
-    `select id, email, role, practice_ids, active, last_login_at, created_at
+    `select id, email, role, practice_ids, pages, active, last_login_at, created_at
      from admin_users
      order by role, email`,
   );
@@ -271,12 +298,43 @@ export async function listAdmins() {
       email: row.email,
       role: row.role,
       practices: practices.map((p) => ({ id: p.id, name: p.name })),
+      pages: normalizePages(row.pages, row.role),
       active: row.active,
       lastLoginAt: row.last_login_at,
       createdAt: row.created_at,
     });
   }
   return team;
+}
+
+// Which screens this manager gets. An empty array is a valid answer (sign in, change password,
+// nothing else), so this cannot treat "no pages" as "not specified" — the caller's route
+// requires the field to be present and an array before we get here.
+export async function setPages({ id, pages, actorId }) {
+  const normalizedId = String(id).toLowerCase();
+
+  const parsed = managerPagesSchema.safeParse(pages);
+  if (!parsed.success) throw httpError('validation', 422);
+  // Dedupe and put them in a stable order, so the stored value and the audit trail don't
+  // depend on which order the owner happened to tick the boxes.
+  const granted = MANAGER_PAGES.filter((page) => parsed.data.includes(page));
+
+  const { rows } = await db.query(`select id, role, pages from admin_users where id = $1`, [normalizedId]);
+  const row = rows[0];
+  if (!row) throw httpError('not_found', 404);
+  // An admin owns every screen by construction; there is nothing here to narrow.
+  if (row.role !== 'manager') throw httpError('validation', 422);
+
+  const from = normalizePages(row.pages, row.role);
+  await db.query(`update admin_users set pages = $2::text[] where id = $1`, [
+    normalizedId,
+    `{${granted.join(',')}}`,
+  ]);
+  await logEvent(db, {
+    actorId, actorKind: 'admin', entityType: 'admin_user', entityId: normalizedId,
+    action: 'pages_changed', fromValue: from.join(',') || 'none', toValue: granted.join(',') || 'none',
+  });
+  return { ok: true, pages: granted };
 }
 
 export async function setPassword({ id, password, actorId }) {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { MANAGER_PAGES } from '@gm-referral/shared/schemas';
 import { api, setToken } from '../api/client.js';
 import { Card } from './ui.jsx';
 
@@ -6,6 +7,10 @@ const ROLES = [
   { value: 'manager', label: 'Manager' },
   { value: 'admin', label: 'Admin' },
 ];
+
+// The screens an owner can hand to a manager. Same keys the API gates its routes on, so a
+// box left unticked closes the data behind that tab and not merely the link to it.
+const PAGE_LABELS = { pipeline: 'Pipeline', patients: 'Patients', payouts: 'Payouts' };
 
 // Admin-only (Reports & Setup → Setup zone). Fetches its own list from /admin/team rather
 // than being fed it, so it can reload itself after a create/set-password/active mutation
@@ -27,6 +32,8 @@ export default function TeamCard({ practices, meId, notify }) {
   const [savingId, setSavingId] = useState(null);
   const [togglingId, setTogglingId] = useState(null);
   const [movingId, setMovingId] = useState(null);
+  const [pageDrafts, setPageDrafts] = useState({}); // admin id -> the ticked pages, before saving
+  const [pagesSavingId, setPagesSavingId] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -94,6 +101,23 @@ export default function TeamCard({ practices, meId, notify }) {
     }
   };
 
+  const savePages = async (id, current) => {
+    setPagesSavingId(id);
+    try {
+      await api(`/admin/team/${id}/pages`, { method: 'POST', body: { pages: pageDrafts[id] ?? current } });
+      setPageDrafts((d) => {
+        const { [id]: _dropped, ...rest } = d;
+        return rest;
+      });
+      await load();
+      notify('team_saved');
+    } catch (err) {
+      notify(err.code ?? 'save_failed');
+    } finally {
+      setPagesSavingId(null);
+    }
+  };
+
   const toggleActive = async (id, active) => {
     setTogglingId(id);
     try {
@@ -119,6 +143,7 @@ export default function TeamCard({ practices, meId, notify }) {
                 <th scope="col">Email</th>
                 <th scope="col">Role</th>
                 <th scope="col">Practice</th>
+                <th scope="col">Tabs</th>
                 <th scope="col">Active</th>
                 <th scope="col">Last login</th>
                 <th scope="col"></th>
@@ -160,6 +185,47 @@ export default function TeamCard({ practices, meId, notify }) {
                         t.practices.map((p) => p.name).join(', ') || '—'
                       )}
                     </td>
+                    <td className="team-tabs">
+                      {t.role === 'manager' ? (
+                        <>
+                          <fieldset>
+                            <legend>Tabs for {t.email}</legend>
+                            {MANAGER_PAGES.map((key) => {
+                              // A row from an API that predates 0017 sends no `pages` at all;
+                              // that means every page, the same default the API applies.
+                              const chosen = pageDrafts[t.id] ?? t.pages ?? MANAGER_PAGES;
+                              return (
+                                <label key={key} htmlFor={`team-page-${t.id}-${key}`}>
+                                  <input
+                                    id={`team-page-${t.id}-${key}`}
+                                    type="checkbox"
+                                    checked={chosen.includes(key)}
+                                    onChange={(e) =>
+                                      setPageDrafts((d) => ({
+                                        ...d,
+                                        [t.id]: e.target.checked
+                                          ? MANAGER_PAGES.filter((p) => p === key || chosen.includes(p))
+                                          : chosen.filter((p) => p !== key),
+                                      }))
+                                    }
+                                  />
+                                  {PAGE_LABELS[key]}
+                                </label>
+                              );
+                            })}
+                          </fieldset>
+                          <button
+                            className="ghost"
+                            disabled={pagesSavingId === t.id || pageDrafts[t.id] === undefined}
+                            onClick={() => savePages(t.id, t.pages ?? MANAGER_PAGES)}
+                          >
+                            Save tabs
+                          </button>
+                        </>
+                      ) : (
+                        <span className="meta">Every screen</span>
+                      )}
+                    </td>
                     <td>{t.active ? 'Active' : 'Inactive'}</td>
                     <td>{t.lastLoginAt ? new Date(t.lastLoginAt).toLocaleDateString('en-GB') : 'Never'}</td>
                     <td>
@@ -196,7 +262,7 @@ export default function TeamCard({ practices, meId, notify }) {
               })}
               {team.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="empty">No accounts yet.</td>
+                  <td colSpan={7} className="empty">No accounts yet.</td>
                 </tr>
               )}
             </tbody>

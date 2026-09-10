@@ -27,6 +27,7 @@ import {
   setPassword,
   setActive,
   setPractice,
+  setPages,
   changeOwnPassword,
   normalizePracticeIds,
 } from './services/adminService.js';
@@ -285,6 +286,14 @@ export function buildApp() {
   // /admin/team*; an admin target is a 422, since an admin isn't practice-scoped at all.
   app.post('/admin/team/:id/practice', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
     res.json(await setPractice({ id: req.params.id, practiceId: req.body?.practiceId, actorId: req.admin.id }));
+  }));
+
+  // { pages: string[] } — which dashboard screens this manager gets (0017). An empty array is
+  // a real grant of nothing, so the field must be present and an array; a missing one is a 422
+  // rather than being read as "revoke everything".
+  app.post('/admin/team/:id/pages', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
+    if (!Array.isArray(req.body?.pages)) return res.status(422).json({ error: 'validation' });
+    res.json(await setPages({ id: req.params.id, pages: req.body.pages, actorId: req.admin.id }));
   }));
 
   // { active: boolean } — 409 cannot_deactivate_self / last_admin guard which admins this can
