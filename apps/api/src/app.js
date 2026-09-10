@@ -38,6 +38,7 @@ import {
   firstNameInitial,
 } from './services/referralService.js';
 import { walletFor, requestPayout, markPayoutPaid, cancelPayout, getSetting, resolveRule } from './services/walletService.js';
+import { listPatients, patientDetail } from './services/patientService.js';
 import { runSync, agingReport } from './services/dentally/syncService.js';
 import {
   openProposals,
@@ -330,6 +331,20 @@ export function buildApp() {
       scope ? [scope] : [],
     );
     res.json({ referrals: rows });
+  }));
+
+  // The patients register — the same people as /admin/referrals, presented patient-first
+  // rather than referral-first, and with a detail view carrying the full stage history.
+  app.get('/admin/patients', requireAdmin, wrap(async (req, res) => {
+    res.json({ patients: await listPatients(practiceScope(req)) });
+  }));
+
+  app.get('/admin/patients/:id', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
+    const detail = await patientDetail(req.params.id, practiceScope(req));
+    // Out of scope and non-existent answer identically: a 403 here would confirm to a manager
+    // that another practice has a patient with this id.
+    if (!detail) return res.status(404).json({ error: 'not_found' });
+    res.json(detail);
   }));
 
   app.patch('/admin/referrals/:id/status', requireAdmin, requireUuidParam('id'), validate(statusUpdateSchema), wrap(async (req, res) => {

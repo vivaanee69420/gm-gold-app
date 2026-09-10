@@ -80,9 +80,8 @@ export const MANAGER_ROUTES = new Set([
   'POST /admin/payouts/:id/cancel',
   'GET /admin/referrals',
   'PATCH /admin/referrals/:id/status',
-  // Restored in the patients-page commit — the routes do not exist yet.
-  // 'GET /admin/patients',
-  // 'GET /admin/patients/:id',
+  'GET /admin/patients',
+  'GET /admin/patients/:id',
   'GET /admin/stats',
 ]);
 

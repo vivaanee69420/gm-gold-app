@@ -37,6 +37,8 @@ const ADMIN_ROUTE_SNAPSHOT = [
   'GET /admin/aging',
   'GET /admin/dentally/status',
   'GET /admin/me',
+  'GET /admin/patients',
+  'GET /admin/patients/:id',
   'GET /admin/payouts',
   'GET /admin/proposals',
   'GET /admin/referral-review',
