@@ -4,6 +4,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { bootTestApp } from './helpers/app.js';
+import { recordTreatment } from './helpers/treatment.js';
 import { patientSession } from './helpers/patient.js';
 import { adminSession } from './helpers/admin.js';
 import { createAdmin, hashPassword } from '../src/services/adminService.js';
@@ -43,6 +44,7 @@ async function referrerWithOpenPayout({ phone, friendPhone, name, practiceId }) 
     consentVersion: 'referred-v1-2026-08',
   });
   expect(sub.status).toBe(200);
+  await recordTreatment(app, t.admin, sub.body.referral.id);
   const done = await request(app)
     .patch(`/admin/referrals/${sub.body.referral.id}/status`)
     .set(auth(t.admin))
@@ -333,6 +335,7 @@ describe('credits behind an open payout exclude anything already paid out', () =
       consent: true, consentVersion: 'referred-v1-2026-08',
     });
     expect(sub1.status).toBe(200);
+    await recordTreatment(app, t.admin, sub1.body.referral.id);
     const done1 = await request(app)
       .patch(`/admin/referrals/${sub1.body.referral.id}/status`).set(auth(t.admin)).send({ status: 'treatment_completed' });
     expect(done1.status).toBe(200);
@@ -352,6 +355,7 @@ describe('credits behind an open payout exclude anything already paid out', () =
       consent: true, consentVersion: 'referred-v1-2026-08',
     });
     expect(sub2.status).toBe(200);
+    await recordTreatment(app, t.admin, sub2.body.referral.id);
     const done2 = await request(app)
       .patch(`/admin/referrals/${sub2.body.referral.id}/status`).set(auth(t.admin)).send({ status: 'treatment_completed' });
     expect(done2.status).toBe(200);
@@ -419,6 +423,7 @@ describe('status writes are practice-scoped', () => {
   });
 
   it('404s a manager moving another practice\'s referral, and writes no credit', async () => {
+    await recordTreatment(app, t.admin, referralId);
     const res = await request(app)
       .patch(`/admin/referrals/${referralId}/status`)
       .set(auth(otherPracticeManager))
@@ -457,6 +462,7 @@ describe('status writes are practice-scoped', () => {
 
   it('lets the owning practice\'s manager credit the commission', async () => {
     const owner = await managerFor('07700 902005', t.practices[0].id);
+    await recordTreatment(app, t.admin, referralId);
     const res = await request(app)
       .patch(`/admin/referrals/${referralId}/status`)
       .set(auth(owner))

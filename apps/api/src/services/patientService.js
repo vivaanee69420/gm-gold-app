@@ -36,7 +36,8 @@ export async function listPatients(scope) {
 export async function patientDetail(referralId, scope) {
   const { rows } = await db.query(
     `select r.id, r.referred_name, r.referred_phone, r.referred_email, r.status,
-            r.treatment_interest, r.treatment_name, r.source, r.lost_reason,
+            r.treatment_interest, r.treatment_name, r.doctor_name, r.treatment_value_pennies,
+            r.source, r.lost_reason,
             r.appointment_starts_at, r.appointment_dentally_id, r.created_at,
             pp.name as chosen_practice, bp.name as booked_practice,
             u.id as referrer_id, u.first_name || ' ' || coalesce(u.last_name,'') as referrer_name,
@@ -80,6 +81,8 @@ export async function patientDetail(referralId, scope) {
       // never one overwriting the other — commission attribution reads the first.
       treatmentInterest: row.treatment_interest,
       treatmentName: row.treatment_name ?? null,
+      doctorName: row.doctor_name ?? null,
+      treatmentValuePennies: row.treatment_value_pennies ?? null,
       source: row.source,
       lostReason: row.lost_reason,
       referredAt: row.created_at,

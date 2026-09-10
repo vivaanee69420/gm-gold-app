@@ -162,7 +162,7 @@ describe('the card: treatment name and notes', () => {
 
   it('keeps the typed treatment name without touching what the patient chose on the form', async () => {
     const saved = await request(app).put(`/admin/referrals/${referralId}/treatment`)
-      .set(auth(adminToken)).send({ treatmentName: '  Upper arch implants  ' });
+      .set(auth(adminToken)).send({ treatmentName: '  Upper arch implants  ', doctorName: 'Dr Patel', treatmentValuePennies: 480000 });
     expect(saved.status).toBe(200);
     expect(saved.body.treatmentName, 'trimmed').toBe('Upper arch implants');
 
@@ -175,14 +175,14 @@ describe('the card: treatment name and notes', () => {
 
   it('clears the treatment name with an empty string, rather than rejecting it', async () => {
     await request(app).put(`/admin/referrals/${referralId}/treatment`)
-      .set(auth(adminToken)).send({ treatmentName: 'Typo' });
+      .set(auth(adminToken)).send({ treatmentName: 'Typo', doctorName: 'Dr Patel', treatmentValuePennies: 480000 });
     const cleared = await request(app).put(`/admin/referrals/${referralId}/treatment`)
-      .set(auth(adminToken)).send({ treatmentName: '' });
+      .set(auth(adminToken)).send({ treatmentName: '', doctorName: '', treatmentValuePennies: null });
     expect(cleared.status).toBe(200);
     expect(cleared.body.treatmentName).toBeNull();
     // Put it back for the tests below.
     await request(app).put(`/admin/referrals/${referralId}/treatment`)
-      .set(auth(adminToken)).send({ treatmentName: 'Upper arch implants' });
+      .set(auth(adminToken)).send({ treatmentName: 'Upper arch implants', doctorName: 'Dr Patel', treatmentValuePennies: 480000 });
   });
 
   it('keeps notes until they are deleted, newest last, with who wrote them', async () => {
@@ -231,7 +231,7 @@ describe('the card: treatment name and notes', () => {
     expect((await request(app).get(`/admin/referrals/${referralId}`)
       .set(auth(outsider.token))).status).toBe(404);
     expect((await request(app).put(`/admin/referrals/${referralId}/treatment`)
-      .set(auth(outsider.token)).send({ treatmentName: 'Nope' })).status).toBe(404);
+      .set(auth(outsider.token)).send({ treatmentName: 'Nope', doctorName: 'Nope', treatmentValuePennies: 1 })).status).toBe(404);
     expect((await request(app).post(`/admin/referrals/${referralId}/notes`)
       .set(auth(outsider.token)).send({ body: 'Nope' })).status).toBe(404);
 
@@ -273,10 +273,104 @@ describe('the card: treatment name and notes', () => {
 describe('GET /admin/referrals carries the typed treatment', () => {
   it('returns treatment_name alongside the form answer', async () => {
     await request(app).put(`/admin/referrals/${referralId}/treatment`)
-      .set(auth(adminToken)).send({ treatmentName: 'Lower denture' });
+      .set(auth(adminToken)).send({ treatmentName: 'Lower denture', doctorName: 'Dr Patel', treatmentValuePennies: 190000 });
     const res = await request(app).get('/admin/referrals').set(auth(adminToken));
     const row = res.body.referrals.find((r) => r.id === referralId);
     expect(row.treatment_name).toBe('Lower denture');
     expect(row.treatment_interest).toBe('implants');
+  });
+});
+
+// The gate on the money. Treatment started is where this scheme pays out, and until now it
+// could fire on a card carrying nothing but a name.
+describe('commission needs the treatment on record first', () => {
+  let gateReferral;
+  let gateAdmin;
+
+  beforeAll(async () => {
+    gateAdmin = (await adminSession(app, { email: 'gate@gmdental.co.uk' })).token;
+    const { rows } = await db.query(
+      `insert into referrals (referrer_id, referred_phone, referred_name, treatment_interest,
+                              preferred_practice_id, consent_version, status)
+       select referrer_id, '+447700905777', 'Gated Patient', 'implants', preferred_practice_id,
+              consent_version, 'treatment_agreed'
+         from referrals where id = $1
+       returning id`,
+      [referralId],
+    );
+    gateReferral = rows[0].id;
+  });
+
+  const move = (status) =>
+    request(app).patch(`/admin/referrals/${gateReferral}/status`)
+      .set(auth(gateAdmin)).send({ status });
+
+  it('refuses treatment started while any of the three is missing, naming what is missing', async () => {
+    const bare = await move('treatment_started');
+    expect(bare.status).toBe(422);
+    expect(bare.body.error).toBe('treatment_details_required');
+
+    await request(app).put(`/admin/referrals/${gateReferral}/treatment`)
+      .set(auth(gateAdmin)).send({ treatmentName: 'Full arch', doctorName: '', treatmentValuePennies: null });
+    expect((await move('treatment_started')).status, 'a treatment alone is not enough').toBe(422);
+
+    await request(app).put(`/admin/referrals/${gateReferral}/treatment`)
+      .set(auth(gateAdmin)).send({ treatmentName: 'Full arch', doctorName: 'Dr Okafor', treatmentValuePennies: null });
+    expect((await move('treatment_started')).status, 'the value is still missing').toBe(422);
+
+    // The referral has not moved and nothing has been credited while the gate held.
+    const held = await request(app).get(`/admin/referrals/${gateReferral}`).set(auth(gateAdmin));
+    expect(held.body.patient.status).toBe('treatment_agreed');
+    expect(held.body.commission.amountPennies).toBeNull();
+  });
+
+  it('lets the money move once all three are on record', async () => {
+    await request(app).put(`/admin/referrals/${gateReferral}/treatment`)
+      .set(auth(gateAdmin))
+      .send({ treatmentName: 'Full arch', doctorName: 'Dr Okafor', treatmentValuePennies: 650000 });
+
+    const moved = await move('treatment_started');
+    expect(moved.status).toBe(200);
+    const after = await request(app).get(`/admin/referrals/${gateReferral}`).set(auth(gateAdmin));
+    expect(after.body.patient.status).toBe('treatment_started');
+    expect(after.body.commission.amountPennies).toBe(10000);
+  });
+
+  it('gates the jump straight to Completed too — it releases the same money', async () => {
+    // The dashboard sends privilegedComplete, so Completed is reachable from anywhere. A gate
+    // on treatment_started alone would leave that jump as the way around it.
+    const { rows } = await db.query(
+      `insert into referrals (referrer_id, referred_phone, referred_name, treatment_interest,
+                              preferred_practice_id, consent_version, status)
+       select referrer_id, '+447700905778', 'Jumped Patient', 'implants', preferred_practice_id,
+              consent_version, 'attended'
+         from referrals where id = $1
+       returning id`,
+      [referralId],
+    );
+    const jumper = rows[0].id;
+
+    const jumped = await request(app).patch(`/admin/referrals/${jumper}/status`)
+      .set(auth(gateAdmin)).send({ status: 'treatment_completed' });
+    expect(jumped.status).toBe(422);
+    expect(jumped.body.error).toBe('treatment_details_required');
+  });
+
+  it('never blocks a move that does not pay', async () => {
+    const { rows } = await db.query(
+      `insert into referrals (referrer_id, referred_phone, referred_name, treatment_interest,
+                              preferred_practice_id, consent_version, status)
+       select referrer_id, '+447700905779', 'Ordinary Patient', 'implants', preferred_practice_id,
+              consent_version, 'new'
+         from referrals where id = $1
+       returning id`,
+      [referralId],
+    );
+    const ordinary = rows[0].id;
+
+    expect((await request(app).patch(`/admin/referrals/${ordinary}/status`)
+      .set(auth(gateAdmin)).send({ status: 'contacted' })).status).toBe(200);
+    expect((await request(app).patch(`/admin/referrals/${ordinary}/status`)
+      .set(auth(gateAdmin)).send({ status: 'lost', lostReason: 'moved away' })).status).toBe(200);
   });
 });

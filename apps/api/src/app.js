@@ -11,7 +11,7 @@ import {
   payoutRequestSchema,
   adminLoginSchema,
   referralNoteSchema,
-  treatmentNameSchema,
+  treatmentDetailsSchema,
 } from '@gm-referral/shared/schemas';
 import { db, logEvent } from './db.js';
 import {
@@ -40,7 +40,7 @@ import {
   referralsForReferrer,
   referredStatusFor,
   firstNameInitial,
-  setTreatmentName,
+  setTreatmentDetails,
   addNote,
   deleteNote,
 } from './services/referralService.js';
@@ -337,7 +337,7 @@ export function buildApp() {
     const scope = practiceScope(req);
     const { rows } = await db.query(
       `select r.id, r.referred_name, r.referred_phone, r.referred_email, r.status, r.treatment_interest,
-              r.treatment_name,
+              r.treatment_name, r.doctor_name, r.treatment_value_pennies,
               r.appointment_starts_at, r.created_at::date::text as created_at, r.source,
               coalesce(bp.name, pp.name) as practice,
               u.first_name || ' ' || coalesce(u.last_name,'') as referrer,
@@ -383,11 +383,14 @@ export function buildApp() {
     res.json(detail);
   }));
 
-  // { treatmentName } — the real treatment, typed by the practice. An empty string clears it.
-  app.put('/admin/referrals/:id/treatment', requireAdmin, requireUuidParam('id'), validate(treatmentNameSchema), wrap(async (req, res) => {
-    res.json(await setTreatmentName({
+  // { treatmentName, doctorName, treatmentValuePennies } — what was agreed. Any of them may be
+  // empty here; updateStatus is what refuses to release commission while one is missing.
+  app.put('/admin/referrals/:id/treatment', requireAdmin, requireUuidParam('id'), validate(treatmentDetailsSchema), wrap(async (req, res) => {
+    res.json(await setTreatmentDetails({
       referralId: req.params.id,
       treatmentName: req.data.treatmentName,
+      doctorName: req.data.doctorName,
+      treatmentValuePennies: req.data.treatmentValuePennies,
       actorId: req.admin.id,
       practiceIds: actionScope(req),
     }));

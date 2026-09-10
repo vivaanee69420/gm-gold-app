@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { bootTestApp } from './helpers/app.js';
+import { recordTreatment } from './helpers/treatment.js';
 import { patientSession } from './helpers/patient.js';
 
 process.env.PGLITE_MEMORY = '1';
@@ -285,6 +286,7 @@ describe('the aging report watches treatment_started, but not once paid', () => 
     // 'treatment_started' — which also credits the referrer (regression guard for the bug this
     // block exists to catch: scanCompletions skips filing a proposal for an already-credited
     // referral, so `not exists (completion_proposals)` alone would keep this row forever).
+    await recordTreatment(app, agents.admin, referralId);
     const started = await request(app).patch(`/admin/referrals/${referralId}/status`)
       .set(auth(agents.admin)).send({ status: 'treatment_started' });
     expect(started.status).toBe(200);
@@ -801,6 +803,7 @@ describe('the poller is a safety net, not a second payer', () => {
   it('files no proposal for a referral a manager already credited', async () => {
     const { referralId, friendPhone } = await referredFriendReadyToComplete('07700 904001');
 
+    await recordTreatment(app, agents.admin, referralId);
     const started = await request(app).patch(`/admin/referrals/${referralId}/status`)
       .set(auth(agents.admin)).send({ status: 'treatment_started' });
     expect(started.status).toBe(200);
@@ -834,6 +837,7 @@ describe('the poller is a safety net, not a second payer', () => {
     expect(proposal).toBeDefined();
 
     // ...then a manager credits before anyone clicks it.
+    await recordTreatment(app, agents.admin, referralId);
     const startedAgain = await request(app).patch(`/admin/referrals/${referralId}/status`)
       .set(auth(agents.admin)).send({ status: 'treatment_started' });
     expect(startedAgain.status).toBe(200);
@@ -871,6 +875,7 @@ describe('FIX 1: clawback must not reverse a manager-issued credit (no confirmed
     // so hasQualifyingPaidInvoice finds no matching patient/invoice at all and answers `false`,
     // not null. That `false` is exactly what a real refund would also produce; only the (missing)
     // confirmed completion_proposals row tells them apart.
+    await recordTreatment(app, agents.admin, referralId);
     const started = await request(app).patch(`/admin/referrals/${referralId}/status`)
       .set(auth(agents.admin)).send({ status: 'treatment_started' });
     expect(started.status).toBe(200);

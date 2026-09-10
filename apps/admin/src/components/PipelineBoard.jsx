@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { REFERRAL_STATUSES } from '@gm-referral/shared/schemas';
 import { api } from '../api/client.js';
-import ReferralPanel from './ReferralPanel.jsx';
+import { missingTreatmentDetails } from '@gm-referral/shared/schemas';
+import ReferralModal from './ReferralModal.jsx';
 
 const LABELS = {
   new: 'New',
@@ -67,7 +68,8 @@ export default function PipelineBoard({ referrals, onMoved, onCardEdited, onChan
   const [settling, setSettling] = useState({}); // referralId -> true briefly after it lands
   const [dragOver, setDragOver] = useState(null); // the column a dragged card is currently over
   const [dragging, setDragging] = useState(null); // the card being dragged, so columns can say no
-  const [openId, setOpenId] = useState(null); // the card whose record is open beside the board
+  const [openId, setOpenId] = useState(null); // the card whose record is open
+  const [blockedMove, setBlockedMove] = useState(null); // the paying stage a card can't reach yet
   const [panel, setPanel] = useState(null); // { id, detail, error } for the open card
   const settleTimers = useRef({});
   const draggedId = useRef(null);
@@ -156,6 +158,14 @@ export default function PipelineBoard({ referrals, onMoved, onCardEdited, onChan
     }
     if (CREDITS_COMMISSION.has(status)) {
       clear(setLostDrafts, referral.id);
+      // The API refuses this move while the treatment, the dentist or the value is missing.
+      // Rather than let it fail and explain afterwards, open the record on the one screen that
+      // fixes it — and make the move from there once it is filled in.
+      if (missingTreatmentDetails(referral).length) {
+        setBlockedMove(status);
+        setOpenId(referral.id);
+        return;
+      }
       setCreditDrafts((d) => ({ ...d, [referral.id]: status }));
       return;
     }
@@ -203,7 +213,10 @@ export default function PipelineBoard({ referrals, onMoved, onCardEdited, onChan
   // Opening is keyed on the id, not the click, so re-rendering the board (a poll, a colleague's
   // move) never re-fetches or closes what is already open.
   useEffect(() => {
-    if (!openId) return setPanel(null);
+    if (!openId) {
+      setBlockedMove(null);
+      return setPanel(null);
+    }
     if (panel?.id === openId) return undefined;
     setPanel({ id: openId, detail: null, error: null });
     fetchDetail(openId);
@@ -317,14 +330,19 @@ export default function PipelineBoard({ referrals, onMoved, onCardEdited, onChan
       })}
       </div>
       {openReferral && (
-        <ReferralPanel
+        <ReferralModal
           key={openReferral.id}
           referral={openReferral}
           detail={panel?.id === openReferral.id ? panel.detail : null}
           error={panel?.id === openReferral.id ? panel.error : null}
+          blockedMove={blockedMove}
           onClose={() => setOpenId(null)}
           onRetry={() => fetchDetail(openReferral.id)}
           onSaved={onCardEdited}
+          onCreditAfterDetails={async (status) => {
+            setOpenId(null);
+            await advance(openReferral, status);
+          }}
           notify={notify}
         />
       )}

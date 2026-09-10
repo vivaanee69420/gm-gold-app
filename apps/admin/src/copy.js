@@ -45,6 +45,8 @@ const ERRORS = {
   team_saved: 'Saved.',
   password_saved: 'Password changed.',
   treatment_saved: 'Treatment saved.',
+  // The gate on the money: updateStatus refuses the paying move until all three are stored.
+  treatment_details_required: 'Add the treatment, the dentist and the value before starting treatment.',
 };
 
 export const errorMessage = (code) => ERRORS[code] ?? code;

@@ -5,6 +5,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { bootTestApp } from './helpers/app.js';
+import { recordTreatment } from './helpers/treatment.js';
 import { patientSession } from './helpers/patient.js';
 import { adminSession } from './helpers/admin.js';
 
@@ -129,6 +130,7 @@ describe('pipeline and money', () => {
         .send({ status });
       expect(res.status).toBe(200);
     }
+    await recordTreatment(app, agents.admin, agents.referralId);
     const done = await request(app)
       .patch(`/admin/referrals/${agents.referralId}/status`)
       .set(auth(agents.admin))
@@ -139,6 +141,7 @@ describe('pipeline and money', () => {
     const wallet = await request(app).get('/wallet').set(auth(agents.referrer));
     expect(wallet.body.wallet.balancePennies).toBe(2000);
 
+    await recordTreatment(app, agents.admin, agents.referralId);
     const again = await request(app)
       .patch(`/admin/referrals/${agents.referralId}/status`)
       .set(auth(agents.admin))
@@ -165,6 +168,7 @@ describe('pipeline and money', () => {
       consentVersion: 'referred-v1-2026-08',
     });
     const id2 = sub.body.referral.id;
+    await recordTreatment(app, agents.admin, id2);
     const done = await request(app)
       .patch(`/admin/referrals/${id2}/status`)
       .set(auth(agents.admin))
@@ -217,6 +221,7 @@ describe('admin stats', () => {
       consent: true,
       consentVersion: 'referred-v1-2026-08',
     });
+    await recordTreatment(app, agents.admin, sub.body.referral.id);
     await request(app)
       .patch(`/admin/referrals/${sub.body.referral.id}/status`)
       .set(auth(agents.admin))
@@ -316,8 +321,14 @@ describe('treatment_started credits the referrer', () => {
     return sub.body.referral.id;
   }
 
-  const setStatus = (id, status) =>
-    request(app).patch(`/admin/referrals/${id}/status`).set(auth(agents.admin)).send({ status });
+  // Crediting stages need the treatment on record first (0020) — the gate is the product
+  // requirement, so the helper does what a manager does rather than routing around it.
+  const setStatus = async (id, status) => {
+    if (status === 'treatment_started' || status === 'treatment_completed') {
+      await recordTreatment(app, agents.admin, id);
+    }
+    return request(app).patch(`/admin/referrals/${id}/status`).set(auth(agents.admin)).send({ status });
+  };
 
   it('credits on treatment_started, and treatment_completed adds nothing more', async () => {
     const id = await freshReferral('001');

@@ -1,6 +1,7 @@
 // Referral pipeline (FR-08..FR-14): capture, adjacent-only transitions,
 // privileged completion (which credits in the same flow), fraud rules.
 import { normalizePhone } from '@gm-referral/shared/phone';
+import { missingTreatmentDetails } from '@gm-referral/shared/schemas';
 import { db, logEvent, withTransaction } from '../db.js';
 import { config } from '../config.js';
 import { creditReferral } from './walletService.js';
@@ -97,6 +98,18 @@ export async function updateStatus({ referralId, status, lostReason, actorId, ac
   if ((status === 'treatment_started' || status === 'treatment_completed')
       && referral.review_status === 'existing_patient_suspect') {
     throw Object.assign(new Error('review_pending'), { status: 409 });
+  }
+
+  // What a commission credit has to be able to point at afterwards: the treatment, the dentist
+  // who agreed it, and its value. Both crediting stages are gated, not just treatment_started —
+  // the dashboard sends privilegedComplete, so a jump straight to Completed releases the same
+  // money and would otherwise be the way around this. The Dentally proposal path writes
+  // treatment_completed with its own UPDATE (proposalService), so it is unaffected.
+  if (status === 'treatment_started' || status === 'treatment_completed') {
+    const missing = missingTreatmentDetails(referral);
+    if (missing.length) {
+      throw Object.assign(new Error('treatment_details_required'), { status: 422, missing });
+    }
   }
 
   await db.query(`update referrals set status=$2, lost_reason=$3 where id=$1`, [referralId, status, lostReason ?? null]);
@@ -243,22 +256,34 @@ async function referralInScope(referralId, practiceIds) {
 }
 
 /**
- * The real treatment, as opposed to `treatment_interest` — the enum the patient picked on the
- * referral form, which stays untouched because commission attribution reads it.
- * `treatmentName` of null clears the field.
+ * What was agreed: the treatment, the dentist, and what it is worth. Distinct from
+ * `treatment_interest`, which is the enum the patient picked on the referral form and stays
+ * untouched because commission attribution reads it. Any field may be null — the requirement
+ * lands at the move that pays, not here.
  */
-export async function setTreatmentName({ referralId, treatmentName, actorId, practiceIds = null }) {
+export async function setTreatmentDetails({
+  referralId, treatmentName, doctorName, treatmentValuePennies, actorId, practiceIds = null,
+}) {
   await referralInScope(referralId, practiceIds);
   const { rows } = await db.query(
-    `update referrals set treatment_name = $2 where id = $1
-     returning treatment_name`,
-    [referralId, treatmentName ?? null],
+    `update referrals
+        set treatment_name = $2, doctor_name = $3, treatment_value_pennies = $4
+      where id = $1
+      returning treatment_name, doctor_name, treatment_value_pennies`,
+    [referralId, treatmentName ?? null, doctorName ?? null, treatmentValuePennies ?? null],
   );
+  const row = rows[0];
   await logEvent(db, {
     actorId, actorKind: 'admin', entityType: 'referral', entityId: String(referralId),
-    action: 'treatment_named', toValue: rows[0].treatment_name ?? 'cleared',
+    action: 'treatment_details_changed',
+    toValue: [row.treatment_name, row.doctor_name, row.treatment_value_pennies]
+      .map((v) => (v === null ? '—' : v)).join(' · '),
   });
-  return { treatmentName: rows[0].treatment_name };
+  return {
+    treatmentName: row.treatment_name,
+    doctorName: row.doctor_name,
+    treatmentValuePennies: row.treatment_value_pennies,
+  };
 }
 
 export async function listNotes(referralId) {

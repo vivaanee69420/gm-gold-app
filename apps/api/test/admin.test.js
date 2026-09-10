@@ -4,6 +4,7 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { bootTestApp } from './helpers/app.js';
+import { recordTreatment } from './helpers/treatment.js';
 import { patientSession } from './helpers/patient.js';
 import { adminSession } from './helpers/admin.js';
 
@@ -122,6 +123,7 @@ describe('referral review queue (FR-25)', () => {
     const after = await request(app).get('/admin/referral-review').set(auth(agents.admin));
     expect(after.body.reviews.map((r) => r.id)).not.toContain(agents.referralId);
 
+    await recordTreatment(app, agents.admin, agents.referralId);
     const done = await request(app)
       .patch(`/admin/referrals/${agents.referralId}/status`)
       .set(auth(agents.admin))
@@ -144,6 +146,7 @@ describe('referral review queue (FR-25)', () => {
     expect(rows[0].status).toBe('lost');
     expect(rows[0].lost_reason).toBe('existing_patient');
 
+    await recordTreatment(app, agents.admin, referralId);
     const credit = await request(app)
       .patch(`/admin/referrals/${referralId}/status`)
       .set(auth(agents.admin))
@@ -181,6 +184,7 @@ describe('referral review queue (FR-25)', () => {
     expect(sub.status).toBe(200);
     const referralId = sub.body.referral.id;
 
+    await recordTreatment(app, agents.admin, referralId);
     const started = await request(app)
       .patch(`/admin/referrals/${referralId}/status`)
       .set(auth(agents.admin))
@@ -237,6 +241,7 @@ describe('admin payout cancel (FR-21)', () => {
     // Get Sarah to the £100 threshold: £80 rule + a second completed referral.
     await request(app).put('/admin/reward-amount').set(auth(agents.admin)).send({ amountPennies: 8000 });
     const { referralId } = await submitReferralAs('07700 900804', 'Ada Lovelace');
+    await recordTreatment(app, agents.admin, referralId);
     await request(app)
       .patch(`/admin/referrals/${referralId}/status`)
       .set(auth(agents.admin))
@@ -448,6 +453,7 @@ describe('reports understand treatment_started', () => {
     const { rows: [referral] } = await db.query(
       `select id from referrals where status not in ('lost','treatment_started','treatment_completed') limit 1`,
     );
+    await recordTreatment(app, agents.admin, referral.id);
     await request(app).patch(`/admin/referrals/${referral.id}/status`)
       .set(auth(agents.admin)).send({ status: 'treatment_started' });
 

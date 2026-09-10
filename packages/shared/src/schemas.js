@@ -115,12 +115,25 @@ export const referralNoteSchema = z.object({
   body: z.string().trim().min(1).max(2000),
 });
 
-// The real treatment, typed once the practice knows it. An empty string clears the field —
-// that is how you take back a wrong entry, so it must not fail validation.
-export const treatmentNameSchema = z.object({
-  treatmentName: z
-    .string()
-    .trim()
-    .max(120)
-    .transform((v) => (v === '' ? null : v)),
+// What was agreed, filled in as the practice learns it. Every field clears with an empty
+// value — that is how you take back a wrong entry, so none of them may fail validation here.
+// The requirement is enforced at the move that pays (updateStatus), not at the keystroke.
+export const treatmentDetailsSchema = z.object({
+  treatmentName: z.string().trim().max(120).transform((v) => (v === '' ? null : v)),
+  doctorName: z.string().trim().max(120).transform((v) => (v === '' ? null : v)),
+  // Pennies, like every other amount in this codebase — never pounds as a float.
+  treatmentValuePennies: z
+    .union([z.number().int().min(0).max(100_000_000), z.null()])
+    .default(null),
 });
+
+/** The three facts a commission credit needs. Missing any of them blocks the paying move. */
+export function missingTreatmentDetails(referral) {
+  const missing = [];
+  if (!referral?.treatment_name) missing.push('treatment');
+  if (!referral?.doctor_name) missing.push('dentist');
+  if (referral?.treatment_value_pennies === null || referral?.treatment_value_pennies === undefined) {
+    missing.push('value');
+  }
+  return missing;
+}
