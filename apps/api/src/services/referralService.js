@@ -5,7 +5,7 @@ import { db, logEvent, withTransaction } from '../db.js';
 import { config } from '../config.js';
 import { creditReferral } from './walletService.js';
 
-export const STATUS_ORDER = ['new', 'contacted', 'booked', 'attended', 'treatment_agreed', 'treatment_completed'];
+export const STATUS_ORDER = ['new', 'contacted', 'booked', 'attended', 'treatment_agreed', 'treatment_started', 'treatment_completed'];
 
 export async function submitReferral({ code, fullName, email, phone, treatmentInterest, preferredPracticeId, consentVersion, referredUser, source = 'code' }) {
   // The phone the friend will book with at Dentally is what commission matching
@@ -72,7 +72,7 @@ export async function updateStatus({ referralId, status, lostReason, actorId, ac
   }
   if (status === 'lost') {
     if (!lostReason) throw Object.assign(new Error('lost_reason_required'), { status: 422 });
-  } else if (status === 'treatment_completed' && privilegedComplete) {
+  } else if (privilegedComplete && (status === 'treatment_started' || status === 'treatment_completed')) {
     // privileged jump allowed; skipped stages recorded below
   } else {
     const fromIdx = STATUS_ORDER.indexOf(from);
@@ -98,15 +98,27 @@ export async function updateStatus({ referralId, status, lostReason, actorId, ac
     );
   }
 
+  // "At or past treatment_started, if not already credited" — deliberately NOT "exactly on
+  // treatment_started". The privileged path can jump straight to treatment_completed, and a
+  // narrower condition would silently never pay that referrer. The partial unique index
+  // wallet_ledger_one_credit_per_referral makes the second call a no-op, not a double payment.
   let credit = null;
-  if (status === 'treatment_completed') {
-    credit = await creditReferral({
-      referral,
-      practiceId: referral.preferred_practice_id,
-      actorId,
-      actorKind,
-      reason: 'treatment completed (admin confirmed)',
-    });
+  if (status === 'treatment_started' || status === 'treatment_completed') {
+    try {
+      credit = await creditReferral({
+        referral,
+        // The practice that is actually treating them owns the commission (FR-15 rule
+        // resolution is per-practice), falling back to the practice the form chose.
+        practiceId: referral.booked_practice_id ?? referral.preferred_practice_id,
+        actorId,
+        actorKind,
+        reason: `treatment started (${actorKind ?? 'system'} confirmed)`,
+      });
+    } catch (err) {
+      // already_credited is the expected, correct outcome of started -> completed. Anything
+      // else (no_active_rule, a real failure) still propagates.
+      if (err.message !== 'already_credited') throw err;
+    }
   }
   return { from, to: status, credit };
 }

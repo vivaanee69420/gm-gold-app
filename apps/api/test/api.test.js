@@ -11,6 +11,7 @@ import { adminSession } from './helpers/admin.js';
 process.env.PGLITE_MEMORY = '1';
 
 let app;
+let db;
 let authStub;
 const agents = {};
 
@@ -24,7 +25,7 @@ async function signIn(phone) {
 const auth = (token) => ({ Authorization: `Bearer ${token}` });
 
 beforeAll(async () => {
-  ({ app, stub: authStub } = await bootTestApp());
+  ({ app, db, stub: authStub } = await bootTestApp());
   agents.admin = (await adminSession(app)).token;
 });
 
@@ -294,6 +295,64 @@ describe('practices booking links + 12h booking window', () => {
 
     const res = await request(app).get('/referrals/referred-status').set(auth(friend.token));
     expect(res.body.status).toBe('booked');
+  });
+});
+
+describe('treatment_started credits the referrer', () => {
+  async function freshReferral(phoneSuffix) {
+    const friend = await signIn(`07700 90${phoneSuffix}`);
+    await request(app).post('/me/profile').set(auth(friend.token))
+      .send({ firstName: 'Pat', lastName: 'Ient', notifyOptIn: false });
+    await request(app).post('/me/role').set(auth(friend.token)).send({ role: 'referred' });
+    const sub = await request(app).post('/referrals').set(auth(friend.token)).send({
+      code: agents.code,
+      fullName: `Pat Ient ${phoneSuffix}`,
+      treatmentInterest: 'implants',
+      preferredPracticeId: agents.practiceId,
+      consent: true,
+      consentVersion: 'referred-v1-2026-08',
+    });
+    expect(sub.status).toBe(200);
+    return sub.body.referral.id;
+  }
+
+  const setStatus = (id, status) =>
+    request(app).patch(`/admin/referrals/${id}/status`).set(auth(agents.admin)).send({ status });
+
+  it('credits on treatment_started, and treatment_completed adds nothing more', async () => {
+    const id = await freshReferral('001');
+
+    const started = await setStatus(id, 'treatment_started');
+    expect(started.status).toBe(200);
+    expect(started.body.credit).not.toBeNull();
+
+    const completed = await setStatus(id, 'treatment_completed');
+    expect(completed.status).toBe(200);
+    expect(completed.body.credit).toBeNull(); // already paid — not a second credit
+
+    const { rows } = await db.query(
+      `select count(*)::int as n from wallet_ledger where referral_id = $1 and kind = 'credit'`,
+      [id],
+    );
+    expect(rows[0].n).toBe(1);
+  });
+
+  it('still credits when an admin jumps straight to treatment_completed', async () => {
+    // The privileged path skips stages. Crediting "exactly on treatment_started" would
+    // silently never pay this referrer.
+    const id = await freshReferral('002');
+    const done = await setStatus(id, 'treatment_completed');
+    expect(done.status).toBe(200);
+    expect(done.body.credit).not.toBeNull();
+  });
+
+  it('does not credit before treatment_started', async () => {
+    const id = await freshReferral('003');
+    for (const status of ['contacted', 'booked', 'attended', 'treatment_agreed']) {
+      const res = await setStatus(id, status);
+      expect(res.status).toBe(200);
+      expect(res.body.credit).toBeNull();
+    }
   });
 });
 
