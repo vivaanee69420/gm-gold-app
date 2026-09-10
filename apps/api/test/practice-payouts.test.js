@@ -384,3 +384,70 @@ describe('malformed :id -> 422 validation, never a raw Postgres error', () => {
     expect(JSON.stringify(del.body)).not.toMatch(/invalid input syntax|22P02/i);
   });
 });
+
+describe('status writes are practice-scoped', () => {
+  let referralId;
+  let otherPracticeManager;
+
+  beforeAll(async () => {
+    // A referral belonging to practice[0].
+    const ref = await signIn('07700 902001');
+    await request(app).post('/me/profile').set(auth(ref.token))
+      .send({ firstName: 'Scope', lastName: 'Test', notifyOptIn: false });
+    const role = await request(app).post('/me/role').set(auth(ref.token)).send({ role: 'referrer' });
+
+    const friend = await signIn('07700 902002');
+    await request(app).post('/me/profile').set(auth(friend.token))
+      .send({ firstName: 'Friend', notifyOptIn: false });
+    await request(app).post('/me/role').set(auth(friend.token)).send({ role: 'referred' });
+    const sub = await request(app).post('/referrals').set(auth(friend.token)).send({
+      code: role.body.user.referralCode,
+      fullName: 'Scoped Patient',
+      treatmentInterest: 'implants',
+      preferredPracticeId: t.practices[0].id,
+      consent: true,
+      consentVersion: 'referred-v1-2026-08',
+    });
+    referralId = sub.body.referral.id;
+
+    // A manager at a DIFFERENT practice.
+    otherPracticeManager = await managerFor('07700 902003', t.practices[1].id);
+  });
+
+  it('404s a manager moving another practice\'s referral, and writes no credit', async () => {
+    const res = await request(app)
+      .patch(`/admin/referrals/${referralId}/status`)
+      .set(auth(otherPracticeManager))
+      .send({ status: 'treatment_started' });
+
+    // 404, not 403: a 403 would confirm the referral exists to someone who must not know.
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('not_found');
+
+    const { rows } = await db.query(
+      `select count(*)::int as n from wallet_ledger where referral_id = $1`,
+      [referralId],
+    );
+    expect(rows[0].n).toBe(0);
+
+    const { rows: still } = await db.query(`select status from referrals where id = $1`, [referralId]);
+    expect(still[0].status).toBe('new');
+  });
+
+  it('lets the owning practice\'s manager move it', async () => {
+    const owner = await managerFor('07700 902004', t.practices[0].id);
+    const res = await request(app)
+      .patch(`/admin/referrals/${referralId}/status`)
+      .set(auth(owner))
+      .send({ status: 'contacted' });
+    expect(res.status).toBe(200);
+  });
+
+  it('lets an admin move any practice\'s referral', async () => {
+    const res = await request(app)
+      .patch(`/admin/referrals/${referralId}/status`)
+      .set(auth(t.admin))
+      .send({ status: 'booked' });
+    expect(res.status).toBe(200);
+  });
+});

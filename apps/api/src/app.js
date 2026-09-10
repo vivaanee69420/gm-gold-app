@@ -338,6 +338,7 @@ export function buildApp() {
       actorId: req.admin.id,
       actorKind: 'admin',
       privilegedComplete: true,
+      practiceScope: actionScope(req),
     });
     res.json(out);
   }));
