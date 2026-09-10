@@ -120,7 +120,7 @@ Create `supabase/migrations/0016_manager_pipeline.sql`:
 
 -- The new crediting stage, between treatment_agreed and treatment_completed.
 -- treatment_completed stays as the final bookkeeping stage and credits nothing on its own.
-alter table referrals drop constraint referrals_status_check;
+alter table referrals drop constraint if exists referrals_status_check;
 alter table referrals add constraint referrals_status_check
   check (status in ('new','contacted','booked','attended',
                     'treatment_agreed','treatment_started','treatment_completed','lost'));
