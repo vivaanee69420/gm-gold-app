@@ -354,6 +354,30 @@ describe('treatment_started credits the referrer', () => {
       expect(res.body.credit).toBeNull();
     }
   });
+
+  it('refuses to credit a referral flagged as an existing patient', async () => {
+    const id = await freshReferral('004');
+    await setStatus(id, 'contacted');
+    await setStatus(id, 'booked');
+    await setStatus(id, 'attended');
+    await setStatus(id, 'treatment_agreed');
+
+    // The Dentally sync flags this person as an existing patient (FR-11).
+    await db.query(
+      `update referrals set review_status = 'existing_patient_suspect' where id = $1`,
+      [id],
+    );
+
+    const blocked = await setStatus(id, 'treatment_started');
+    expect(blocked.status, 'a flagged referral must not be payable one step early').toBe(409);
+    expect(blocked.body.error).toBe('review_pending');
+
+    const { rows } = await db.query(
+      `select count(*)::int as n from wallet_ledger where referral_id = $1 and kind = 'credit'`,
+      [id],
+    );
+    expect(rows[0].n).toBe(0);
+  });
 });
 
 describe.skipIf(!process.env.DATABASE_URL)('concurrency (real Postgres only)', () => {

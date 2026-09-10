@@ -79,7 +79,12 @@ export async function updateStatus({ referralId, status, lostReason, actorId, ac
     const toIdx = STATUS_ORDER.indexOf(status);
     if (toIdx !== fromIdx + 1) throw Object.assign(new Error('invalid_transition'), { status: 409 });
   }
-  if (status === 'treatment_completed' && referral.review_status === 'existing_patient_suspect') {
+  // The gate must cover every transition that releases money, not just the last one. The
+  // credit fires at treatment_started AND treatment_completed (the "at or past" rule), so a
+  // gate that named only treatment_completed would let a flagged referral be paid one step
+  // earlier — which is the whole population FR-11 exists to exclude.
+  if ((status === 'treatment_started' || status === 'treatment_completed')
+      && referral.review_status === 'existing_patient_suspect') {
     throw Object.assign(new Error('review_pending'), { status: 409 });
   }
 
@@ -112,7 +117,7 @@ export async function updateStatus({ referralId, status, lostReason, actorId, ac
         practiceId: referral.booked_practice_id ?? referral.preferred_practice_id,
         actorId,
         actorKind,
-        reason: `treatment started (${actorKind ?? 'system'} confirmed)`,
+        reason: `${status === 'treatment_started' ? 'treatment started' : 'treatment completed'} (${actorKind ?? 'system'} confirmed)`,
       });
     } catch (err) {
       // already_credited is the expected, correct outcome of started -> completed. Anything
