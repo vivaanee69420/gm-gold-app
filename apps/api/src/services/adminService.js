@@ -9,6 +9,7 @@ import {
   adminCreateSchema,
   adminPasswordSchema,
   managerPagesSchema,
+  adminProfileSchema,
   MANAGER_PAGES,
 } from '@gm-referral/shared/schemas';
 import { db, logEvent, withTransaction } from '../db.js';
@@ -263,6 +264,7 @@ export async function loadAdminForToken(payload) {
   return {
     id: row.id,
     email: row.email,
+    name: row.name ?? null,
     role: row.role,
     practiceIds: normalizePracticeIds(row.practice_ids),
     pages: normalizePages(row.pages, row.role),
@@ -274,6 +276,7 @@ export function publicAdmin(row, practices) {
   return {
     id: row.id,
     email: row.email,
+    name: row.name ?? null,
     role: row.role,
     practices: practices.map((p) => ({ id: p.id, name: p.name })),
     // The dashboard builds its nav from this, and the API gates the routes behind each page
@@ -286,7 +289,7 @@ export function publicAdmin(row, practices) {
 // off every /admin/team* route before any of this runs) ----
 export async function listAdmins() {
   const { rows } = await db.query(
-    `select id, email, role, practice_ids, pages, active, last_login_at, created_at
+    `select id, email, name, phone, role, practice_ids, pages, active, last_login_at, created_at
      from admin_users
      order by role, email`,
   );
@@ -296,6 +299,8 @@ export async function listAdmins() {
     team.push({
       id: row.id,
       email: row.email,
+      name: row.name ?? null,
+      phone: row.phone ?? null,
       role: row.role,
       practices: practices.map((p) => ({ id: p.id, name: p.name })),
       pages: normalizePages(row.pages, row.role),
@@ -490,4 +495,27 @@ export async function changeOwnPassword({ admin, currentPassword, newPassword })
   const token = issueAdminToken(admin, { iatMs: new Date(updated[0].sessions_revoked_at).getTime() });
 
   return { ok: true, token };
+}
+
+/**
+ * The person behind the login. Email is deliberately not here: it is the identity this account
+ * signs in with and the value every audit row records, so changing it is an account migration,
+ * not a label edit. Both fields accept an empty string, which clears them.
+ */
+export async function setProfile({ id, name, phone, actorId }) {
+  const normalizedId = String(id).toLowerCase();
+  const parsed = adminProfileSchema.safeParse({ name, phone });
+  if (!parsed.success) throw httpError('validation', 422);
+
+  const { rows } = await db.query(
+    `update admin_users set name = $2, phone = $3 where id = $1
+     returning id, name, phone`,
+    [normalizedId, parsed.data.name, parsed.data.phone],
+  );
+  if (!rows[0]) throw httpError('not_found', 404);
+  await logEvent(db, {
+    actorId, actorKind: 'admin', entityType: 'admin_user', entityId: normalizedId,
+    action: 'profile_changed', toValue: rows[0].name ?? 'cleared',
+  });
+  return { ok: true, name: rows[0].name, phone: rows[0].phone };
 }

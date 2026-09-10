@@ -44,6 +44,51 @@ function NavLink({ page, activePath, navigate, badge }) {
   );
 }
 
+// The sections inside Settings. A manager has no team and no integrations to reach, so their
+// Settings IS their account — it sits at the root rather than one click in, which would leave
+// /settings itself an unreachable, unhighlighted page.
+export function settingsSections(role) {
+  if (role !== 'admin') return [{ path: '/settings', label: 'Your account' }];
+  return [
+    { path: '/settings', label: 'Team' },
+    { path: '/settings/integrations', label: 'Integrations' },
+    { path: '/settings/account', label: 'Your account' },
+  ];
+}
+
+/**
+ * Settings is its own place, so while you are in it the sidebar becomes its own: the sections
+ * underneath, and a way back out. Showing the whole dashboard nav here would invite you to
+ * leave by accident mid-edit, and buries the sections you actually came for.
+ */
+function SettingsNav({ me, route, navigate }) {
+  const sections = settingsSections(me?.role);
+  return (
+    <div className="sidebar">
+      <button type="button" className="go-back" onClick={() => navigate('/')}>
+        <span aria-hidden="true">←</span> Go back
+      </button>
+      <h2 className="settings-title">Settings</h2>
+      <nav className="sidenav" aria-label="Settings sections">
+        {sections.map((section) => (
+          <a
+            key={section.path}
+            href={section.path}
+            aria-current={route === section.path ? 'page' : undefined}
+            className={route === section.path ? 'active' : undefined}
+            onClick={(e) => {
+              e.preventDefault();
+              navigate(section.path);
+            }}
+          >
+            <span>{section.label}</span>
+          </a>
+        ))}
+      </nav>
+    </div>
+  );
+}
+
 export default function Sidebar({
   me,
   pages,
@@ -51,9 +96,13 @@ export default function Sidebar({
   activePath,
   navigate,
   badges,
+  settingsPage,
+  route,
   onDismiss,
 }) {
   const scope = me ? scopeOf(me) : null;
+
+  if (settingsPage) return <SettingsNav me={me} route={route} navigate={navigate} />;
 
   return (
     <div className="sidebar">

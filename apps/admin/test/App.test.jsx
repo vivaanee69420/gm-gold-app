@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from '../src/App.jsx';
 import { clearToken, getToken, setToken } from '../src/api/client.js';
@@ -11,8 +11,8 @@ afterEach(() => {
   window.history.replaceState({}, '', '/');
 });
 
-function stubDashboardRoutes() {
-  return stubFetchRoutes([
+function dashboardRoutes() {
+  return [
     { method: 'GET', path: '/admin/me', body: { role: 'admin', practices: [] } },
     { method: 'GET', path: '/admin/team', body: { team: [] } },
     { method: 'GET', path: '/admin/settings', body: { settings: { payout_threshold_pennies: '10000', payout_expiry_days: '90' } } },
@@ -37,8 +37,10 @@ function stubDashboardRoutes() {
       },
     },
     { method: 'GET', path: '/admin/reports/top-referrers', body: { topReferrers: [] } },
-  ]);
+  ];
 }
+
+const stubDashboardRoutes = () => stubFetchRoutes(dashboardRoutes());
 
 describe('App', () => {
   it('shows the sign-in screen when signed out', () => {
@@ -127,7 +129,7 @@ describe('App', () => {
     expect(window.location.pathname).toBe('/reports');
   });
 
-  it('gathers password, team and integrations on the settings page', async () => {
+  it('makes Settings its own place, with its own sidebar and sections', async () => {
     setToken('tok');
     stubDashboardRoutes();
     render(<App />);
@@ -135,37 +137,62 @@ describe('App', () => {
 
     await userEvent.click(screen.getByRole('link', { name: /^settings$/i }));
 
-    expect(screen.getByRole('heading', { name: /change password/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /^team$/i })).toBeInTheDocument();
+    // The dashboard nav is gone while you are in here — Settings has its own sidebar.
+    expect(screen.queryByRole('link', { name: /^pipeline$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /go back/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('link').map((a) => a.getAttribute('href'))).toEqual([
+      '/settings', '/settings/integrations', '/settings/account',
+    ]);
+
+    // Team is where Settings opens.
+    expect(await screen.findByRole('heading', { name: /^team$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /add user/i })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('link', { name: /integrations/i }));
     expect(screen.getByRole('heading', { name: /^dentally$/i })).toBeInTheDocument();
-    // Reports content stays on Reports.
-    expect(screen.queryByRole('heading', { name: /^funnel$/i })).not.toBeInTheDocument();
-    expect(window.location.pathname).toBe('/settings');
+    expect(window.location.pathname).toBe('/settings/integrations');
+
+    await userEvent.click(screen.getByRole('link', { name: /your account/i }));
+    expect(screen.getByRole('heading', { name: /change password/i })).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/settings/account');
   });
 
-  it('changes the password from the settings page and stores the new token', async () => {
+  it('opens one team member on their own screen, not inside a table row', async () => {
     setToken('tok');
-    stubDashboardRoutes();
+    // First match wins in the stub, so this override has to precede the default team route.
+    stubFetchRoutes([
+      {
+        method: 'GET',
+        path: '/admin/team',
+        body: {
+          team: [
+            { id: 'a1', email: 'owner@x.co', name: 'Ada Owner', phone: null, role: 'admin', practices: [], pages: ['pipeline', 'patients', 'payouts'], active: true, lastLoginAt: null },
+            { id: 'm1', email: 'mo@x.co', name: 'Mo Manager', phone: '07700900123', role: 'manager', practices: [{ id: 'p1', name: 'Ashford' }], pages: ['pipeline'], active: true, lastLoginAt: null },
+          ],
+        },
+      },
+      ...dashboardRoutes(),
+    ]);
     render(<App />);
     await screen.findByText('£460.00');
-
-    expect(screen.queryByRole('heading', { name: /change password/i })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('link', { name: /^settings$/i }));
-    expect(screen.getByRole('heading', { name: /change password/i })).toBeInTheDocument();
 
-    stubFetchRoutes([
-      { method: 'POST', path: '/admin/me/password', body: { ok: true, token: 'new-tok' } },
-    ]);
-    await userEvent.type(screen.getByLabelText(/current password/i), 'oldpassword1');
-    await userEvent.type(screen.getByLabelText(/new password/i), 'brandnewpassword1');
-    await userEvent.click(screen.getByRole('button', { name: /save password/i }));
+    expect(await screen.findByText('Mo Manager')).toBeInTheDocument();
+    expect(screen.getByText('07700900123')).toBeInTheDocument();
 
-    // The API bumps sessions_revoked_at and hands back a replacement token in the same
-    // response; not storing it would 401 the admin out on their very next request.
-    await vi.waitFor(() => expect(getToken()).toBe('new-tok'));
-    // The form stays put — it is a page now, not a panel that closes — and says what happened.
-    expect(await screen.findByText(/password changed/i)).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /change password/i })).toBeInTheDocument();
+    const row = screen.getByText('Mo Manager').closest('tr');
+    await userEvent.click(within(row).getByRole('button', { name: /^edit$/i }));
+
+    expect(window.location.pathname).toBe('/settings/team/m1');
+    expect(screen.getByRole('heading', { name: /edit or manage your team/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/full name/i)).toHaveValue('Mo Manager');
+    // Email is identity, not a label — it is shown but not editable here.
+    expect(screen.getByLabelText(/^email$/i)).toHaveAttribute('readonly');
+
+    await userEvent.click(screen.getByRole('button', { name: /roles & permissions/i }));
+    // Each screen's checkbox is labelled with what it grants, not just its name.
+    expect(screen.getByLabelText(/pipeline.*move patients through the stages/i)).toBeChecked();
+    expect(screen.getByLabelText(/patients.*register of everyone referred/i)).not.toBeChecked();
   });
 
   it('returns to the pipeline page when the browser goes back', async () => {
@@ -203,7 +230,7 @@ describe('App', () => {
 
     expect(await screen.findByText(/dentally connected/i)).toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: /^dentally$/i })).toBeInTheDocument();
-    expect(window.location.pathname).toBe('/settings');
+    expect(window.location.pathname).toBe('/settings/integrations');
     expect(window.location.search).toBe('');
   });
 
@@ -296,7 +323,7 @@ describe('role-driven navigation', () => {
 
     expect(await screen.findByText(/no other screens have been shared with this account yet/i)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /change password/i })).toBeInTheDocument();
-    // Settings is the only link, and none of the admin-only cards come with it.
+    // A manager's Settings is their own account: one section, and none of the owner's.
     expect(screen.getAllByRole('link').map((a) => a.getAttribute('href'))).toEqual(['/settings']);
     expect(screen.queryByRole('heading', { name: /^team$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /^dentally$/i })).not.toBeInTheDocument();

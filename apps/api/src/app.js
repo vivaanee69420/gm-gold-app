@@ -30,6 +30,7 @@ import {
   setActive,
   setPractice,
   setPages,
+  setProfile,
   changeOwnPassword,
   normalizePracticeIds,
 } from './services/adminService.js';
@@ -291,6 +292,17 @@ export function buildApp() {
   // /admin/team*; an admin target is a 422, since an admin isn't practice-scoped at all.
   app.post('/admin/team/:id/practice', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
     res.json(await setPractice({ id: req.params.id, practiceId: req.body?.practiceId, actorId: req.admin.id }));
+  }));
+
+  // { name, phone } — the person behind the login. Email is not here on purpose: it is the
+  // identity this account signs in with and the value every audit row records.
+  app.post('/admin/team/:id/profile', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
+    res.json(await setProfile({
+      id: req.params.id,
+      name: req.body?.name ?? '',
+      phone: req.body?.phone ?? '',
+      actorId: req.admin.id,
+    }));
   }));
 
   // { pages: string[] } — which dashboard screens this manager gets (0017). An empty array is

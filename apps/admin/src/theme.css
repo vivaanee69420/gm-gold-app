@@ -845,12 +845,206 @@ button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: de
 .payouts .credits-list { margin: 4px 0 0; padding: 0; font-size: 12px; color: var(--mist); }
 .payouts .credits-list li { padding: 1px 0; border: none; }
 
-/* ---- settings: a form, not a dashboard ----
-   The password card takes a form's width rather than the page's, so the fields stay a
-   readable length instead of stretching to the far edge of a wide screen. */
+/* ---- settings: its own place ----
+   While you are in Settings the sidebar becomes the settings sidebar — sections, and a way
+   back out. The password card takes a form's width rather than the page's, so the fields stay
+   a readable length instead of stretching to the far edge of a wide screen. */
 
 .settings-narrow { max-width: 460px; }
 .settings-note { margin-bottom: 14px; }
+
+.go-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 14px;
+  padding: 4px 0;
+  background: none;
+  border: 0;
+  font-size: 13px;
+  color: var(--mist);
+}
+.go-back:hover { color: var(--boardroom); }
+
+.settings-title {
+  margin: 4px 6px 14px;
+  font-family: var(--display);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--boardroom);
+}
+
+/* The settings sidebar is text-only — no icons. Its rows name sections of one screen, not
+   places in the product, and icons here would compete with the ones you just left. */
+.sidebar .sidenav a > span:only-child { flex: 1; }
+
+.settings-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.settings-head h2 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--boardroom);
+}
+.settings-head .meta { margin-top: 4px; }
+.settings-head .btn-primary { margin-top: 0; }
+
+/* ---- team ---- */
+
+.team-panel { padding: 0; overflow: hidden; }
+
+.team-filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.team-filters input[type='search'] { flex: 1 1 220px; max-width: 340px; width: auto; }
+.team-filters select { flex: 0 0 auto; width: auto; }
+.team-count { margin-left: auto; }
+
+.team-table { font-size: 13.5px; }
+.team-table th:first-child, .team-table td:first-child { padding-left: 18px; }
+.team-table th:last-child, .team-table td:last-child { padding-right: 18px; }
+.team-table td { vertical-align: middle; }
+
+.team-person { display: flex; align-items: center; gap: 10px; }
+.team-person strong { display: block; font-weight: 600; color: var(--boardroom); }
+.team-person .meta { margin: 1px 0 0; }
+
+.tag {
+  margin-left: 7px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(201, 169, 97, 0.5);
+  background: rgba(201, 169, 97, 0.2);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--boardroom);
+  vertical-align: 1px;
+}
+
+.status-dot { display: inline-flex; align-items: center; gap: 7px; color: var(--mist); }
+.status-dot::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--hairline);
+}
+.status-on { color: var(--ink); }
+.status-on::before { background: var(--success); }
+
+/* Row controls stay out of the way until the row is pointed at or tabbed into — a Remove on
+   every row at all times reads as an invitation. Kept in the layout so nothing shifts. */
+.row-actions { white-space: nowrap; text-align: right; }
+.row-actions button { margin-left: 14px; opacity: 0; transition: opacity 120ms ease; }
+tr:hover .row-actions button,
+.row-actions button:focus-visible { opacity: 1; }
+.linklike.danger { color: var(--danger); text-decoration-color: rgba(176, 80, 56, 0.4); }
+
+/* ---- one member ---- */
+
+.member-layout {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 60rem) {
+  .member-layout { grid-template-columns: minmax(0, 1fr); }
+}
+
+.member-tabs { display: flex; flex-direction: column; gap: 2px; }
+.member-tabs button {
+  padding: 9px 12px;
+  background: none;
+  border: 0;
+  border-radius: 9px;
+  font-size: 13.5px;
+  text-align: left;
+  color: var(--ink);
+  transition: background-color 140ms ease;
+}
+.member-tabs button:hover { background: rgba(11, 43, 38, 0.05); }
+.member-tabs button.active {
+  background: rgba(11, 43, 38, 0.075);
+  color: var(--boardroom);
+  font-weight: 600;
+}
+
+.member-card { max-width: 720px; }
+.member-card h4 {
+  margin: 22px 0 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mist);
+}
+.member-card input[readonly] { background: rgba(11, 43, 38, 0.04); color: var(--mist); }
+
+.field-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0 18px; }
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+.form-actions button { margin-top: 0; }
+
+/* Each screen is a decision with a consequence, so each says what it grants. */
+.permission-list { list-style: none; margin: 0; padding: 0; }
+.permission-list li { border-bottom: 1px solid var(--hairline-soft); }
+.permission-list li:last-child { border-bottom: none; }
+.permission-list label {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  width: auto;
+  margin: 0;
+  padding: 11px 0;
+  font-size: 13.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink);
+  cursor: pointer;
+}
+.permission-list input { width: auto; margin-top: 2px; }
+.permission-list strong { display: block; font-weight: 600; color: var(--boardroom); }
+.permission-list .meta { margin-top: 2px; }
+
+/* ---- integrations ---- */
+
+.integration-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 
 /* ---- toast ---- */
 

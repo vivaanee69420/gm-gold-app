@@ -66,6 +66,7 @@ const ADMIN_ROUTE_SNAPSHOT = [
   'POST /admin/team/:id/pages',
   'POST /admin/team/:id/password',
   'POST /admin/team/:id/practice',
+  'POST /admin/team/:id/profile',
   'POST /admin/users/:id/revoke-sessions',
   'PUT /admin/referrals/:id/treatment',
   'PUT /admin/reward-amount',

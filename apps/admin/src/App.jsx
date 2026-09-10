@@ -72,9 +72,16 @@ const PAGES = [
     // including a manager the owner has granted no screens at all.
     always: true,
     foot: true,
-    blurb: 'Your password, who can sign in, and the systems this dashboard talks to.',
+    // Settings is a place, not a page: it has its own sections underneath (/settings/team/:id
+    // and the rest), and its own sidebar while you are in it.
+    nested: true,
   },
 ];
+
+// `/settings/team/<id>` is still the settings page. Without this a nested url falls through to
+// the fallback and bounces the owner back to the pipeline mid-edit.
+const onPage = (page, route) =>
+  route === page.path || (page.nested && route.startsWith(`${page.path}/`));
 
 // A nav badge means work waiting, not simply "rows exist" — a count beside Patients would be
 // noise, one beside Payouts is a queue someone has to clear.
@@ -222,8 +229,8 @@ export default function App() {
         ? 'Dentally connected — completed treatments will now be proposed automatically.'
         : `Dentally connection failed: ${params.get('reason') ?? 'unknown error'}. Try again or check the API log.`,
     );
-    window.history.replaceState({}, '', '/settings');
-    setRoute('/settings');
+    window.history.replaceState({}, '', '/settings/integrations');
+    setRoute('/settings/integrations');
   }, []);
 
   // FR-24: fetch role + practice scope first — a manager's `loadAll` scopes itself to
@@ -282,9 +289,9 @@ export default function App() {
   // '/' — for a manager granted nothing, the first page they have is Settings, which is where
   // they land and where they can still change their own password.
   const fallbackPath = (navPages[0] ?? footerPage)?.path ?? null;
-  const activePath = visiblePages.some((p) => p.path === route) ? route : fallbackPath;
-  const page = visiblePages.find((p) => p.path === activePath) ?? null;
-  const Page = activePath ? PAGE_COMPONENTS[activePath] : null;
+  const activePath = visiblePages.some((p) => onPage(p, route)) ? route : fallbackPath;
+  const page = visiblePages.find((p) => onPage(p, activePath)) ?? null;
+  const Page = page ? PAGE_COMPONENTS[page.path] : null;
   const managerHasNoPractice = role === 'manager' && (me?.practices?.length ?? 0) === 0;
   const managerHasNoPages = role === 'manager' && navPages.length === 0;
 
@@ -310,6 +317,8 @@ export default function App() {
           activePath={activePath}
           navigate={navigate}
           badges={badges}
+          settingsPage={page?.nested ? page : null}
+          route={route}
           onDismiss={() => setMenuOpen(false)}
         />
       </aside>
@@ -347,7 +356,7 @@ export default function App() {
           </div>
         </header>
 
-        {page && <p className="page-blurb">{page.blurb}</p>}
+        {page?.blurb && <p className="page-blurb">{page.blurb}</p>}
 
         {toastEl}
 
@@ -365,6 +374,8 @@ export default function App() {
               patchReferral={patchReferral}
               notify={notify}
               me={me}
+              route={route}
+              navigate={navigate}
               noGrantedPages={managerHasNoPages}
             />
           </main>

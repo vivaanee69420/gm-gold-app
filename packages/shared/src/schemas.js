@@ -102,6 +102,13 @@ export const MANAGER_PAGES = ['pipeline', 'patients', 'payouts'];
 
 export const managerPagesSchema = z.array(z.enum(MANAGER_PAGES)).max(MANAGER_PAGES.length);
 
+// The person behind a team login. Both fields clear with an empty string, and neither is
+// identity — email is, and it is not editable from the team screen.
+export const adminProfileSchema = z.object({
+  name: z.string().trim().max(80).transform((v) => (v === '' ? null : v)),
+  phone: z.string().trim().max(32).transform((v) => (v === '' ? null : v)),
+});
+
 // A note the desk leaves on a referral. Trimmed, because a note of three spaces is a note
 // nobody meant to leave.
 export const referralNoteSchema = z.object({
