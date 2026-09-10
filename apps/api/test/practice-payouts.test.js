@@ -454,4 +454,21 @@ describe('status writes are practice-scoped', () => {
       .send({ status: 'booked' });
     expect(res.status).toBe(200);
   });
+
+  it('lets the owning practice\'s manager credit the commission', async () => {
+    const owner = await managerFor('07700 902005', t.practices[0].id);
+    const res = await request(app)
+      .patch(`/admin/referrals/${referralId}/status`)
+      .set(auth(owner))
+      .send({ status: 'treatment_started' });
+    expect(res.status).toBe(200);
+    expect(res.body.credit, 'the whole point of the feature: a manager releases the commission')
+      .not.toBeNull();
+
+    const { rows } = await db.query(
+      `select count(*)::int as n from wallet_ledger where referral_id = $1 and kind = 'credit'`,
+      [referralId],
+    );
+    expect(rows[0].n).toBe(1);
+  });
 });

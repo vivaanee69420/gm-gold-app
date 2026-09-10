@@ -23,7 +23,8 @@ export async function queueDailyDigest(today) {
     );
     const { rows: [rev] } = await db.query(
       `select count(*)::int as n from referrals
-       where review_status='existing_patient_suspect' and status <> 'lost' and preferred_practice_id = $1`,
+       where review_status='existing_patient_suspect' and status <> 'lost'
+         and coalesce(booked_practice_id, preferred_practice_id) = $1`,
       [practice.id],
     );
     if (p.n + pay.n + rev.n === 0) continue;

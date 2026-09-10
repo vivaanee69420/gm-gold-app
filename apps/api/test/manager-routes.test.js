@@ -28,6 +28,43 @@ function registeredAdminRoutes(expressApp) {
   return out.sort();
 }
 
+// The full admin route surface as of this commit, captured by running registeredAdminRoutes()
+// against the live app. Changing this array is a deliberate act: it means the admin surface
+// itself changed, and every new entry needs an explicit answer — either added to
+// MANAGER_ROUTES, or left out of it (and out of this snapshot's need to change at all is not
+// an option, since a new /admin route always shows up here).
+const ADMIN_ROUTE_SNAPSHOT = [
+  'GET /admin/aging',
+  'GET /admin/dentally/status',
+  'GET /admin/me',
+  'GET /admin/payouts',
+  'GET /admin/proposals',
+  'GET /admin/referral-review',
+  'GET /admin/referrals',
+  'GET /admin/reports/funnel',
+  'GET /admin/reports/top-referrers',
+  'GET /admin/settings',
+  'GET /admin/stats',
+  'GET /admin/team',
+  'PATCH /admin/referrals/:id/status',
+  'POST /admin/dentally/connect',
+  'POST /admin/dentally/disconnect',
+  'POST /admin/me/password',
+  'POST /admin/payouts/:id/cancel',
+  'POST /admin/payouts/:id/mark-paid',
+  'POST /admin/proposals/:id/confirm',
+  'POST /admin/proposals/:id/reject',
+  'POST /admin/referral-review/:id/decide',
+  'POST /admin/sync/run',
+  'POST /admin/team',
+  'POST /admin/team/:id/active',
+  'POST /admin/team/:id/password',
+  'POST /admin/team/:id/practice',
+  'POST /admin/users/:id/revoke-sessions',
+  'PUT /admin/reward-amount',
+  'PUT /admin/settings',
+];
+
 beforeAll(async () => {
   ({ app } = await bootTestApp());
   const practices = (await request(app).get('/practices')).body.practices;
@@ -72,5 +109,13 @@ describe('manager route allowlist', () => {
       // 200/404/409/422 are all fine — the point is the role gate did not reject it.
       expect(res.status, `${entry} should be open to managers`).not.toBe(403);
     }
+  });
+
+  // The actual drift alarm. The 403-by-default test above proves the fence HOLDS; it cannot
+  // notice a new route being added, because a new route simply 403s and stays green. This one
+  // fails the moment the admin surface changes, forcing a deliberate decision: add the route
+  // to MANAGER_ROUTES, or add it here to record that managers must not reach it.
+  it('the admin route surface matches the committed snapshot', () => {
+    expect(registeredAdminRoutes(app)).toEqual(ADMIN_ROUTE_SNAPSHOT);
   });
 });

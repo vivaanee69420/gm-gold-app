@@ -61,7 +61,7 @@ export async function submitReferral({ code, fullName, email, phone, treatmentIn
 }
 
 /** Adjacent-only transitions, 409 otherwise; lost needs a reason; completion credits (FR-12/FR-17). */
-export async function updateStatus({ referralId, status, lostReason, actorId, actorKind = null, privilegedComplete = false, practiceScope = null }) {
+export async function updateStatus({ referralId, status, lostReason, actorId, actorKind = null, privilegedComplete = false, practiceIds = null }) {
   const { rows } = await db.query(`select * from referrals where id=$1`, [referralId]);
   const referral = rows[0];
   if (!referral) throw Object.assign(new Error('not_found'), { status: 404 });
@@ -69,9 +69,9 @@ export async function updateStatus({ referralId, status, lostReason, actorId, ac
   // A manager may only touch their own practice's patients. 404 rather than 403 on purpose:
   // a 403 tells someone who should not know that this referral id exists at all. `null` means
   // unrestricted (an admin); an empty array means a manager with no practice, who reaches nothing.
-  if (practiceScope !== null) {
+  if (practiceIds !== null) {
     const owning = referral.booked_practice_id ?? referral.preferred_practice_id;
-    if (!owning || !practiceScope.includes(owning)) {
+    if (!owning || !practiceIds.includes(owning)) {
       throw Object.assign(new Error('not_found'), { status: 404 });
     }
   }

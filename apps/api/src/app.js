@@ -340,7 +340,7 @@ export function buildApp() {
       actorId: req.admin.id,
       actorKind: 'admin',
       privilegedComplete: true,
-      practiceScope: actionScope(req),
+      practiceIds: actionScope(req),
     });
     res.json(out);
   }));
@@ -528,7 +528,7 @@ export function buildApp() {
        left join practices p on p.id = r.preferred_practice_id
        join users u on u.id = r.referrer_id
        where r.review_status = 'existing_patient_suspect' and r.status <> 'lost'
-         ${scope ? 'and r.preferred_practice_id = any($1::uuid[])' : ''}
+         ${scope ? 'and coalesce(r.booked_practice_id, r.preferred_practice_id) = any($1::uuid[])' : ''}
        order by r.created_at`,
       scope ? [scope] : [],
     );

@@ -327,6 +327,11 @@ describe('manager-visible reads are practice-scoped', () => {
       practiceIds: [practices[1].id],
     });
 
+    // Guarantee the invariant checked below rather than lean on incidental suite ordering:
+    // one more referral at a DIFFERENT practice than the manager's scope, so the admin total
+    // is provably greater, not just coincidentally so.
+    await submitReferralAs('07700 900806', 'Extra Admin Visible');
+
     const asAdmin = await request(app).get('/admin/stats').set(auth(agents.admin));
     expect(asAdmin.status).toBe(200);
     expect(asAdmin.body.stats.liabilityPennies).toEqual(expect.any(Number));
@@ -335,13 +340,20 @@ describe('manager-visible reads are practice-scoped', () => {
     expect(asManager.status).toBe(200);
     // Company-wide liability is not a manager's number.
     expect(asManager.body.stats.liabilityPennies).toBeNull();
-    expect(asManager.body.stats.creditedPennies).toEqual(expect.any(Number));
+
+    const { rows: [creditRow] } = await db.query(
+      `select coalesce(sum(l.amount_pennies),0)::int as total
+         from wallet_ledger l join referrals r on r.id = l.referral_id
+        where l.kind = 'credit' and coalesce(r.booked_practice_id, r.preferred_practice_id) = $1`,
+      [practices[1].id],
+    );
+    expect(asManager.body.stats.creditedPennies).toBe(creditRow.total);
 
     const adminTotal = Object.values(asAdmin.body.stats.referralCounts)
       .reduce((a, b) => a + b, 0);
     const managerTotal = Object.values(asManager.body.stats.referralCounts)
       .reduce((a, b) => a + b, 0);
-    expect(managerTotal).toBeLessThanOrEqual(adminTotal);
+    expect(managerTotal).toBeLessThan(adminTotal);
   });
 
   it('scopes /admin/referrals on the practice the patient actually booked at', async () => {

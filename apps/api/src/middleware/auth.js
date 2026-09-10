@@ -98,11 +98,12 @@ export async function requireAdmin(req, res, next) {
     const admin = await loadAdminForToken(payload);
     if (!admin) return res.status(401).json({ error: 'unauthorized' });
     req.admin = admin;
-    // req.route is set by Express before route-level middleware runs, so this sees the
-    // PATTERN (e.g. /admin/payouts/:id/cancel), not the concrete url. The `?? req.path`
-    // fallback can only produce a string with a real uuid in it, which never matches the
-    // Set — so an unexpected mounting still fails closed.
-    if (admin.role === 'manager' && !MANAGER_ROUTES.has(`${req.method} ${req.route?.path ?? req.path}`)) {
+    // Match on the route PATTERN (`/admin/payouts/:id/cancel`), which express sets before
+    // route-level middleware runs. If there is no matched route we have been mounted somewhere
+    // unexpected — treat that as no match rather than falling back to req.path, which for the
+    // param-free entries is character-identical to the pattern and would grant access.
+    const routeKey = req.route?.path ? `${req.method} ${req.route.path}` : null;
+    if (admin.role === 'manager' && (routeKey === null || !MANAGER_ROUTES.has(routeKey))) {
       return res.status(403).json({ error: 'forbidden' });
     }
     return next();
