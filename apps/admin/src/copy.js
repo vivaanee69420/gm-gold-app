@@ -44,6 +44,7 @@ const ERRORS = {
   // clearer than silence after a password reset or a re-scope.
   team_saved: 'Saved.',
   password_saved: 'Password changed.',
+  treatment_saved: 'Treatment saved.',
 };
 
 export const errorMessage = (code) => ERRORS[code] ?? code;

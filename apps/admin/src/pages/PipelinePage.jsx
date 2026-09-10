@@ -9,7 +9,8 @@ export default function PipelinePage({ data, loadAll, patchReferral, notify }) {
       <StatsStrip stats={data.stats} />
       <PipelineBoard
         referrals={data.referrals}
-        onMoved={patchReferral}
+        onMoved={(id, status) => patchReferral(id, { status })}
+        onCardEdited={patchReferral}
         onChanged={loadAll}
         notify={notify}
       />

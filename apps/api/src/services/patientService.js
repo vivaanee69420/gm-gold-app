@@ -7,6 +7,7 @@
 // The timeline needs no new storage: `events` has recorded every status change with actor and
 // timestamp since day one (NFR-03, append-only). It has simply never been displayed.
 import { db } from '../db.js';
+import { listNotes } from './referralService.js';
 
 // The owning practice, defined the same way everywhere: where they actually booked, falling
 // back to the practice the referral form chose.
@@ -35,7 +36,7 @@ export async function listPatients(scope) {
 export async function patientDetail(referralId, scope) {
   const { rows } = await db.query(
     `select r.id, r.referred_name, r.referred_phone, r.referred_email, r.status,
-            r.treatment_interest, r.source, r.lost_reason,
+            r.treatment_interest, r.treatment_name, r.source, r.lost_reason,
             r.appointment_starts_at, r.appointment_dentally_id, r.created_at,
             pp.name as chosen_practice, bp.name as booked_practice,
             u.id as referrer_id, u.first_name || ' ' || coalesce(u.last_name,'') as referrer_name,
@@ -75,7 +76,10 @@ export async function patientDetail(referralId, scope) {
       phone: row.referred_phone,
       email: row.referred_email,
       status: row.status,
+      // What the patient picked on the form, then what the practice is actually doing. Both,
+      // never one overwriting the other — commission attribution reads the first.
       treatmentInterest: row.treatment_interest,
+      treatmentName: row.treatment_name ?? null,
       source: row.source,
       lostReason: row.lost_reason,
       referredAt: row.created_at,
@@ -100,6 +104,7 @@ export async function patientDetail(referralId, scope) {
       amountPennies: row.commission_pennies ?? null,
       creditedAt: row.commission_at ?? null,
     },
+    notes: await listNotes(referralId),
     timeline: timeline.map((e) => ({
       action: e.action,
       from: e.from_value,

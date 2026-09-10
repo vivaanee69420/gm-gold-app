@@ -568,6 +568,16 @@ button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: de
    Every stage is always a column, including empty ones: a board with holes in it reads as
    broken, and an empty column is where you drop the next card. */
 
+.board-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+@media (min-width: 68rem) {
+  .board-layout:has(.referral-panel) { grid-template-columns: minmax(0, 1fr) 360px; }
+}
+
 .board {
   display: grid;
   grid-auto-flow: column;
@@ -598,6 +608,11 @@ button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: de
 /* Where a dragged card would land. It fades in under the cursor and is gone the moment the
    card is dropped — the only thing on this board that reacts to a pointer alone. */
 .board-col.is-target { background: rgba(11, 43, 38, 0.05); }
+
+/* A column this card cannot move to. It steps back rather than lighting up, and refuses the
+   drop outright — the browser then shows its own "no entry" cursor. The board used to accept
+   any drop and let the API answer 409, which just looked like the card would not move. */
+.board-col.is-closed { opacity: 0.4; }
 
 .board-col h4 {
   display: flex;
@@ -633,6 +648,18 @@ button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: de
 .board-col li:last-child { margin-bottom: 0; }
 .board-col li:active { cursor: grabbing; }
 
+/* The card face is one control: the whole thing opens the record. It carries no button
+   chrome, because a card that looks like a button next to a real button reads as two
+   actions when there is one. */
+.card-face {
+  display: block;
+  width: 100%;
+  padding: 0;
+  background: none;
+  border: 0;
+  font: inherit;
+  text-align: left;
+}
 .board-col li strong {
   display: block;
   font-size: 14px;
@@ -640,7 +667,8 @@ button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: de
   color: var(--boardroom);
   overflow-wrap: anywhere;
 }
-.board-col li .meta { margin: 3px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+.card-face:hover strong { text-decoration: underline; text-decoration-color: var(--gold); text-underline-offset: 2px; }
+.board-col li .meta { display: block; margin: 3px 0 0; font-size: 12px; overflow-wrap: anywhere; }
 
 /* The move control sits quiet until it is wanted: a line of text under the card until you
    point at it or tab to it, at which point it takes the border of a real control. */
@@ -1109,3 +1137,101 @@ button[type='submit']:disabled, .btn-primary:disabled { opacity: 0.6; cursor: de
 }
 .timeline-when { display: block; font-size: 11px; color: var(--mist); }
 .timeline-what { display: block; margin-top: 1px; font-size: 13.5px; color: var(--ink); }
+
+/* ---- the referral panel: one patient's whole record, beside the board ----
+   Same card treatment as everything else — surface, hairline, 14px radius, no shadow — and
+   the same entrance the patients panel uses, because it answers the same kind of click. */
+
+.referral-panel {
+  position: sticky;
+  top: 84px;
+  max-height: calc(100vh - 108px);
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  padding: 18px 20px 20px;
+  animation: patient-detail-in 180ms ease-out both;
+}
+
+.referral-panel header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.referral-panel h3 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--boardroom);
+}
+.referral-panel h4 {
+  margin: 20px 0 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mist);
+}
+
+.referral-panel dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 9px 14px;
+  margin: 0;
+  font-size: 13.5px;
+}
+.referral-panel dt {
+  padding-top: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mist);
+  white-space: nowrap;
+}
+.referral-panel dd { margin: 0; overflow-wrap: anywhere; }
+.referral-panel dd .meta { margin-top: 2px; }
+
+/* The two fields the practice fills in itself. Separated from the read-only record above by
+   a rule, because everything below it is something you can change. */
+.panel-field {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--hairline-soft);
+}
+.panel-field label { margin-top: 0; }
+.panel-field textarea {
+  width: 100%;
+  padding: 8px 10px;
+  background: #fff;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  font: inherit;
+  color: var(--ink);
+  resize: vertical;
+}
+.panel-field textarea:focus { border-color: var(--gold); }
+.panel-field button { margin-top: 10px; }
+
+/* Notes: a running log, oldest first, each with who left it and when. Kept until deleted. */
+.referral-panel .notes { list-style: none; margin: 0; padding: 0; }
+.referral-panel .notes li {
+  padding: 9px 0;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.referral-panel .notes li:last-child { border-bottom: none; }
+.referral-panel .notes p { margin: 0; font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.referral-panel .notes .meta { margin-top: 3px; }
+.note-delete {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--mist);
+}
+.note-delete:hover { color: var(--danger); text-decoration-color: var(--danger); }

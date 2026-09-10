@@ -266,3 +266,101 @@ describe('PipelineBoard', () => {
     expect(within(bookedGroup()).getByText('Jane Smith')).toBeInTheDocument();
   });
 });
+
+// The card is a door, not a dossier: a name and two lines on the face, everything else behind
+// a click. The two fields the practice fills in itself are stored, not page state.
+describe('the card and its record', () => {
+  const detail = {
+    patient: {
+      id: 'r1', name: 'Jane Smith', phone: '+447700900456', email: 'jane@example.com',
+      status: 'new', treatmentInterest: 'implants', treatmentName: null,
+      source: 'code', lostReason: null, referredAt: '2026-09-01T10:00:00.000Z',
+    },
+    referrer: { id: 'u1', name: 'Sarah Lewis', phone: '+447700900111', code: 'ABC123' },
+    practice: { chosen: 'Sidcup', booked: null },
+    appointment: { startsAt: null, dentallyId: null },
+    commission: { amountPennies: null, creditedAt: null },
+    notes: [],
+    timeline: [],
+  };
+
+  it('keeps the card face to a glance, and everything else behind the click', async () => {
+    stubFetchRoutes([{ method: 'GET', path: '/admin/referrals/r1', body: detail }]);
+    render(<PipelineBoard referrals={referrals} onMoved={vi.fn()} onChanged={vi.fn()} notify={vi.fn()} />);
+
+    // Not on the face: the referrer, the phone, the email — the card carries the patient's
+    // name, what they're having done, and where.
+    expect(screen.queryByText(/sarah lewis/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\+447700900456/)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /jane smith/i }));
+
+    expect(await screen.findByText('Sarah Lewis')).toBeInTheDocument();
+    expect(screen.getByText(/\+447700900456/)).toBeInTheDocument();
+    expect(screen.getByText('jane@example.com')).toBeInTheDocument();
+    expect(screen.getByText(/code ABC123/)).toBeInTheDocument();
+  });
+
+  it('shows the typed treatment on the card once it is saved, in place of the form answer', async () => {
+    const calls = stubFetchRoutes([
+      { method: 'GET', path: '/admin/referrals/r1', body: detail },
+      { method: 'PUT', path: '/admin/referrals/r1/treatment', body: { treatmentName: 'Upper arch implants' } },
+    ]);
+    const onCardEdited = vi.fn();
+    render(
+      <PipelineBoard
+        referrals={referrals}
+        onMoved={vi.fn()}
+        onCardEdited={onCardEdited}
+        onChanged={vi.fn()}
+        notify={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /jane smith/i }));
+    await userEvent.type(await screen.findByLabelText(/^treatment$/i), 'Upper arch implants');
+    await userEvent.click(screen.getByRole('button', { name: /save treatment/i }));
+
+    await vi.waitFor(() =>
+      expect(calls).toContainEqual({
+        method: 'PUT',
+        path: '/admin/referrals/r1/treatment',
+        body: { treatmentName: 'Upper arch implants' },
+      }),
+    );
+    // The board is told, so the card face updates without refetching the whole list.
+    expect(onCardEdited).toHaveBeenCalledWith('r1', { treatmentName: 'Upper arch implants' });
+  });
+
+  it('adds and deletes notes, taking the stored list back from each write', async () => {
+    const afterAdd = [{ id: 'n1', body: 'Rang twice.', author: 'a@x.co', createdAt: '2026-09-02T09:00:00.000Z' }];
+    stubFetchRoutes([
+      { method: 'GET', path: '/admin/referrals/r1', body: detail },
+      { method: 'POST', path: '/admin/referrals/r1/notes', body: { id: 'n1', notes: afterAdd } },
+      { method: 'DELETE', path: '/admin/referrals/r1/notes/n1', body: { ok: true, notes: [] } },
+    ]);
+    render(<PipelineBoard referrals={referrals} onMoved={vi.fn()} onChanged={vi.fn()} notify={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /jane smith/i }));
+    expect(await screen.findByText(/no notes yet/i)).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText(/add a note/i), 'Rang twice.');
+    await userEvent.click(screen.getByRole('button', { name: /^add note$/i }));
+
+    // What comes back from the write IS the stored list — no follow-up read to race.
+    expect(await screen.findByText('Rang twice.')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+    expect(await screen.findByText(/no notes yet/i)).toBeInTheDocument();
+  });
+
+  it('will not send an empty note', async () => {
+    const calls = stubFetchRoutes([{ method: 'GET', path: '/admin/referrals/r1', body: detail }]);
+    render(<PipelineBoard referrals={referrals} onMoved={vi.fn()} onChanged={vi.fn()} notify={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /jane smith/i }));
+    await screen.findByLabelText(/add a note/i);
+    expect(screen.getByRole('button', { name: /^add note$/i })).toBeDisabled();
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0);
+  });
+});

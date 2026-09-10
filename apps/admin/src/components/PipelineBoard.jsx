@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { REFERRAL_STATUSES } from '@gm-referral/shared/schemas';
 import { api } from '../api/client.js';
+import ReferralPanel from './ReferralPanel.jsx';
 
 const LABELS = {
   new: 'New',
@@ -59,15 +60,19 @@ function movesFrom(from) {
 // answers an action instead of decorating a page load.
 const SETTLE_MS = 200;
 
-export default function PipelineBoard({ referrals, onMoved, onChanged, notify }) {
+export default function PipelineBoard({ referrals, onMoved, onCardEdited, onChanged, notify }) {
   const [lostDrafts, setLostDrafts] = useState({}); // referralId -> reason text
   const [creditDrafts, setCreditDrafts] = useState({}); // referralId -> the target crediting status while confirming
   const [overrides, setOverrides] = useState({}); // referralId -> { status, from }, optimistic until it fails
   const [settling, setSettling] = useState({}); // referralId -> true briefly after it lands
   const [dragOver, setDragOver] = useState(null); // the column a dragged card is currently over
+  const [dragging, setDragging] = useState(null); // the card being dragged, so columns can say no
+  const [openId, setOpenId] = useState(null); // the card whose record is open beside the board
+  const [panel, setPanel] = useState(null); // { id, detail, error } for the open card
   const settleTimers = useRef({});
   const draggedId = useRef(null);
   const requestTokens = useRef({}); // referralId -> the latest advance() call's token
+  const detailToken = useRef(0);
 
   const statusOf = (r) => overrides[r.id]?.status ?? r.status;
 
@@ -171,22 +176,64 @@ export default function PipelineBoard({ referrals, onMoved, onChanged, notify })
   const dropOnto = (status) => (e) => {
     e.preventDefault();
     setDragOver(null);
+    setDragging(null);
     const id = e.dataTransfer?.getData('text/plain') || draggedId.current;
     draggedId.current = null;
     const referral = referrals.find((r) => r.id === id);
-    if (referral) pick(referral, status);
+    // The board used to accept any drop and let the API refuse it. On an eight-column board
+    // most drags are more than one stage forward, so most drags answered 409 and the card
+    // snapped back — which reads as "I can't move the card". A column that cannot take this
+    // card no longer pretends it can.
+    if (referral && movesFrom(statusOf(referral)).includes(status)) pick(referral, status);
   };
 
+  // Which columns this drag may land in. Null when nothing is being dragged.
+  const legalTargets = dragging ? movesFrom(statusOf(dragging)) : null;
+
+  const fetchDetail = async (id) => {
+    const token = ++detailToken.current;
+    try {
+      const detail = await api(`/admin/referrals/${id}`);
+      if (detailToken.current === token) setPanel({ id, detail, error: null });
+    } catch (err) {
+      if (detailToken.current === token) setPanel({ id, detail: null, error: err.code ?? 'request_failed' });
+    }
+  };
+
+  // Opening is keyed on the id, not the click, so re-rendering the board (a poll, a colleague's
+  // move) never re-fetches or closes what is already open.
+  useEffect(() => {
+    if (!openId) return setPanel(null);
+    if (panel?.id === openId) return undefined;
+    setPanel({ id: openId, detail: null, error: null });
+    fetchDetail(openId);
+    return undefined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openId]);
+
+  const openReferral = openId ? referrals.find((r) => r.id === openId) : null;
+
   return (
-    <div className="board">
+    <div className="board-layout">
+      <div className="board">
       {REFERRAL_STATUSES.map((status) => {
         const group = referrals.filter((r) => statusOf(r) === status);
         return (
           <section
-            className={dragOver === status ? 'board-col is-target' : 'board-col'}
+            className={[
+              'board-col',
+              dragOver === status ? 'is-target' : '',
+              legalTargets && !legalTargets.includes(status) && statusOf(dragging) !== status
+                ? 'is-closed'
+                : '',
+            ].filter(Boolean).join(' ')}
             data-stage={status}
             key={status}
             onDragOver={(e) => {
+              // Only a column that can take this card claims the drop. Not calling
+              // preventDefault leaves the cursor showing "no entry" over the others, which is
+              // the browser's own way of saying what this board used to say with a 409.
+              if (legalTargets && !legalTargets.includes(status)) return;
               e.preventDefault();
               setDragOver(status);
             }}
@@ -204,16 +251,23 @@ export default function PipelineBoard({ referrals, onMoved, onChanged, notify })
                   draggable
                   onDragStart={(e) => {
                     draggedId.current = r.id;
+                    setDragging(r);
                     e.dataTransfer?.setData('text/plain', r.id);
                     if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
                   }}
-                  onDragEnd={() => setDragOver(null)}
+                  onDragEnd={() => {
+                    setDragOver(null);
+                    setDragging(null);
+                  }}
                 >
-                  <strong>{r.referred_name}</strong>
-                  <p className="meta">
-                    {INTEREST[r.treatment_interest] ?? r.treatment_interest} · {r.practice}
-                  </p>
-                  <p className="meta">{r.referrer} · {r.referred_phone}</p>
+                  {/* The whole face opens the record. Everything else about this patient —
+                      referrer, appointment, commission, history, notes — lives in the panel,
+                      so the card can stay at a glance's worth of information. */}
+                  <button className="card-face" onClick={() => setOpenId(r.id)}>
+                    <strong>{r.referred_name}</strong>
+                    <span className="meta">{r.treatment_name || INTEREST[r.treatment_interest] || 'No treatment yet'}</span>
+                    <span className="meta">{r.practice}</span>
+                  </button>
                   {movesFrom(statusOf(r)).length > 0 ? (
                     <select
                       aria-label={`Status for ${r.referred_name}`}
@@ -261,6 +315,19 @@ export default function PipelineBoard({ referrals, onMoved, onChanged, notify })
           </section>
         );
       })}
+      </div>
+      {openReferral && (
+        <ReferralPanel
+          key={openReferral.id}
+          referral={openReferral}
+          detail={panel?.id === openReferral.id ? panel.detail : null}
+          error={panel?.id === openReferral.id ? panel.error : null}
+          onClose={() => setOpenId(null)}
+          onRetry={() => fetchDetail(openReferral.id)}
+          onSaved={onCardEdited}
+          notify={notify}
+        />
+      )}
     </div>
   );
 }

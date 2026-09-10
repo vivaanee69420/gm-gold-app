@@ -149,3 +149,134 @@ describe('GET /admin/patients/:id', () => {
     expect(notSeenDetail.body.error).toBe('not_found');
   });
 });
+
+// The pipeline card's own two fields (0018). Both are the practice's working memory about a
+// patient, and both outlive every page load until someone removes them.
+describe('the card: treatment name and notes', () => {
+  it('opens the same detail from the pipeline door as from the patients door', async () => {
+    const viaPipeline = await request(app).get(`/admin/referrals/${referralId}`).set(auth(adminToken));
+    const viaPatients = await request(app).get(`/admin/patients/${referralId}`).set(auth(adminToken));
+    expect(viaPipeline.status).toBe(200);
+    expect(viaPipeline.body).toEqual(viaPatients.body);
+  });
+
+  it('keeps the typed treatment name without touching what the patient chose on the form', async () => {
+    const saved = await request(app).put(`/admin/referrals/${referralId}/treatment`)
+      .set(auth(adminToken)).send({ treatmentName: '  Upper arch implants  ' });
+    expect(saved.status).toBe(200);
+    expect(saved.body.treatmentName, 'trimmed').toBe('Upper arch implants');
+
+    const detail = await request(app).get(`/admin/referrals/${referralId}`).set(auth(adminToken));
+    expect(detail.body.patient.treatmentName).toBe('Upper arch implants');
+    // The enum the referral form captured is what commission attribution reads — it must
+    // survive the practice typing the real treatment over the top of nothing.
+    expect(detail.body.patient.treatmentInterest).toBe('implants');
+  });
+
+  it('clears the treatment name with an empty string, rather than rejecting it', async () => {
+    await request(app).put(`/admin/referrals/${referralId}/treatment`)
+      .set(auth(adminToken)).send({ treatmentName: 'Typo' });
+    const cleared = await request(app).put(`/admin/referrals/${referralId}/treatment`)
+      .set(auth(adminToken)).send({ treatmentName: '' });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.treatmentName).toBeNull();
+    // Put it back for the tests below.
+    await request(app).put(`/admin/referrals/${referralId}/treatment`)
+      .set(auth(adminToken)).send({ treatmentName: 'Upper arch implants' });
+  });
+
+  it('keeps notes until they are deleted, newest last, with who wrote them', async () => {
+    const first = await request(app).post(`/admin/referrals/${referralId}/notes`)
+      .set(auth(adminToken)).send({ body: 'Rang twice, no answer.' });
+    expect(first.status).toBe(200);
+    await request(app).post(`/admin/referrals/${referralId}/notes`)
+      .set(auth(adminToken)).send({ body: 'Booked for the 14th.' });
+
+    // A write answers with the whole list, so the card never needs a follow-up read.
+    const detail = await request(app).get(`/admin/referrals/${referralId}`).set(auth(adminToken));
+    expect(detail.body.notes.map((n) => n.body)).toEqual([
+      'Rang twice, no answer.',
+      'Booked for the 14th.',
+    ]);
+    expect(detail.body.notes[0].author).toBe('admin@test.gmdental.co.uk');
+
+    // Still there after an unrelated change — a note is not scratch state on the page.
+    await request(app).patch(`/admin/referrals/${referralId}/status`)
+      .set(auth(adminToken)).send({ status: 'booked' });
+    const later = await request(app).get(`/admin/referrals/${referralId}`).set(auth(adminToken));
+    expect(later.body.notes).toHaveLength(2);
+
+    const deleted = await request(app)
+      .delete(`/admin/referrals/${referralId}/notes/${first.body.id}`)
+      .set(auth(adminToken));
+    expect(deleted.status).toBe(200);
+    expect(deleted.body.notes.map((n) => n.body)).toEqual(['Booked for the 14th.']);
+  });
+
+  it('rejects an empty note rather than storing a blank row', async () => {
+    const res = await request(app).post(`/admin/referrals/${referralId}/notes`)
+      .set(auth(adminToken)).send({ body: '   ' });
+    expect(res.status).toBe(422);
+  });
+
+  it('fences both fields to the manager’s own practice, answering 404 not 403', async () => {
+    // A manager at a practice this referral does not belong to. 404, because a 403 would
+    // confirm to them that a referral with this id exists somewhere else.
+    const outsider = await adminSession(app, {
+      email: 'card-outsider@gmdental.co.uk',
+      role: 'manager',
+      practiceIds: [practices[1].id],
+    });
+
+    expect((await request(app).get(`/admin/referrals/${referralId}`)
+      .set(auth(outsider.token))).status).toBe(404);
+    expect((await request(app).put(`/admin/referrals/${referralId}/treatment`)
+      .set(auth(outsider.token)).send({ treatmentName: 'Nope' })).status).toBe(404);
+    expect((await request(app).post(`/admin/referrals/${referralId}/notes`)
+      .set(auth(outsider.token)).send({ body: 'Nope' })).status).toBe(404);
+
+    // And the note that is really there is untouched by any of it.
+    const detail = await request(app).get(`/admin/referrals/${referralId}`).set(auth(adminToken));
+    expect(detail.body.patient.treatmentName).toBe('Upper arch implants');
+  });
+
+  it('will not delete a note by id alone from outside the referral it belongs to', async () => {
+    // The note id is the only thing an attacker would have; scoping the delete by note id
+    // without the referral would make guessing one enough.
+    const note = await request(app).post(`/admin/referrals/${referralId}/notes`)
+      .set(auth(adminToken)).send({ body: 'Belongs to Percy.' });
+
+    // A second referral at the same practice, so the practice fence passes and the only thing
+    // that can refuse this delete is the note-belongs-to-this-referral clause.
+    const { rows } = await db.query(
+      `insert into referrals (referrer_id, referred_phone, referred_name, treatment_interest,
+                              preferred_practice_id, consent_version)
+       select referrer_id, '+447700905009', 'Other Person', 'aligners', preferred_practice_id,
+              consent_version
+         from referrals where id = $1
+       returning id`,
+      [referralId],
+    );
+
+    const res = await request(app)
+      .delete(`/admin/referrals/${rows[0].id}/notes/${note.body.id}`)
+      .set(auth(adminToken));
+    expect(res.status).toBe(404);
+
+    const still = await request(app).get(`/admin/referrals/${referralId}`).set(auth(adminToken));
+    expect(still.body.notes.some((n) => n.body === 'Belongs to Percy.')).toBe(true);
+  });
+});
+
+// The card face reads the list endpoint, not the detail one — so the typed treatment has to
+// travel with the list, or it vanishes from the board on the next page load.
+describe('GET /admin/referrals carries the typed treatment', () => {
+  it('returns treatment_name alongside the form answer', async () => {
+    await request(app).put(`/admin/referrals/${referralId}/treatment`)
+      .set(auth(adminToken)).send({ treatmentName: 'Lower denture' });
+    const res = await request(app).get('/admin/referrals').set(auth(adminToken));
+    const row = res.body.referrals.find((r) => r.id === referralId);
+    expect(row.treatment_name).toBe('Lower denture');
+    expect(row.treatment_interest).toBe('implants');
+  });
+});

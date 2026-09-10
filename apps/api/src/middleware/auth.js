@@ -79,7 +79,11 @@ export const MANAGER_ROUTES = new Set([
   'POST /admin/payouts/:id/mark-paid',
   'POST /admin/payouts/:id/cancel',
   'GET /admin/referrals',
+  'GET /admin/referrals/:id',
   'PATCH /admin/referrals/:id/status',
+  'PUT /admin/referrals/:id/treatment',
+  'POST /admin/referrals/:id/notes',
+  'DELETE /admin/referrals/:id/notes/:noteId',
   'GET /admin/patients',
   'GET /admin/patients/:id',
   'GET /admin/stats',
@@ -92,7 +96,11 @@ export const MANAGER_ROUTES = new Set([
 // figures the shell itself renders.
 export const ROUTE_PAGE = new Map([
   ['GET /admin/referrals', 'pipeline'],
+  ['GET /admin/referrals/:id', 'pipeline'],
   ['PATCH /admin/referrals/:id/status', 'pipeline'],
+  ['PUT /admin/referrals/:id/treatment', 'pipeline'],
+  ['POST /admin/referrals/:id/notes', 'pipeline'],
+  ['DELETE /admin/referrals/:id/notes/:noteId', 'pipeline'],
   ['GET /admin/patients', 'patients'],
   ['GET /admin/patients/:id', 'patients'],
   ['GET /admin/payouts', 'payouts'],

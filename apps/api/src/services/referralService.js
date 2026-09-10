@@ -224,3 +224,80 @@ export function firstNameInitial(fullName) {
   const parts = String(fullName).trim().split(/\s+/);
   return parts.length > 1 ? `${parts[0]} ${parts[parts.length - 1][0]}.` : parts[0];
 }
+
+// ---- the pipeline card's own fields (0018) ----
+//
+// Both of these hang off a referral, so both need the same practice fence the status PATCH
+// has: a manager may only touch their own practice's patients, and an id outside that scope
+// answers 404 rather than 403 — a 403 would confirm to someone who should not know that this
+// referral exists at all.
+const OWNING_PRACTICE = 'coalesce(booked_practice_id, preferred_practice_id)';
+
+async function referralInScope(referralId, practiceIds) {
+  const { rows } = await db.query(
+    `select id from referrals
+      where id = $1 ${practiceIds ? `and ${OWNING_PRACTICE} = any($2::uuid[])` : ''}`,
+    practiceIds ? [referralId, practiceIds] : [referralId],
+  );
+  if (!rows[0]) throw Object.assign(new Error('not_found'), { status: 404 });
+}
+
+/**
+ * The real treatment, as opposed to `treatment_interest` — the enum the patient picked on the
+ * referral form, which stays untouched because commission attribution reads it.
+ * `treatmentName` of null clears the field.
+ */
+export async function setTreatmentName({ referralId, treatmentName, actorId, practiceIds = null }) {
+  await referralInScope(referralId, practiceIds);
+  const { rows } = await db.query(
+    `update referrals set treatment_name = $2 where id = $1
+     returning treatment_name`,
+    [referralId, treatmentName ?? null],
+  );
+  await logEvent(db, {
+    actorId, actorKind: 'admin', entityType: 'referral', entityId: String(referralId),
+    action: 'treatment_named', toValue: rows[0].treatment_name ?? 'cleared',
+  });
+  return { treatmentName: rows[0].treatment_name };
+}
+
+export async function listNotes(referralId) {
+  const { rows } = await db.query(
+    `select n.id, n.body, n.created_at, au.email as author_email
+       from referral_notes n
+       left join admin_users au on au.id = n.author_admin_id
+      where n.referral_id = $1
+      order by n.created_at asc`,
+    [referralId],
+  );
+  return rows.map((n) => ({
+    id: n.id,
+    body: n.body,
+    author: n.author_email ?? null,
+    createdAt: n.created_at,
+  }));
+}
+
+export async function addNote({ referralId, body, actorId, practiceIds = null }) {
+  await referralInScope(referralId, practiceIds);
+  const { rows } = await db.query(
+    `insert into referral_notes (referral_id, body, author_admin_id)
+     values ($1, $2, $3) returning id`,
+    [referralId, body, actorId],
+  );
+  return { id: rows[0].id, notes: await listNotes(referralId) };
+}
+
+/**
+ * Scoped by referral as well as by note id: without the referral in the where clause, a
+ * manager could delete a note on another practice's patient by guessing its id alone.
+ */
+export async function deleteNote({ referralId, noteId, practiceIds = null }) {
+  await referralInScope(referralId, practiceIds);
+  const { rows } = await db.query(
+    `delete from referral_notes where id = $1 and referral_id = $2 returning id`,
+    [noteId, referralId],
+  );
+  if (!rows[0]) throw Object.assign(new Error('not_found'), { status: 404 });
+  return { ok: true, notes: await listNotes(referralId) };
+}

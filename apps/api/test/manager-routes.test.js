@@ -34,6 +34,7 @@ function registeredAdminRoutes(expressApp) {
 // MANAGER_ROUTES, or left out of it (and out of this snapshot's need to change at all is not
 // an option, since a new /admin route always shows up here).
 const ADMIN_ROUTE_SNAPSHOT = [
+  'DELETE /admin/referrals/:id/notes/:noteId',
   'GET /admin/aging',
   'GET /admin/dentally/status',
   'GET /admin/me',
@@ -43,6 +44,7 @@ const ADMIN_ROUTE_SNAPSHOT = [
   'GET /admin/proposals',
   'GET /admin/referral-review',
   'GET /admin/referrals',
+  'GET /admin/referrals/:id',
   'GET /admin/reports/funnel',
   'GET /admin/reports/top-referrers',
   'GET /admin/settings',
@@ -57,6 +59,7 @@ const ADMIN_ROUTE_SNAPSHOT = [
   'POST /admin/proposals/:id/confirm',
   'POST /admin/proposals/:id/reject',
   'POST /admin/referral-review/:id/decide',
+  'POST /admin/referrals/:id/notes',
   'POST /admin/sync/run',
   'POST /admin/team',
   'POST /admin/team/:id/active',
@@ -64,6 +67,7 @@ const ADMIN_ROUTE_SNAPSHOT = [
   'POST /admin/team/:id/password',
   'POST /admin/team/:id/practice',
   'POST /admin/users/:id/revoke-sessions',
+  'PUT /admin/referrals/:id/treatment',
   'PUT /admin/reward-amount',
   'PUT /admin/settings',
 ];

@@ -173,8 +173,8 @@ export default function App() {
   // Reloading cost eleven requests against a remote database for a change we already know the
   // shape of, and the board sat behind the slowest of them; the poll below still reconciles
   // with the server on its own schedule.
-  const patchReferral = useCallback((id, status) => {
-    setData((d) => (d ? { ...d, referrals: d.referrals.map((r) => (r.id === id ? { ...r, status } : r)) } : d));
+  const patchReferral = useCallback((id, fields) => {
+    setData((d) => (d ? { ...d, referrals: d.referrals.map((r) => (r.id === id ? { ...r, ...fields } : r)) } : d));
   }, []);
 
   // The header's Refresh is the same load the tab already runs every 30s, just asked for by

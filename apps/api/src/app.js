@@ -10,6 +10,8 @@ import {
   statusUpdateSchema,
   payoutRequestSchema,
   adminLoginSchema,
+  referralNoteSchema,
+  treatmentNameSchema,
 } from '@gm-referral/shared/schemas';
 import { db, logEvent } from './db.js';
 import {
@@ -37,6 +39,9 @@ import {
   referralsForReferrer,
   referredStatusFor,
   firstNameInitial,
+  setTreatmentName,
+  addNote,
+  deleteNote,
 } from './services/referralService.js';
 import { walletFor, requestPayout, markPayoutPaid, cancelPayout, getSetting, resolveRule, clawbackReferralCredit } from './services/walletService.js';
 import { listPatients, patientDetail } from './services/patientService.js';
@@ -320,6 +325,7 @@ export function buildApp() {
     const scope = practiceScope(req);
     const { rows } = await db.query(
       `select r.id, r.referred_name, r.referred_phone, r.referred_email, r.status, r.treatment_interest,
+              r.treatment_name,
               r.appointment_starts_at, r.created_at::date::text as created_at, r.source,
               coalesce(bp.name, pp.name) as practice,
               u.first_name || ' ' || coalesce(u.last_name,'') as referrer,
@@ -354,6 +360,44 @@ export function buildApp() {
     // that another practice has a patient with this id.
     if (!detail) return res.status(404).json({ error: 'not_found' });
     res.json(detail);
+  }));
+
+  // The same detail as /admin/patients/:id, behind the pipeline's own door. Two routes over
+  // one service on purpose: each is gated on the page it belongs to (ROUTE_PAGE), so a manager
+  // granted Pipeline but not Patients can still open a card on their own board.
+  app.get('/admin/referrals/:id', requireAdmin, requireUuidParam('id'), wrap(async (req, res) => {
+    const detail = await patientDetail(req.params.id, practiceScope(req));
+    if (!detail) return res.status(404).json({ error: 'not_found' });
+    res.json(detail);
+  }));
+
+  // { treatmentName } — the real treatment, typed by the practice. An empty string clears it.
+  app.put('/admin/referrals/:id/treatment', requireAdmin, requireUuidParam('id'), validate(treatmentNameSchema), wrap(async (req, res) => {
+    res.json(await setTreatmentName({
+      referralId: req.params.id,
+      treatmentName: req.data.treatmentName,
+      actorId: req.admin.id,
+      practiceIds: actionScope(req),
+    }));
+  }));
+
+  // { body } — a note on this referral. Both note routes answer with the full list, so the
+  // card never has to follow a write with a read to show what it now holds.
+  app.post('/admin/referrals/:id/notes', requireAdmin, requireUuidParam('id'), validate(referralNoteSchema), wrap(async (req, res) => {
+    res.json(await addNote({
+      referralId: req.params.id,
+      body: req.data.body,
+      actorId: req.admin.id,
+      practiceIds: actionScope(req),
+    }));
+  }));
+
+  app.delete('/admin/referrals/:id/notes/:noteId', requireAdmin, requireUuidParam('id'), requireUuidParam('noteId'), wrap(async (req, res) => {
+    res.json(await deleteNote({
+      referralId: req.params.id,
+      noteId: req.params.noteId,
+      practiceIds: actionScope(req),
+    }));
   }));
 
   app.patch('/admin/referrals/:id/status', requireAdmin, requireUuidParam('id'), validate(statusUpdateSchema), wrap(async (req, res) => {

@@ -101,3 +101,19 @@ export const adminCreateSchema = z.object({
 export const MANAGER_PAGES = ['pipeline', 'patients', 'payouts'];
 
 export const managerPagesSchema = z.array(z.enum(MANAGER_PAGES)).max(MANAGER_PAGES.length);
+
+// A note the desk leaves on a referral. Trimmed, because a note of three spaces is a note
+// nobody meant to leave.
+export const referralNoteSchema = z.object({
+  body: z.string().trim().min(1).max(2000),
+});
+
+// The real treatment, typed once the practice knows it. An empty string clears the field —
+// that is how you take back a wrong entry, so it must not fail validation.
+export const treatmentNameSchema = z.object({
+  treatmentName: z
+    .string()
+    .trim()
+    .max(120)
+    .transform((v) => (v === '' ? null : v)),
+});
