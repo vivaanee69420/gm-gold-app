@@ -47,6 +47,21 @@ describe('App', () => {
     expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
   });
 
+  it('shows no nav links before /admin/me resolves — fails closed, not open to every page', () => {
+    // A permission gate must fail closed: before we know the role, show nothing rather than
+    // defaulting to the admin's full page set (which would flash Operations and Reports &
+    // Setup at a manager on every sign-in). Asserted synchronously, right after render and
+    // before any `await`, so the /admin/me fetch's promise has had no chance to resolve yet.
+    stubDashboardRoutes();
+    setToken('tok');
+    render(<App />);
+
+    expect(screen.queryAllByRole('link')).toHaveLength(0);
+    expect(screen.queryByRole('link', { name: /^operations$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /reports & setup/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/loading/i)).toBeInTheDocument();
+  });
+
   it('shows the pipeline page by default when signed in', async () => {
     setToken('tok');
     stubDashboardRoutes();
@@ -204,11 +219,15 @@ describe('role-driven navigation', () => {
     expect(screen.getByRole('link', { name: /payouts/i })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /reports & setup/i })).not.toBeInTheDocument();
 
-    // A manager must never trigger a request they are not allowed to make.
-    const paths = calls.map((c) => c.path);
-    expect(paths).not.toContain('/admin/proposals');
-    expect(paths).not.toContain('/admin/settings');
-    expect(paths).not.toContain('/admin/team');
+    // A manager must never trigger a request they are not allowed to make. Asserted as an
+    // exact set (not a denylist of the known-forbidden ones) so any call to an endpoint not on
+    // this list — a typo, a future addition to the admin-only Promise.all, `/admin/aging`,
+    // `/admin/reports/funnel`, anything — fails this test regardless of which endpoint it is.
+    await vi.waitFor(() => {
+      expect([...new Set(calls.map((c) => c.path))].sort()).toEqual(
+        ['/admin/me', '/admin/patients', '/admin/payouts', '/admin/referrals', '/admin/stats'].sort(),
+      );
+    });
   });
 
   it('shows the manager their practice name', async () => {

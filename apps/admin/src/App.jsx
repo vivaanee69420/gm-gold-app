@@ -158,8 +158,10 @@ export default function App() {
     </div>
   );
 
-  const role = me?.role ?? 'admin';
-  const visiblePages = PAGES.filter((p) => p.roles.includes(role));
+  // Fail closed: until /admin/me tells us the role, show no navigation at all. Defaulting to
+  // 'admin' here would flash Operations and Reports & Setup at a manager on every sign-in.
+  const role = me?.role ?? null;
+  const visiblePages = role ? PAGES.filter((p) => p.roles.includes(role)) : [];
   const activePath = visiblePages.some((p) => p.path === route) ? route : '/';
   const Page = PAGE_COMPONENTS[activePath];
   const managerHasNoPractice = role === 'manager' && (me?.practices?.length ?? 0) === 0;
