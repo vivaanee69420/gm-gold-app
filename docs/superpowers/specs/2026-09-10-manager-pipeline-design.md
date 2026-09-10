@@ -84,9 +84,23 @@ attribution survives, which is what a commission dispute needs.
 Existing rows get `booked_practice_id = null` and keep their current owner, so the migration
 changes no visible behaviour on its own.
 
-**Risk to prove early:** the expression index must be accepted by PGlite (dev) as well as real
-Postgres. If PGlite rejects it, fall back to a plain index on each column and an `or` predicate in
-the scoped queries. Verify this before building on top of it.
+**Expression-index risk — self-resolving.** The index must be accepted by PGlite as well as real
+Postgres. This needs no separate verification step: `apps/api/test/migrations.test.js` already
+applies every migration in `supabase/migrations/` to a scratch PGlite instance, so writing `0016`
+proves it on the next `npm test`. If PGlite rejects it, fall back to a plain index on each column
+plus an `or` predicate in the scoped queries — the semantics are identical, only the plan differs,
+and at this row count neither is measurable.
+
+PGlite stays. It is not a dev convenience that can be dropped in favour of pointing everything at
+Supabase: the whole API suite (`apps/api/test/api.test.js`, 136 tests) runs on in-memory PGlite,
+and the migration test above is the only thing standing between a bad migration and production.
+Real Postgres remains the deployment target and `DATABASE_URL` still swaps to it.
+
+**Applying `0016` to production.** Ruhith has authorised running migrations against the deployed
+databases (2026-09-10). Sequence matters: land the code and get the suite green first, then apply
+to staging, then production. Applying the migration ahead of the code is safe in isolation (all
+three statements are additive and no existing row changes owner), but does not help anything until
+the code that reads `booked_practice_id` ships.
 
 ## §2 Permissions
 
@@ -246,8 +260,9 @@ the design:
 6. Confirming a proposal for a referral a manager already credited resolves cleanly — no 409, no
    second credit, referral ends at `treatment_completed`.
 7. The sync writes `booked_practice_id`, and the lead moves into the booked practice's scope.
-8. Migration `0016` applies cleanly on PGlite and on real Postgres (see the §1 expression-index
-   risk).
+8. Migration `0016` applies cleanly — covered for free by the existing `migrations.test.js`, which
+   replays every migration onto a scratch PGlite. This is also what settles the §1 expression-index
+   question. Confirm against real Postgres as part of the staging deploy, not as a code change.
 
 Existing `PipelineBoard.test.jsx` and `ManagerPage.test.jsx` both change: the first gains the new
 stage and the confirm step, the second is deleted along with the component it covers.
