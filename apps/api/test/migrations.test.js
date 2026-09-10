@@ -129,3 +129,64 @@ describe('RLS covers every table (Supabase anon-key exposure)', () => {
     expect(rows.map((r) => `${r.table_name}.${r.polname}`)).toEqual([]);
   });
 });
+
+describe('0016_manager_pipeline.sql', () => {
+  let db;
+
+  beforeAll(async () => {
+    const restore = process.env.PGLITE_MEMORY;
+    process.env.PGLITE_MEMORY = '1';
+    try {
+      const dbMod = await import('../src/db.js');
+      await dbMod.initDb();
+      db = dbMod.db;
+    } finally {
+      if (restore === undefined) delete process.env.PGLITE_MEMORY;
+      else process.env.PGLITE_MEMORY = restore;
+    }
+  });
+
+  it('accepts treatment_started as a referral status', async () => {
+    const { rows: [practice] } = await db.query(`select id from practices limit 1`);
+    const { rows: [user] } = await db.query(
+      `insert into users (phone) values ('+447700900001') returning id`,
+    );
+    const { rows: [referral] } = await db.query(
+      `insert into referrals (referrer_id, referred_phone, referred_name, treatment_interest,
+                              preferred_practice_id, consent_version, status)
+       values ($1,'+447700900002','Test Patient','implants',$2,'v1','treatment_started')
+       returning status`,
+      [user.id, practice.id],
+    );
+    expect(referral.status).toBe('treatment_started');
+  });
+
+  it('still rejects a status outside the enum', async () => {
+    const { rows: [user] } = await db.query(
+      `insert into users (phone) values ('+447700900003') returning id`,
+    );
+    await expect(
+      db.query(
+        `insert into referrals (referrer_id, referred_phone, referred_name, treatment_interest,
+                                consent_version, status)
+         values ($1,'+447700900004','Bad Status','implants','v1','made_up')`,
+        [user.id],
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('has booked_practice_id and the owning-practice index', async () => {
+    const { rows: cols } = await db.query(
+      `select column_name from information_schema.columns
+        where table_name = 'referrals' and column_name = 'booked_practice_id'`,
+    );
+    expect(cols).toHaveLength(1);
+
+    const { rows: idx } = await db.query(
+      `select indexname from pg_indexes
+        where tablename = 'referrals' and indexname = 'referrals_owning_practice'`,
+    );
+    expect(idx, 'the coalesce() expression index must apply on PGlite as well as Postgres')
+      .toHaveLength(1);
+  });
+});

@@ -11,6 +11,7 @@ export const REFERRAL_STATUSES = [
   'booked',
   'attended',
   'treatment_agreed',
+  'treatment_started',
   'treatment_completed',
   'lost',
 ];
