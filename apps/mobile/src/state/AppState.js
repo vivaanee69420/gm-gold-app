@@ -16,6 +16,10 @@ const initial = {
   booted: false,
   user: null, // { email, phone, firstName, roles: [], referralCode, needsPhone }
   pendingEmail: null,
+  // Name and phone typed on the sign-up screen, held until there is a session to attach them
+  // to. Nothing can be written to our API before the code is verified, so sign-up is
+  // necessarily "collect, verify, then save" rather than "save, then verify".
+  pendingProfile: null,
   authError: null,
 };
 
@@ -24,9 +28,9 @@ function reducer(state, action) {
     case 'booted':
       return { ...state, booted: true, user: action.user ?? null };
     case 'code-sent':
-      return { ...state, pendingEmail: action.email, authError: null };
+      return { ...state, pendingEmail: action.email, pendingProfile: action.profile ?? null, authError: null };
     case 'signed-in':
-      return { ...state, user: action.user, pendingEmail: null, authError: null };
+      return { ...state, user: action.user, pendingEmail: null, pendingProfile: null, authError: null };
     case 'user-updated':
       return { ...state, user: action.user };
     case 'signed-out':
@@ -66,20 +70,35 @@ export function AppStateProvider({ children }) {
         }
       },
 
-      /** Ask Supabase to email a six-digit code. */
-      sendCode: async (email) => {
+      /**
+       * Email a code.
+       *
+       * `createUser` is the whole difference between the two front doors, and it is a
+       * security property, not a cosmetic one. Sign-in passes false, so an unknown address is
+       * REJECTED rather than quietly turned into a brand-new account — mistype your own email
+       * on the sign-in screen and you used to end up in an empty account wondering where your
+       * referrals went. Sign-up passes true, along with the name and phone to attach once the
+       * code checks out.
+       */
+      sendCode: async (email, { createUser = false, profile = null } = {}) => {
         if (!isAuthConfigured) throw new Error('auth_not_configured');
         const { error } = await supabase.auth.signInWithOtp({
           email,
-          // Open self-registration: a patient signing up IS the product. An account with no
-          // phone and no matching Dentally record can do nothing and earn nothing.
-          options: { shouldCreateUser: true },
+          options: { shouldCreateUser: createUser },
         });
         if (error) throw error;
-        dispatch({ type: 'code-sent', email });
+        dispatch({ type: 'code-sent', email, profile });
       },
 
-      /** Exchange the code for a session, then load the profile from our API. */
+      /**
+       * Exchange the code for a session, then load the profile from our API.
+       *
+       * On the sign-up path the name and phone collected before verification are written
+       * here. A failure to save them (`phone_taken`, mostly) must NOT fail the sign-in — the
+       * account exists and the session is valid at that point, so the caller gets the error
+       * back and sends them to Profile to fix it rather than dumping them at the login screen
+       * with no way forward.
+       */
       verifyCode: async (code) => {
         const { error } = await supabase.auth.verifyOtp({
           email: state.pendingEmail,
@@ -89,8 +108,20 @@ export function AppStateProvider({ children }) {
         if (error) throw error;
         // First call after verifying creates the profile row from the verified identity.
         const out = await api.me();
-        dispatch({ type: 'signed-in', user: out.user });
-        return out;
+        let user = out.user;
+        let profileError = null;
+
+        if (state.pendingProfile) {
+          try {
+            const saved = await api.saveProfile(state.pendingProfile);
+            user = saved.user;
+          } catch (err) {
+            profileError = err;
+          }
+        }
+
+        dispatch({ type: 'signed-in', user });
+        return { ...out, user, profileError };
       },
 
       saveProfile: async (profile) => {
@@ -108,7 +139,7 @@ export function AppStateProvider({ children }) {
         dispatch({ type: 'signed-out' });
       },
     }),
-    [state.pendingEmail],
+    [state.pendingEmail, state.pendingProfile],
   );
 
   const value = useMemo(() => ({ ...state, ...actions }), [state, actions]);

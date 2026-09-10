@@ -14,7 +14,7 @@ import { Platform, StyleSheet, Switch, Text, View } from 'react-native';
 import { normalizePhone } from '@gm-referral/shared/phone';
 import { Body, Field, GoldButton, Notice, Screen, Title } from '../components/ui';
 import { AuthPanel } from '../components/AuthPanel';
-import { describeSendFailure, isAddressProblem } from '../lib/authErrors';
+import { describeSendFailure, isAddressProblem, isUnknownAccount } from '../lib/authErrors';
 import { colors, space } from '../theme';
 import { useAppState } from '../state/AppState';
 
@@ -29,11 +29,14 @@ export function LoginScreen({ navigation }) {
   // Separate from `error` on purpose: most send failures are nothing to do with the address,
   // so most of them must not put a red edge on the field. See isAddressProblem.
   const [badAddress, setBadAddress] = useState(false);
+  // When the address has no account, the way forward is the sign-up screen, not a retype.
+  const [unknown, setUnknown] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const edit = (value) => {
     setEmail(value);
     if (badAddress) setBadAddress(false); // typing is an attempt to fix it; stop shouting
+    if (unknown) setUnknown(false);
   };
 
   const submit = async () => {
@@ -45,15 +48,18 @@ export function LoginScreen({ navigation }) {
     }
     setError(null);
     setBadAddress(false);
+    setUnknown(false);
     setBusy(true);
     try {
-      await sendCode(address);
+      // createUser:false — an address with no account is an ERROR here, not a silent signup.
+      await sendCode(address, { createUser: false });
       navigation.navigate('Verify');
     } catch (err) {
-      // Who can actually fix it? Rate limit, dead connection, bad address and "our SMTP is
-      // misconfigured" are four different problems, and only one of them is the address.
+      // Who can actually fix it? Rate limit, dead connection, bad address, no account yet,
+      // and "our SMTP is misconfigured" are five different problems.
       setError(describeSendFailure(err));
       setBadAddress(isAddressProblem(err));
+      setUnknown(isUnknownAccount(err));
     } finally {
       setBusy(false);
     }
@@ -64,7 +70,7 @@ export function LoginScreen({ navigation }) {
       <AuthPanel step={1}>
         <Title style={styles.title}>Your smile pays{'\n'}you back.</Title>
         <Body muted style={styles.lede}>
-          Refer a friend to GM Dental and earn credit toward your own treatment.
+          Sign in with your email. We’ll send a {OTP_LENGTH}-digit code — no password to remember.
         </Body>
         <Field
           label="Email address"
@@ -77,12 +83,127 @@ export function LoginScreen({ navigation }) {
           autoCapitalize="none"
           autoCorrect={false}
           onSubmitEditing={submit}
-          hint={`We’ll send a ${OTP_LENGTH}-digit code. No password to remember.`}
         />
         <Notice>{error}</Notice>
         <GoldButton label="Send my code" onPress={submit} busy={busy} disabled={busy || !email.trim()} />
+        <GoldButton
+          label={unknown ? 'Create your account' : 'New here? Create an account'}
+          variant="ghost"
+          onPress={() => navigation.navigate('SignUp', { email: email.trim().toLowerCase() })}
+          disabled={busy}
+        />
       </AuthPanel>
       <Text style={styles.footnote}>Already a patient? Use the address the practice has on file.</Text>
+    </Screen>
+  );
+}
+
+/**
+ * Sign up: full name, email and mobile, all required.
+ *
+ * None of it can be saved yet — there is no session until the code is verified — so it is
+ * held in `pendingProfile` and written the moment verifyOtp succeeds. That is why the
+ * validation here has to be real rather than decorative: a bad phone number typed on this
+ * screen would otherwise only surface several screens later, after the account already exists.
+ */
+export function SignUpScreen({ navigation, route }) {
+  const { sendCode } = useAppState();
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [email, setEmail] = useState(route?.params?.email ?? '');
+  const [phone, setPhone] = useState('');
+  const [error, setError] = useState(null);
+  const [invalidField, setInvalidField] = useState(null); // 'email' | 'phone' | null
+  const [busy, setBusy] = useState(false);
+
+  const ready = firstName.trim() && lastName.trim() && email.trim() && phone.trim();
+
+  const submit = async () => {
+    const address = email.trim().toLowerCase();
+    if (!looksLikeEmail(address)) {
+      setError('That doesn’t look like an email address.');
+      setInvalidField('email');
+      return;
+    }
+    const e164 = normalizePhone(phone);
+    if (!e164) {
+      setError('That doesn’t look like a UK mobile number. Try 07700 900123.');
+      setInvalidField('phone');
+      return;
+    }
+    setError(null);
+    setInvalidField(null);
+    setBusy(true);
+    try {
+      await sendCode(address, {
+        createUser: true,
+        profile: { firstName: firstName.trim(), lastName: lastName.trim(), phone: e164, notifyOptIn: true },
+      });
+      navigation.navigate('Verify');
+    } catch (err) {
+      setError(describeSendFailure(err));
+      setInvalidField(isAddressProblem(err) ? 'email' : null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Screen center>
+      <AuthPanel step={1}>
+        <Title style={styles.title}>Create your{'\n'}gold card.</Title>
+        <Body muted style={styles.lede}>
+          Refer a friend to GM Dental and earn credit toward your own treatment.
+        </Body>
+        <View style={styles.nameRow}>
+          <Field
+            label="First name"
+            value={firstName}
+            onChangeText={setFirstName}
+            placeholder="Sarah"
+            autoComplete="given-name"
+            style={styles.nameField}
+          />
+          <Field
+            label="Last name"
+            value={lastName}
+            onChangeText={setLastName}
+            placeholder="Lewis"
+            autoComplete="family-name"
+            style={styles.nameField}
+          />
+        </View>
+        <Field
+          label="Email address"
+          value={email}
+          onChangeText={(v) => { setEmail(v); if (invalidField === 'email') setInvalidField(null); }}
+          invalid={invalidField === 'email'}
+          placeholder="sarah@example.com"
+          keyboardType="email-address"
+          autoComplete="email"
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <Field
+          label="Mobile number"
+          value={phone}
+          onChangeText={(v) => { setPhone(v); if (invalidField === 'phone') setInvalidField(null); }}
+          invalid={invalidField === 'phone'}
+          placeholder="07700 900123"
+          keyboardType="phone-pad"
+          autoComplete="tel"
+          onSubmitEditing={submit}
+          hint="How we match you to your patient record — use the number the practice has on file."
+        />
+        <Notice>{error}</Notice>
+        <GoldButton label="Send my code" onPress={submit} busy={busy} disabled={busy || !ready} />
+        <GoldButton
+          label="I already have an account"
+          variant="ghost"
+          onPress={() => navigation.navigate('Login')}
+          disabled={busy}
+        />
+      </AuthPanel>
     </Screen>
   );
 }
@@ -142,10 +263,19 @@ export function VerifyScreen({ navigation }) {
     try {
       const out = await verifyCode(code.trim());
       const user = out.user;
-      // needsPhone: an email-first signup has no phone yet, and phone is the Dentally
-      // matching key — so Profile is the next stop even for a returning user who has a name.
-      if (!user?.firstName || user?.needsPhone) navigation.reset({ index: 0, routes: [{ name: 'Profile' }] });
-      else if (!user.roles?.length) navigation.reset({ index: 0, routes: [{ name: 'RolePicker' }] });
+      // A sign-up whose name/phone could not be saved (phone_taken, mostly) is signed in but
+      // incomplete. Profile is the screen built to fix exactly that, so send them there with
+      // the reason rather than leaving them on a dead end.
+      if (out.profileError) {
+        navigation.reset({ index: 0, routes: [{ name: 'Profile', params: { saveError: out.profileError.payload?.error ?? 'save_failed' } }] });
+      // needsPhone: an account can still reach here without a phone — an older email-first
+      // signup, or a sign-in by someone who never finished. Phone is the Dentally matching
+      // key, so Profile is the next stop even for a returning user who has a name.
+      } else if (!user?.firstName || user?.needsPhone) {
+        navigation.reset({ index: 0, routes: [{ name: 'Profile' }] });
+      } else if (!user.roles?.length) {
+        navigation.reset({ index: 0, routes: [{ name: 'RolePicker' }] });
+      }
       // else: App.js switches stacks automatically once a role exists
     } catch (err) {
       // Supabase returns 403 for a wrong or expired code; our own API errors carry a payload.
@@ -195,15 +325,22 @@ export function VerifyScreen({ navigation }) {
   );
 }
 
-export function ProfileScreen({ navigation }) {
+export function ProfileScreen({ navigation, route }) {
   const { saveProfile, user } = useAppState();
   const [firstName, setFirstName] = useState(user?.firstName ?? '');
   const [lastName, setLastName] = useState(user?.lastName ?? '');
   const [phone, setPhone] = useState(user?.phone ?? '');
   const [notifyOptIn, setNotifyOptIn] = useState(user?.notifyOptIn ?? true);
-  const [error, setError] = useState(null);
+  // Arriving from a sign-up whose profile save failed: lead with WHY, so the screen doesn't
+  // look like an arbitrary extra step after they already filled this in.
+  const arrivedWith = route?.params?.saveError;
+  const [error, setError] = useState(
+    arrivedWith === 'phone_taken'
+      ? 'That number is already on another account. Use the number the practice has for you.'
+      : arrivedWith ? 'We couldn’t save your details. Check them and try again.' : null,
+  );
   // A dropped connection while saving isn't the phone number's fault; a duplicate is.
-  const [badPhone, setBadPhone] = useState(false);
+  const [badPhone, setBadPhone] = useState(arrivedWith === 'phone_taken');
   const [busy, setBusy] = useState(false);
 
   const submit = async () => {

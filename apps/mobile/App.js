@@ -11,7 +11,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts, Fraunces_400Regular, Fraunces_600SemiBold } from '@expo-google-fonts/fraunces';
 import { AppStateProvider, useAppState } from './src/state/AppState';
-import { LoginScreen, VerifyScreen, ProfileScreen, RolePickerScreen } from './src/screens/auth';
+import { LoginScreen, SignUpScreen, VerifyScreen, ProfileScreen, RolePickerScreen } from './src/screens/auth';
 import { CardScreen, ReferralsScreen, WalletScreen } from './src/screens/referrer';
 import { EnterCodeScreen, BookingFormScreen, ReferredStatusScreen } from './src/screens/referred';
 import { isMockMode } from './src/api/client';
@@ -103,6 +103,7 @@ function Router() {
       ) : (
         <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName={initialAuthRoute}>
           <Stack.Screen name="Login" component={LoginScreen} />
+          <Stack.Screen name="SignUp" component={SignUpScreen} />
           <Stack.Screen name="Verify" component={VerifyScreen} />
           <Stack.Screen name="Profile" component={ProfileScreen} />
           <Stack.Screen name="RolePicker" component={RolePickerScreen} />

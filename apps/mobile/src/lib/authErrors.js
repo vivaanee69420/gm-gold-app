@@ -20,6 +20,17 @@ export const NOT_CONFIGURED = 'auth_not_configured';
 const RATE_LIMITED = new Set(['over_email_send_rate_limit', 'over_request_rate_limit']);
 const BAD_ADDRESS = new Set(['email_address_invalid', 'validation_failed']);
 
+// What Supabase answers when signInWithOtp runs with shouldCreateUser:false and the address
+// has never signed up. It is the sign-in screen's most important error, and it arrives as a
+// 422 — which would otherwise be read as "that address is malformed". It isn't; the address
+// is fine, there is just nobody behind it.
+const NO_SUCH_ACCOUNT = new Set(['otp_disabled', 'signup_disabled', 'user_not_found']);
+
+/** True when the failure means "this email has no account yet", i.e. offer sign-up. */
+export function isUnknownAccount(err) {
+  return NO_SUCH_ACCOUNT.has(err?.code);
+}
+
 /**
  * A message for a failed "send me a code" attempt.
  *
@@ -46,6 +57,11 @@ export function describeSendFailure(err, { resend = false } = {}) {
   const offline = err?.name === 'AuthRetryableFetchError' && !status;
   if (offline) {
     return 'No connection. Check your internet and try again.';
+  }
+
+  // Checked before the generic 4xx branch below, which would otherwise blame the address.
+  if (isUnknownAccount(err)) {
+    return 'No account with that email yet. Create one below — it takes a minute.';
   }
 
   if (status === 429 || RATE_LIMITED.has(code)) {
@@ -76,5 +92,9 @@ export function describeSendFailure(err, { resend = false } = {}) {
  * and the red edge is the one they'll believe.
  */
 export function isAddressProblem(err) {
+  // "No account yet" also arrives as a 422, but the address is spelled perfectly — the fix is
+  // to sign up, not to retype it. Marking the field red there sends people hunting for a typo
+  // that isn't in it.
+  if (isUnknownAccount(err)) return false;
   return BAD_ADDRESS.has(err?.code) || err?.status === 400 || err?.status === 422;
 }
