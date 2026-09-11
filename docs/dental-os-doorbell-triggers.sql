@@ -1,38 +1,74 @@
--- Dental OS: ring the GM Referral doorbell when appointments change
 -- ============================================================================
--- Run by:  whoever owns the Dental OS database (NOT gm_referral_api / gm_referral_reader —
---          our role has SELECT only, no CREATE on public, and is not superuser).
--- Written: 2026-09-11
+-- GM Referral — install and verify the Dental OS doorbell, in one script
+-- ============================================================================
 --
--- WHY THIS FILE EXISTS
+-- Run as:   the Dental OS database OWNER (or any role with CREATE on public).
+--           NOT gm_referral_reader — that role has SELECT only, which is why the
+--           GM Referral API cannot install this itself.
+-- Written:  2026-09-11
+-- Safe to:  re-run any time. Every step is idempotent.
 --
--- public.gmref_doorbell() is ALREADY installed in Dental OS and has been for some time. What
--- was never installed is any trigger that calls it — `information_schema.triggers` returns
--- nothing for `appointments` or `contacts`. So the doorbell has never rung once, and the GM
--- Referral sync has been running purely on its 15-minute cron.
+-- WHAT THIS IS FOR
 --
--- That is the whole cause of "appointment checking is slow": a friend can book and wait up to
--- 15 minutes before the referral reaches the pipeline. With these triggers it is seconds.
+-- Dentally delivers appointments to Dental OS by webhook. This script makes the
+-- moment that row lands also notify the GM Referral API, so a booking reaches the
+-- referral pipeline in seconds instead of waiting for the API's 15-minute cron.
 --
--- One ring covers everything. The API's runSync() does the whole pass on every invocation —
--- booking detection, existing-patient flagging (FR-11) and refund clawback — so there is no
--- need for a separate trigger per concern. It also holds a global advisory lock and, if the
--- doorbell rings mid-pass, queues exactly one follow-up run, so ringing often is safe.
+-- public.gmref_doorbell() is ALREADY installed here and has been for some time —
+-- SECURITY DEFINER, calls net.http_post() to the API, and swallows its own errors
+-- so it can never fail or roll back the write that rang it. What was never
+-- installed is any trigger that calls it: information_schema.triggers returns
+-- nothing for appointments or contacts. That is the whole reason detection is slow.
 --
--- STATEMENT-level, not ROW-level, on purpose. Dental OS is fed by Dentally webhooks in
--- batches; a row-level trigger would fire one HTTP POST per row and could produce thousands
--- of pings for one import. FOR EACH STATEMENT fires once per write regardless of row count,
--- which is all the API needs — the doorbell carries no payload it acts on, it only says
--- "something changed, come and look".
+-- This script only attaches the function. It does NOT recreate it — the function
+-- holds the API URL and the shared secret, and recreating it from anywhere other
+-- than the real values would break the link silently.
 --
--- gmref_doorbell() already swallows its own exceptions, so a network failure or an API outage
--- can never fail or roll back the Dental OS write that rang it.
+-- TWO CHOICES WORTH KNOWING
+--
+-- FOR EACH STATEMENT, not FOR EACH ROW. Dental OS is fed in batches; a row-level
+-- trigger would fire one HTTP POST per row and could produce thousands of pings
+-- for a single import. Statement-level fires once per write whatever the row
+-- count, which is all the API needs — the doorbell carries no payload it acts on,
+-- it only says "something changed, come and look".
+--
+-- DELETE is included on appointments. A booking cancelled by deletion should also
+-- prompt a re-check, or a referral sits at Booked against an appointment that no
+-- longer exists.
+--
+-- No explicit BEGIN/COMMIT: some SQL consoles (Supabase's included) already wrap a
+-- script in one transaction and error on a nested COMMIT. The steps are idempotent
+-- instead, so a partial run is fixed by running it again.
 
-begin;
 
--- Appointments: the one that matters. New and changed bookings are what move a referral onto
--- the pipeline board, and since 2026-09-11 a referral does not appear at all until Dental OS
--- confirms an appointment for it.
+-- ---------------------------------------------------------------------------
+-- 1. Preflight — fail loudly now rather than silently later
+-- ---------------------------------------------------------------------------
+do $$
+begin
+  if not exists (select 1 from pg_extension where extname = 'pg_net') then
+    raise exception 'pg_net is not installed: gmref_doorbell() has no way to make its HTTP call';
+  end if;
+
+  if not exists (
+    select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where p.proname = 'gmref_doorbell' and n.nspname = 'public'
+  ) then
+    raise exception 'public.gmref_doorbell() is missing. Do NOT recreate it from this script — '
+      'it holds the API URL and shared secret. Ask the GM Referral side for the real definition.';
+  end if;
+
+  if not has_schema_privilege(current_user, 'public', 'CREATE') then
+    raise exception 'role % cannot CREATE in schema public — run this as the Dental OS owner', current_user;
+  end if;
+
+  raise notice 'preflight OK as role %', current_user;
+end $$;
+
+
+-- ---------------------------------------------------------------------------
+-- 2. Install
+-- ---------------------------------------------------------------------------
 drop trigger if exists gmref_doorbell_appointments on public.appointments;
 
 create trigger gmref_doorbell_appointments
@@ -40,9 +76,6 @@ create trigger gmref_doorbell_appointments
   for each statement
   execute function public.gmref_doorbell();
 
--- Contacts: a new or corrected phone number / email is what lets a referral match at all.
--- Worth ringing on, because a contact whose phone was fixed after booking would otherwise
--- wait for the cron to notice.
 drop trigger if exists gmref_doorbell_contacts on public.contacts;
 
 create trigger gmref_doorbell_contacts
@@ -50,45 +83,66 @@ create trigger gmref_doorbell_contacts
   for each statement
   execute function public.gmref_doorbell();
 
-commit;
+
+-- ---------------------------------------------------------------------------
+-- 3. Confirm they exist
+-- ---------------------------------------------------------------------------
+do $$
+declare n int;
+begin
+  select count(*) into n
+    from information_schema.triggers
+   where trigger_name like 'gmref_doorbell%';
+  if n = 0 then
+    raise exception 'no gmref_doorbell triggers found after install — something dropped them';
+  end if;
+  raise notice 'installed: % trigger event rows', n;
+end $$;
+
+select event_object_table as "table",
+       trigger_name,
+       event_manipulation as event,
+       action_timing      as timing
+  from information_schema.triggers
+ where trigger_name like 'gmref_doorbell%'
+ order by event_object_table, trigger_name, event_manipulation;
 
 
 -- ---------------------------------------------------------------------------
--- VERIFY (run after committing)
+-- 4. Ring the bell for real
 -- ---------------------------------------------------------------------------
--- 1. The triggers exist:
---
---      select event_object_table, trigger_name, event_manipulation, action_timing
---        from information_schema.triggers
---       where trigger_name like 'gmref_doorbell%'
---       order by event_object_table, trigger_name;
---
--- 2. pg_net is still installed (the doorbell needs it):
---
---      select extname from pg_extension where extname = 'pg_net';
---
--- 3. The ring actually lands. Touch a row and watch the GM Referral API's Railway logs for a
---    line reading  [dentally] sync {"trigger":"webhook", ...}  within a few seconds:
---
---      update public.appointments set updated_at = updated_at where id = (
---        select id from public.appointments order by updated_at desc limit 1
---      );
---
---    pg_net is asynchronous, so the POST is queued rather than sent inline. Its outcome is
---    visible in Dental OS itself:
---
---      select id, status_code, error_msg, created
---        from net._http_response order by created desc limit 5;
---
---    A 204 is success. A 401 means the x-gmref-secret baked into gmref_doorbell() no longer
---    matches DENTALLY_WEBHOOK_SECRET on the API — rotate both together, never one alone.
+-- Sets updated_at to its own value on a single row: the statement trigger fires,
+-- no data changes, and no Dentally state is touched. (A statement-level trigger
+-- fires even when no row actually changes.)
+update public.appointments
+   set updated_at = updated_at
+ where id = (select id from public.appointments order by updated_at desc limit 1);
+
+-- net.http_post queues the request and sends it after commit, asynchronously.
+select pg_sleep(5);
+
+
+-- ---------------------------------------------------------------------------
+-- 5. Did it land?
+-- ---------------------------------------------------------------------------
+--   204            -> working. Look for [dentally] sync {"trigger":"webhook"...}
+--                     in the GM Referral API's Railway logs within a few seconds.
+--   401            -> the secret inside gmref_doorbell() no longer matches
+--                     DENTALLY_WEBHOOK_SECRET on the API. Rotate BOTH together.
+--   timeout/error  -> check error_msg; the API may be asleep or the URL stale.
+--   no rows at all -> pg_net's worker is not running. On Supabase, check the
+--                     pg_net extension is enabled and the project is not paused.
+select id, status_code, error_msg, created
+  from net._http_response
+ order by created desc
+ limit 5;
 
 
 -- ---------------------------------------------------------------------------
 -- TO REMOVE
 -- ---------------------------------------------------------------------------
+-- Safe at any time: the API falls back to its 15-minute cron, which is how it has
+-- been running all along. Nothing is lost, detection just gets slower again.
+--
 --   drop trigger if exists gmref_doorbell_appointments on public.appointments;
 --   drop trigger if exists gmref_doorbell_contacts    on public.contacts;
---
--- Dropping them is safe: the API falls back to its 15-minute cron, which is how it has been
--- running all along. Nothing is lost, it just gets slower again.
