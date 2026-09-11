@@ -210,4 +210,22 @@ describe('per-manager page grants', () => {
       .set(auth(ownerToken)).send({ pages: [] });
     expect((await request(app).get('/admin/payouts').set(auth(scopedToken))).status).toBe(403);
   });
+
+  it('answers the login with the same pages as /admin/me, not with everything', async () => {
+    // The dashboard builds its nav from the LOGIN response. authenticate() used to hand
+    // publicAdmin an object with no `pages` key at all, and normalizePages reads undefined as
+    // "unset" — which for a manager means "grant everything" — so a one-page manager was told
+    // at login that they had all three, then 403'd on every nav item but one.
+    await request(app).post(`/admin/team/${scopedId}/pages`)
+      .set(auth(ownerToken)).send({ pages: ['payouts'] });
+
+    const login = await request(app).post('/auth/admin/login')
+      .send({ email: 'pages-manager@gmdental.co.uk', password: 'correct-horse-battery' });
+    expect(login.status).toBe(200);
+    expect(login.body.admin.pages).toEqual(['payouts']);
+
+    const me = await request(app).get('/admin/me').set(auth(login.body.token));
+    expect(login.body.admin.pages, 'login and /admin/me must never disagree').toEqual(me.body.pages);
+    expect(login.body.admin.name, 'name was dropped on the same line').toBe(me.body.name);
+  });
 });

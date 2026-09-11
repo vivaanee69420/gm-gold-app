@@ -16,3 +16,10 @@ apps/api/data/
 
 # Added by ggshield
 .cache_ggshield
+
+# Working task lists and audit notes — local only (decision 2026-09-11). Requirements and
+# anything else that outlives a working session belong in docs/, which stays tracked.
+todo.md
+TODOS.md
+tasks.md
+tasks-*.md

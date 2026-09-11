@@ -212,6 +212,10 @@ export function Hairline({ style }) {
   return <View style={[{ height: 1, backgroundColor: colors.mistFaint }, style]} />;
 }
 
+// Notice's slab geometry, shared with the empty-state spacer that has to match its height.
+const NOTICE_PAD_Y = space(2.5);
+const NOTICE_LINE = 19;
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.boardroom },
   screenInner: { flexGrow: 1, padding: space(5), paddingTop: space(20), alignItems: 'center' },
@@ -284,14 +288,18 @@ const styles = StyleSheet.create({
     borderLeftWidth: 2,
     borderLeftColor: colors.danger,
     borderRadius: 6,
-    paddingVertical: space(2.5),
+    paddingVertical: NOTICE_PAD_Y,
     paddingHorizontal: space(3),
     marginBottom: space(3),
   },
   noticeSuccess: { backgroundColor: 'rgba(127,176,105,0.12)', borderLeftColor: colors.success },
-  noticeText: { color: colors.danger, fontSize: 13, lineHeight: 19 },
-  // Reserved space so the button never jumps when a message appears.
-  noticeSpacer: { marginBottom: space(3) },
+  noticeText: { color: colors.danger, fontSize: 13, lineHeight: NOTICE_LINE },
+  // Reserved space so the button never jumps when a message appears. It has to reserve the
+  // filled notice's HEIGHT, not just its margin — with margin alone the button still moved
+  // the full slab height (~39px) the first time an error appeared, which is the exact jump
+  // this spacer exists to prevent. Derived from the same two tokens the slab uses so the two
+  // cannot drift apart; a message long enough to wrap will still shift, by one line.
+  noticeSpacer: { height: NOTICE_PAD_Y * 2 + NOTICE_LINE, marginBottom: space(3) },
   chip: {
     borderWidth: 1,
     borderColor: colors.mistFaint,
@@ -303,3 +311,8 @@ const styles = StyleSheet.create({
   seamTrack: { height: 2, backgroundColor: colors.mistFaint, borderRadius: 1, overflow: 'hidden' },
   seamFill: { height: 2, backgroundColor: colors.goldbright },
 });
+
+// Exposed only so a test can assert the invariant these styles carry between them: the empty
+// Notice spacer must reserve the same height the filled slab occupies, or the button below it
+// moves the first time an error appears. Screens should keep using the components above.
+export { styles as uiStyles };

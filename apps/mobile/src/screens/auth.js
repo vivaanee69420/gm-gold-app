@@ -231,7 +231,7 @@ const OTP_MIN_LENGTH = 6; // Supabase's floor — never gate the button above th
 const OTP_MAX_LENGTH = 10; // Supabase's ceiling
 
 export function VerifyScreen({ navigation }) {
-  const { verifyCode, pendingEmail, sendCode } = useAppState();
+  const { verifyCode, pendingEmail, pendingProfile, sendCode } = useAppState();
   const [code, setCode] = useState('');
   const [error, setError] = useState(null);
   // Only a rejected code reddens the code field. A failed RESEND is a mail-server problem —
@@ -252,7 +252,13 @@ export function VerifyScreen({ navigation }) {
     setError(null);
     setNotice(null);
     try {
-      await sendCode(pendingEmail);
+      // Carry the same intent as the send that got us to this screen: a sign-up is holding a
+      // pending profile, a sign-in is not. Calling sendCode bare made every resend look like
+      // a sign-in — shouldCreateUser silently false, and the name and phone dropped.
+      await sendCode(pendingEmail, {
+        createUser: Boolean(pendingProfile),
+        profile: pendingProfile,
+      });
       setCooldown(RESEND_COOLDOWN_SECONDS);
       setNotice('New code sent. Check your inbox.');
     } catch (err) {

@@ -136,10 +136,17 @@ export async function walletFor(userId) {
  * absorbing it would hide a real debt, and refusing to write it would leave the ledger claiming
  * the credit still stands.
  *
- * @returns the adjustment row, or null if already clawed back
+ * Pass `client` to run inside a transaction the caller already opened. Reversing a credit is
+ * almost always half of a pair — "mark it lost AND take the money back", "confirm the existing
+ * patient AND take the money back" — and a half-applied pair is the one state nobody can repair
+ * from the UI, because the status write is what makes the referral unreachable for a retry. The
+ * advisory lock is taken inside the caller's transaction in that case, so the reversal is still
+ * serialised against every other wallet mutation for this user.
+ *
+ * @returns the adjustment row, or null if already clawed back (or never credited)
  */
-export async function clawbackReferralCredit(referralId, reason) {
-  const { rows: credits } = await db.query(
+export async function clawbackReferralCredit(referralId, reason, client = null) {
+  const { rows: credits } = await (client ?? db).query(
     `select user_id, amount_pennies, practice_id from wallet_ledger
       where referral_id = $1 and kind = 'credit'`,
     [referralId],
@@ -149,23 +156,32 @@ export async function clawbackReferralCredit(referralId, reason) {
   const userId = credits[0].user_id;
   const total = credits.reduce((sum, c) => sum + c.amount_pennies, 0);
 
-  return withWalletLock(userId, async (client) => {
-    try {
-      const { rows } = await client.query(
-        `insert into wallet_ledger (user_id, kind, amount_pennies, referral_id, practice_id, idempotency_key, reason, created_by)
-         values ($1,'adjustment',$2,$3,$4,$5,$6,'system') returning *`,
-        [userId, -total, referralId, credits[0].practice_id, `clawback:${referralId}`, reason],
-      );
-      await logEvent(client, {
-        actorKind: 'system', entityType: 'wallet', entityId: userId,
-        action: 'credit_clawed_back', toValue: String(-total), reason,
-      });
-      return rows[0];
-    } catch (err) {
-      if (err.code === '23505') return null; // already reversed
-      throw err;
-    }
-  });
+  const write = async (c) => {
+    // `on conflict do nothing` rather than catching the unique violation: inside a caller's
+    // transaction a raised 23505 aborts the WHOLE transaction, so catching it here would
+    // silently discard the caller's writes too. Zero rows back means already reversed.
+    const { rows } = await c.query(
+      `insert into wallet_ledger (user_id, kind, amount_pennies, referral_id, practice_id, idempotency_key, reason, created_by)
+       values ($1,'adjustment',$2,$3,$4,$5,$6,'system')
+       on conflict (idempotency_key) do nothing
+       returning *`,
+      [userId, -total, referralId, credits[0].practice_id, `clawback:${referralId}`, reason],
+    );
+    if (!rows[0]) return null; // already reversed
+    await logEvent(c, {
+      actorKind: 'system', entityType: 'wallet', entityId: userId,
+      action: 'credit_clawed_back', toValue: String(-total), reason,
+    });
+    return rows[0];
+  };
+
+  if (client) {
+    // Re-entrant for the same user: if the caller already holds this lock (withWalletLock),
+    // taking it again within the same transaction is a no-op that releases on commit.
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [String(userId)]);
+    return write(client);
+  }
+  return withWalletLock(userId, write);
 }
 
 export async function requestPayout(userId, practiceId) {

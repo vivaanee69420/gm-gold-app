@@ -2,9 +2,9 @@
 // privileged completion (which credits in the same flow), fraud rules.
 import { normalizePhone } from '@gm-referral/shared/phone';
 import { missingTreatmentDetails } from '@gm-referral/shared/schemas';
-import { db, logEvent, withTransaction } from '../db.js';
+import { db, logEvent, withTransaction, withWalletLock } from '../db.js';
 import { config } from '../config.js';
-import { creditReferral } from './walletService.js';
+import { clawbackReferralCredit, creditReferral } from './walletService.js';
 
 export const STATUS_ORDER = ['new', 'contacted', 'booked', 'attended', 'treatment_agreed', 'treatment_started', 'treatment_completed'];
 
@@ -110,6 +110,29 @@ export async function updateStatus({ referralId, status, lostReason, actorId, ac
     if (missing.length) {
       throw Object.assign(new Error('treatment_details_required'), { status: 422, missing });
     }
+  }
+
+  // Losing a referral has to take back any money it already released. The credit fires at
+  // treatment_started and `lost` is reachable from EVERY stage (the transition checks above
+  // exempt it), so "credited, then lost" is an ordinary move on the pipeline board rather than
+  // a corner case — and nothing else reverses it: clawbackRefunded (dentally/syncService.js)
+  // only considers referrals with a confirmed completion_proposal, which a hand-progressed
+  // referral never has.
+  //
+  // Both writes go in ONE transaction deliberately. A half-applied pair is unrecoverable: once
+  // the status is 'lost', the `from === 'lost'` guard above 409s every retry, so a reversal
+  // that failed after the status landed could never be reattempted from the UI.
+  if (status === 'lost') {
+    const reversal = await withWalletLock(referral.referrer_id, async (client) => {
+      await client.query(`update referrals set status='lost', lost_reason=$2 where id=$1`, [referralId, lostReason]);
+      await logEvent(client, {
+        actorId, actorKind, entityType: 'referral', entityId: referralId, action: 'status_changed',
+        fromValue: from, toValue: 'lost', reason: lostReason,
+      });
+      // null in the common case — lost before treatment_started ever paid anything out.
+      return clawbackReferralCredit(referralId, `referral marked lost — ${lostReason}`, client);
+    });
+    return { from, to: 'lost', credit: null, reversal };
   }
 
   await db.query(`update referrals set status=$2, lost_reason=$3 where id=$1`, [referralId, status, lostReason ?? null]);

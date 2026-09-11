@@ -43,9 +43,13 @@ const CSS = `
     outline: none;
   }
 
-  /* The 6-digit code field: centred, tracked out like the serial on the card. */
+  /* The 6-digit code field: centred, tracked out like the serial on the card.
+     Both spinner pseudo-elements have to be named explicitly. There is no
+     ::-webkit-inputmode-spin-button — that typo made the whole selector list invalid, and CSS
+     drops an entire rule when any selector in it fails to parse, so the valid outer-spin-button
+     reset went with it and the spinners stayed. */
   input[inputmode="numeric"]::-webkit-outer-spin-button,
-  input[inputmode="numeric"]::-webkit-inputmode-spin-button {
+  input[inputmode="numeric"]::-webkit-inner-spin-button {
     -webkit-appearance: none;
     margin: 0;
   }

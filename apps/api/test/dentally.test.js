@@ -742,6 +742,30 @@ describe('FIX 4: a manager marking Booked by hand is confirmed by reality, not s
     expect(events).toHaveLength(1);
     expect(events[0].from_value).toBe(formPractice.id);
     expect(events[0].to_value).toBe(bookedPractice.id);
+
+    // ...but adopting the appointment is the SAME booking catching up, not a second one. The
+    // referrer already got friend_booked when the manager moved the card; sending it again on
+    // adoption is a duplicate email, and a booked -> booked row is a transition that never
+    // happened. Both used to fire because a null appointment id made this look brand new.
+    const { rows: [{ referrer_id: referrerId }] } = await db.query(
+      `select referrer_id from referrals where id=$1`, [referralId],
+    );
+    const { rows: [notices] } = await db.query(
+      `select count(*)::int as n from notification_outbox
+        where recipient_id = $1 and template = 'friend_booked'`,
+      [referrerId],
+    );
+    expect(notices.n, 'one booking, one friend_booked').toBe(1);
+
+    const { rows: statusEvents } = await db.query(
+      `select from_value, to_value from events
+        where entity_type = 'referral' and entity_id = $1 and action = 'status_changed'`,
+      [referralId],
+    );
+    expect(
+      statusEvents.filter((e) => e.from_value === 'booked' && e.to_value === 'booked'),
+      'booked -> booked is not a transition',
+    ).toHaveLength(0);
   });
 });
 

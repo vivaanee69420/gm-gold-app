@@ -280,7 +280,16 @@ async function processBookedPage(client, appointments) {
     if (!patient?.phone && !patient?.email) continue;
     for (const referral of referrals.filter((r) => matchesPatient(r, patient))) {
       const fromStatus = referral.status;
-      const isNewBooking = fromStatus !== 'booked' || !referral.appointment_dentally_id;
+      const alreadyBooked = fromStatus === 'booked';
+      // FIX 4, unchanged: a referral a manager marked Booked by hand carries no
+      // appointment_dentally_id, and the poller must still ADOPT the real appointment — store
+      // the id, re-attribute the practice to where they actually booked — rather than skip it
+      // as "already booked". That adoption is real sync work and still counts.
+      const isNewBooking = !alreadyBooked || !referral.appointment_dentally_id;
+      // But only a referral that was NOT already sitting at Booked is news to the REFERRER.
+      // The dashboard already queued friend_booked when the manager moved it, so announcing
+      // the adoption sends a second identical email and logs a booked -> booked transition.
+      const announce = !alreadyBooked;
       // Already booked WITH a stored appointment: only refresh the time for the SAME
       // appointment (a reschedule). A null appointment_dentally_id means isNewBooking is
       // already true above, so this guard never fires for it.
@@ -301,11 +310,13 @@ async function processBookedPage(client, appointments) {
       booked += 1;
       referral.status = 'booked';
       referral.appointment_dentally_id = `appointment-${appointment.id}`;
-      await logEvent(db, {
-        actorKind: 'system',
-        entityType: 'referral', entityId: referral.id, action: 'status_changed',
-        fromValue: fromStatus, toValue: 'booked', reason: `dentally appointment-${appointment.id}`,
-      });
+      if (announce) {
+        await logEvent(db, {
+          actorKind: 'system',
+          entityType: 'referral', entityId: referral.id, action: 'status_changed',
+          fromValue: fromStatus, toValue: 'booked', reason: `dentally appointment-${appointment.id}`,
+        });
+      }
       if (bookedPracticeId && bookedPracticeId !== previousOwner) {
         await logEvent(db, {
           actorKind: 'system',
@@ -318,11 +329,13 @@ async function processBookedPage(client, appointments) {
         });
       }
       referral.booked_practice_id = bookedPracticeId ?? referral.booked_practice_id;
-      await db.query(
-        `insert into notification_outbox (recipient_kind, recipient_id, template, payload)
-         values ('user',$1,'friend_booked',$2)`,
-        [referral.referrer_id, JSON.stringify({ friendName: referral.referred_name.split(' ')[0] })],
-      );
+      if (announce) {
+        await db.query(
+          `insert into notification_outbox (recipient_kind, recipient_id, template, payload)
+           values ('user',$1,'friend_booked',$2)`,
+          [referral.referrer_id, JSON.stringify({ friendName: referral.referred_name.split(' ')[0] })],
+        );
+      }
     }
   }
   return booked;

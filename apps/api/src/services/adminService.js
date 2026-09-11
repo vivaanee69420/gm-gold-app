@@ -238,7 +238,19 @@ export async function authenticate(email, password, { ip = null } = {}) {
   // an attacker "launder" a shared IP's budget while still guessing at other accounts on it.
   await db.query(`update admin_users set last_login_at = now() where id = $1`, [row.id]);
 
-  const admin = { id: row.id, email: row.email, role: row.role, practiceIds: normalizePracticeIds(row.practice_ids) };
+  // `name` and `pages` have to be on this object, not just the columns behind it: publicAdmin
+  // reads `row.pages` and normalizePages treats undefined as "unset", which for a manager means
+  // "grant everything". Omitting them made /auth/admin/login answer with all three pages for
+  // every manager while /admin/me (which goes through loadAdminForToken, carrying the real
+  // column) answered with their actual grant — two contradictory answers to the same question.
+  const admin = {
+    id: row.id,
+    email: row.email,
+    name: row.name ?? null,
+    role: row.role,
+    practiceIds: normalizePracticeIds(row.practice_ids),
+    pages: normalizePages(row.pages, row.role),
+  };
   const token = issueAdminToken(admin);
   const practices = await practicesForAdmin(admin);
   return { token, admin: publicAdmin(admin, practices) };

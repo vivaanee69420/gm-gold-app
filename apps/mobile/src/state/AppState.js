@@ -23,12 +23,25 @@ const initial = {
   authError: null,
 };
 
-function reducer(state, action) {
+// Exported for tests. The 'code-sent' case carries a rule that is easy to break by accident
+// and expensive when broken (it holds a half-finished sign-up), so it is worth asserting
+// directly rather than only through a rendered screen.
+export function reducer(state, action) {
   switch (action.type) {
     case 'booted':
       return { ...state, booted: true, user: action.user ?? null };
     case 'code-sent':
-      return { ...state, pendingEmail: action.email, pendingProfile: action.profile ?? null, authError: null };
+      return {
+        ...state,
+        pendingEmail: action.email,
+        // A resend for the SAME address must not discard a sign-up already in progress.
+        // Defaulting straight to null meant any caller that omitted `profile` silently threw
+        // away the name and phone the user had just typed, sending them back to Profile to
+        // enter them again. A code sent to a DIFFERENT address is a different sign-up, so
+        // that case still clears.
+        pendingProfile: action.profile ?? (action.email === state.pendingEmail ? state.pendingProfile : null),
+        authError: null,
+      };
     case 'signed-in':
       return { ...state, user: action.user, pendingEmail: null, pendingProfile: null, authError: null };
     case 'user-updated':

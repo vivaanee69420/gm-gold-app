@@ -13,7 +13,7 @@ import {
   referralNoteSchema,
   treatmentDetailsSchema,
 } from '@gm-referral/shared/schemas';
-import { db, logEvent } from './db.js';
+import { db, logEvent, withTransaction } from './db.js';
 import {
   saveProfile,
   pickRole,
@@ -630,10 +630,6 @@ export function buildApp() {
       await db.query(`update referrals set review_status='cleared' where id=$1`, [req.params.id]);
     } else {
       // Confirmed existing patient: lost, never creditable (FR-25).
-      await db.query(
-        `update referrals set status='lost', lost_reason='existing_patient' where id=$1`,
-        [req.params.id],
-      );
       // The manager path can credit BEFORE this review resolves (a credit fires at
       // treatment_started, which flagExistingPatients does not exclude — only 'lost' and
       // 'treatment_completed' are excluded from the candidate scan). If that happened here,
@@ -641,10 +637,21 @@ export function buildApp() {
       // failure FR-11 exists to prevent — so the commission must not stand. Reuse
       // clawbackReferralCredit (walletService.js) rather than a second reversal path: same
       // append-only adjustment, same idempotency key, same "never double-reverse" guarantee.
-      await clawbackReferralCredit(
-        req.params.id,
-        'commission reversed — referred person confirmed as an existing patient',
-      );
+      //
+      // Both writes in ONE transaction: committing the status first and then clawing back left
+      // a failed clawback unrepairable, because the status is already 'lost' and the
+      // `status === 'lost'` guard above 409s ('not_in_review') on every retry.
+      await withTransaction(async (client) => {
+        await client.query(
+          `update referrals set status='lost', lost_reason='existing_patient' where id=$1`,
+          [req.params.id],
+        );
+        await clawbackReferralCredit(
+          req.params.id,
+          'commission reversed — referred person confirmed as an existing patient',
+          client,
+        );
+      });
     }
     await logEvent(db, {
       actorId: req.admin.id, actorKind: 'admin', entityType: 'referral', entityId: req.params.id,

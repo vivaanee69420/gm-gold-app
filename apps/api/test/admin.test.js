@@ -462,3 +462,106 @@ describe('reports understand treatment_started', () => {
     expect(after, 'a started treatment has converted — the funnel must not drop it').toBe(before + 1);
   });
 });
+
+// Uses its own referrer rather than Sarah so the credited-amount aggregates asserted by the
+// top-referrers and funnel suites above stay untouched.
+describe('losing a referral reverses money it already released', () => {
+  // A fresh referrer + friend, walked to whatever stage the caller asks for.
+  async function credited(referrerPhone, friendPhone, friendName) {
+    const referrer = await signIn(referrerPhone);
+    await request(app).post('/me/role').set(auth(referrer.token)).send({ role: 'referrer' });
+    const code = (await request(app).get('/me').set(auth(referrer.token))).body.user.referralCode;
+
+    const friend = await signIn(friendPhone);
+    await request(app).post('/me/role').set(auth(friend.token)).send({ role: 'referred' });
+    const sub = await request(app).post('/referrals').set(auth(friend.token)).send({
+      code,
+      fullName: friendName,
+      treatmentInterest: 'implants',
+      preferredPracticeId: agents.practiceId,
+      consent: true,
+      consentVersion: 'referred-v1-2026-08',
+    });
+    expect(sub.status).toBe(200);
+
+    const balance = async () => (await request(app).get('/wallet').set(auth(referrer.token))).body.wallet.balancePennies;
+    return { referralId: sub.body.referral.id, referrer, balance };
+  }
+
+  it('claws the commission back when a credited referral is marked lost', async () => {
+    const { referralId, balance } = await credited('07700 900830', '07700 900831', 'Nina Lost');
+
+    await recordTreatment(app, agents.admin, referralId);
+    const started = await request(app)
+      .patch(`/admin/referrals/${referralId}/status`)
+      .set(auth(agents.admin))
+      .send({ status: 'treatment_started' });
+    expect(started.status).toBe(200);
+    expect(started.body.credit, 'sanity check — this referral must actually be credited').toBeTruthy();
+
+    const paid = await balance();
+    expect(paid).toBeGreaterThan(0);
+
+    // The move the pipeline board offers, and the one that used to leave the money behind.
+    const lost = await request(app)
+      .patch(`/admin/referrals/${referralId}/status`)
+      .set(auth(agents.admin))
+      .send({ status: 'lost', lostReason: 'changed their mind' });
+    expect(lost.status).toBe(200);
+    expect(lost.body.reversal, 'a credited referral going to lost must reverse the credit').toBeTruthy();
+
+    expect(await balance()).toBe(0);
+
+    const { rows: ledger } = await db.query(
+      `select kind, amount_pennies from wallet_ledger where referral_id=$1 order by created_at`, [referralId]);
+    expect(ledger.map((l) => l.kind)).toEqual(['credit', 'adjustment']);
+    expect(ledger[1].amount_pennies).toBe(-ledger[0].amount_pennies);
+  });
+
+  it('writes the status and the reversal together, or not at all', async () => {
+    const { referralId } = await credited('07700 900832', '07700 900833', 'Omar Lost');
+
+    await recordTreatment(app, agents.admin, referralId);
+    await request(app).patch(`/admin/referrals/${referralId}/status`)
+      .set(auth(agents.admin)).send({ status: 'treatment_started' });
+    await request(app).patch(`/admin/referrals/${referralId}/status`)
+      .set(auth(agents.admin)).send({ status: 'lost', lostReason: 'moved abroad' });
+
+    // 'lost' is terminal — there is no second attempt at this, which is exactly why the pair
+    // has to be atomic. Both halves must be on record after the one shot.
+    const { rows: [referral] } = await db.query(`select status, lost_reason from referrals where id=$1`, [referralId]);
+    expect(referral.status).toBe('lost');
+    expect(referral.lost_reason).toBe('moved abroad');
+
+    const { rows: [{ balance }] } = await db.query(
+      `select coalesce(sum(amount_pennies),0)::int as balance from wallet_ledger where referral_id=$1`, [referralId]);
+    expect(balance, 'credit and clawback must net to zero').toBe(0);
+
+    const { rows: events } = await db.query(
+      `select action from events where entity_id=$1::text and action='status_changed'`, [referralId]);
+    expect(events.length, 'the status change must be audited inside the same transaction').toBeGreaterThan(0);
+  });
+
+  it('leaves nothing behind when a referral is lost before it was ever credited', async () => {
+    const { referralId } = await credited('07700 900834', '07700 900835', 'Pia Early');
+
+    const lost = await request(app)
+      .patch(`/admin/referrals/${referralId}/status`)
+      .set(auth(agents.admin))
+      .send({ status: 'lost', lostReason: 'never responded' });
+    expect(lost.status).toBe(200);
+    expect(lost.body.reversal, 'nothing was paid, so there is nothing to reverse').toBeNull();
+
+    const { rows: ledger } = await db.query(`select kind from wallet_ledger where referral_id=$1`, [referralId]);
+    expect(ledger).toEqual([]);
+  });
+
+  it('still refuses a lost transition with no reason', async () => {
+    const { referralId } = await credited('07700 900836', '07700 900837', 'Raj Noreason');
+    const res = await request(app)
+      .patch(`/admin/referrals/${referralId}/status`)
+      .set(auth(agents.admin))
+      .send({ status: 'lost' });
+    expect(res.status).toBe(422);
+  });
+});
