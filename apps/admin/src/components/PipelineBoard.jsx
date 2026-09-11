@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { REFERRAL_STATUSES } from '@gm-referral/shared/schemas';
+import { BOARD_STAGES, REFERRAL_STATUSES } from '@gm-referral/shared/schemas';
 import { api } from '../api/client.js';
 import { missingTreatmentDetails } from '@gm-referral/shared/schemas';
 import ReferralModal from './ReferralModal.jsx';
@@ -229,7 +229,11 @@ export default function PipelineBoard({ referrals, onMoved, onCardEdited, onChan
   return (
     <div className="board-layout">
       <div className="board">
-      {REFERRAL_STATUSES.map((status) => {
+      {/* BOARD_STAGES, not every status: a referral waits at 'new' until the Dentally sync
+          confirms a real appointment, so the board starts at Booked and 'contacted' — which
+          sits behind it — has no column. The waiting population is listed on Operations.
+          STATUS_ORDER below still spans the full ladder, because the API's adjacency rules do. */}
+      {BOARD_STAGES.map((status) => {
         const group = referrals.filter((r) => statusOf(r) === status);
         return (
           <section

@@ -16,6 +16,29 @@ export const REFERRAL_STATUSES = [
   'lost',
 ];
 
+// A referral is created at 'new' the moment the friend submits the form — which happens when
+// they pick a practice, BEFORE they have booked anything. Dentally is the authority on whether
+// an appointment exists, so a referral waits at 'new', off the pipeline board, until the sync
+// (dentally/syncService.js processBookedPage) matches it and moves it to 'booked'. That is the
+// point it becomes real work for a practice, and it is where it joins the board.
+//
+// 'contacted' sits behind 'booked' on the ladder, so nothing can ever be in it once leads enter
+// at 'booked'. It stays in REFERRAL_STATUSES because the API's transition rules and every
+// historical row still reference it — it is simply not a column any more.
+//
+// The cost of this, worth knowing: processBookedPage matches on EXACT phone equality or
+// lowercased email. A friend who books with a different number than they gave, or whose phone
+// was mistyped, never matches and so never reaches the board. They are not lost — they are
+// listed under "Waiting on booking" on Operations, which exists precisely so that population
+// is visible rather than silently dropped.
+export const PRE_BOARD_STATUSES = ['new', 'contacted'];
+
+/** The stages the pipeline board draws as columns. */
+export const BOARD_STAGES = REFERRAL_STATUSES.filter((s) => !PRE_BOARD_STATUSES.includes(s));
+
+/** True for a referral still waiting on Dentally to confirm an appointment. */
+export const isWaitingOnBooking = (status) => PRE_BOARD_STATUSES.includes(status);
+
 /** Free-typed phone -> E.164, failing validation when not normalizable. */
 export const phoneSchema = z
   .string()

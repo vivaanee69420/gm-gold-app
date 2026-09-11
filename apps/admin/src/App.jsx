@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { MANAGER_PAGES } from '@gm-referral/shared/schemas';
+import { MANAGER_PAGES, isWaitingOnBooking } from '@gm-referral/shared/schemas';
 import { api, onUnauthorized } from './api/client.js';
 import { isSignedIn, signOut } from './api/auth.js';
 import { errorMessage } from './copy.js';
@@ -25,7 +25,9 @@ const PAGES = [
     icon: 'pipeline',
     roles: ['admin', 'manager'],
     blurb: 'Move each referred patient along as their treatment progresses. Treatment started credits the referrer.',
-    count: (d) => d.referrals?.length,
+    // Only what the board actually draws. Counting every referral made the header read
+    // "Pipeline 1" over an empty board whenever a lead was still waiting on its appointment.
+    count: (d) => d.referrals?.filter((r) => !isWaitingOnBooking(r.status)).length,
   },
   {
     path: '/patients',

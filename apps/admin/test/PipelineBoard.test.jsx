@@ -5,10 +5,15 @@ import PipelineBoard from '../src/components/PipelineBoard.jsx';
 import { clearToken, setToken } from '../src/api/client.js';
 import { stubFetchRoutes } from './helpers.js';
 
+// The board starts at Booked: a referral waits at 'new' until the Dentally sync confirms a real
+// appointment (see BOARD_STAGES in shared/schemas.js), so no fixture here may sit at 'new' or
+// 'contacted' and expect to be rendered. `waiting` below is the case that must NOT appear.
 const referrals = [
-  { id: 'r1', referred_name: 'Jane Smith', referred_phone: '+447700900456', status: 'new', treatment_interest: 'implants', practice: 'Sidcup', referrer: 'Sarah Lewis' },
-  { id: 'r2', referred_name: 'Tom Hall', referred_phone: '+447700900789', status: 'booked', treatment_interest: 'aligners', practice: 'Bexley', referrer: 'Sarah Lewis' },
+  { id: 'r1', referred_name: 'Jane Smith', referred_phone: '+447700900456', status: 'booked', treatment_interest: 'implants', practice: 'Sidcup', referrer: 'Sarah Lewis' },
+  { id: 'r2', referred_name: 'Tom Hall', referred_phone: '+447700900789', status: 'attended', treatment_interest: 'aligners', practice: 'Bexley', referrer: 'Sarah Lewis' },
 ];
+
+const waiting = { id: 'rw', referred_name: 'Wendy Waiting', referred_phone: '+447700900999', status: 'new', treatment_interest: 'implants', practice: 'Sidcup', referrer: 'Sarah Lewis' };
 
 beforeEach(() => {
   clearToken();
@@ -26,14 +31,14 @@ describe('PipelineBoard', () => {
     expect(screen.getByText('Jane Smith')).toBeInTheDocument();
     expect(screen.getByText('Tom Hall')).toBeInTheDocument();
 
-    await userEvent.selectOptions(screen.getByLabelText(/status for jane smith/i), 'contacted');
+    await userEvent.selectOptions(screen.getByLabelText(/status for jane smith/i), 'attended');
 
     expect(calls).toEqual([
-      { method: 'PATCH', path: '/admin/referrals/r1/status', body: { status: 'contacted' } },
+      { method: 'PATCH', path: '/admin/referrals/r1/status', body: { status: 'attended' } },
     ]);
     // One row moved, so one row is patched. Reloading the whole dashboard here cost eleven
     // requests against a remote database and left the board waiting on the slowest of them.
-    await vi.waitFor(() => expect(onMoved).toHaveBeenCalledWith('r1', 'contacted'));
+    await vi.waitFor(() => expect(onMoved).toHaveBeenCalledWith('r1', 'attended'));
     expect(onChanged, 'an ordinary move must not trigger a full dashboard reload').not.toHaveBeenCalled();
   });
 
@@ -61,10 +66,11 @@ describe('PipelineBoard', () => {
     const options = (name) =>
       [...screen.getByLabelText(new RegExp(`status for ${name}`, 'i')).options].map((o) => o.value);
 
-    // Jane is New: Contacted next, the two crediting stages, and Lost — never a step backwards.
-    expect(options('jane smith')).toEqual(['new', 'contacted', 'treatment_started', 'treatment_completed', 'lost']);
-    // Tom is Booked, so New and Contacted are behind him and must not be offered.
-    expect(options('tom hall')).toEqual(['booked', 'attended', 'treatment_started', 'treatment_completed', 'lost']);
+    // Jane is Booked: Attended next, the two crediting stages, and Lost — never a step
+    // backwards, so New and Contacted are not offered even though they exist as statuses.
+    expect(options('jane smith')).toEqual(['booked', 'attended', 'treatment_started', 'treatment_completed', 'lost']);
+    // Tom is one stage further on, so Booked is behind him and must not be offered either.
+    expect(options('tom hall')).toEqual(['attended', 'treatment_agreed', 'treatment_started', 'treatment_completed', 'lost']);
   });
 
   it('shows no move control at all on a card that has nowhere left to go', async () => {
@@ -169,13 +175,36 @@ describe('PipelineBoard', () => {
     expect(within(column).getByText('Bo Barnet')).toBeInTheDocument();
   });
 
-  it('renders a column for every stage even when empty', async () => {
+  it('renders a column for every board stage even when empty', async () => {
     render(<PipelineBoard referrals={referrals} onChanged={vi.fn()} notify={vi.fn()} />);
-    // 'new' and 'booked' are occupied by the fixture referrals; the rest have nobody in them
-    // yet, and must still show up as columns rather than being skipped.
-    for (const label of ['Contacted', 'Attended', 'Treatment agreed', 'Treatment started', 'Completed', 'Lost']) {
+    // 'booked' and 'attended' are occupied by the fixture referrals; the rest have nobody in
+    // them yet, and must still show up as columns rather than being skipped.
+    for (const label of ['Booked', 'Attended', 'Treatment agreed', 'Treatment started', 'Completed', 'Lost']) {
       expect(screen.getByRole('heading', { name: new RegExp(label, 'i') })).toBeInTheDocument();
     }
+  });
+
+  it('draws no column for the stages that sit before a confirmed booking', async () => {
+    // The board begins at Booked. Leaving New and Contacted on screen would promise a place to
+    // put a lead that the pipeline no longer accepts one into.
+    const { container } = render(<PipelineBoard referrals={referrals} onChanged={vi.fn()} notify={vi.fn()} />);
+    expect(container.querySelector('[data-stage="new"]')).toBeNull();
+    expect(container.querySelector('[data-stage="contacted"]')).toBeNull();
+    expect(screen.queryByRole('heading', { name: /^new/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /^contacted/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps a referral off the board until its appointment is confirmed', async () => {
+    // Wendy submitted the form — which happens when she picks a practice, before she has
+    // booked anything. Dentally has not matched her yet, so she is not work for a practice and
+    // must not appear. The sync moves her to Booked when the appointment shows up.
+    render(<PipelineBoard referrals={[...referrals, waiting]} onChanged={vi.fn()} notify={vi.fn()} />);
+
+    expect(screen.queryByText('Wendy Waiting')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/status for wendy waiting/i)).not.toBeInTheDocument();
+    // The confirmed ones are unaffected.
+    expect(screen.getByText('Jane Smith')).toBeInTheDocument();
+    expect(screen.getByText('Tom Hall')).toBeInTheDocument();
   });
 
   it('moves a card immediately, before the request resolves', async () => {
@@ -185,18 +214,18 @@ describe('PipelineBoard', () => {
     vi.stubGlobal('fetch', vi.fn(() => new Promise((resolve) => { resolveFetch = resolve; })));
     render(<PipelineBoard referrals={referrals} onChanged={vi.fn()} notify={vi.fn()} />);
 
-    await userEvent.selectOptions(screen.getByLabelText(/status for jane smith/i), 'contacted');
+    await userEvent.selectOptions(screen.getByLabelText(/status for jane smith/i), 'attended');
 
-    const contactedGroup = screen.getByRole('heading', { name: /^contacted/i }).closest('.board-col');
-    const newGroup = screen.getByRole('heading', { name: /^new/i }).closest('.board-col');
-    // The card is under Contacted right away — the request is still pending.
-    expect(contactedGroup).toHaveTextContent('Jane Smith');
-    expect(newGroup).not.toHaveTextContent('Jane Smith');
+    const attendedGroup = screen.getByRole('heading', { name: /^attended/i }).closest('.board-col');
+    const bookedGroup = screen.getByRole('heading', { name: /^booked/i }).closest('.board-col');
+    // The card is under Attended right away — the request is still pending.
+    expect(attendedGroup).toHaveTextContent('Jane Smith');
+    expect(bookedGroup).not.toHaveTextContent('Jane Smith');
 
-    // Resolving success leaves it there — no flicker back to New while fresh data is refetched.
+    // Resolving success leaves it there — no flicker back to Booked while data is refetched.
     resolveFetch(new Response(JSON.stringify({ ok: true }), { status: 200 }));
-    await vi.waitFor(() => expect(contactedGroup).toHaveTextContent('Jane Smith'));
-    expect(newGroup).not.toHaveTextContent('Jane Smith');
+    await vi.waitFor(() => expect(attendedGroup).toHaveTextContent('Jane Smith'));
+    expect(bookedGroup).not.toHaveTextContent('Jane Smith');
   });
 
   it('rolls a card back to its original column on failure, with a toast explaining why', async () => {
@@ -206,41 +235,41 @@ describe('PipelineBoard', () => {
     const notify = vi.fn();
     render(<PipelineBoard referrals={referrals} onChanged={vi.fn()} notify={notify} />);
 
-    await userEvent.selectOptions(screen.getByLabelText(/status for jane smith/i), 'contacted');
+    await userEvent.selectOptions(screen.getByLabelText(/status for jane smith/i), 'attended');
 
-    // The request fails, so the card returns to New and the failure is explained with copy for
-    // this screen, not the account-scoped "not_found" message reused elsewhere in the app.
+    // The request fails, so the card returns to Booked and the failure is explained with copy
+    // for this screen, not the account-scoped "not_found" message reused elsewhere in the app.
     await vi.waitFor(() => expect(notify).toHaveBeenCalledWith('referral_not_found'));
-    const newGroup = screen.getByRole('heading', { name: /^new/i }).closest('.board-col');
-    const contactedGroup = screen.getByRole('heading', { name: /^contacted/i }).closest('.board-col');
-    expect(newGroup).toHaveTextContent('Jane Smith');
-    expect(contactedGroup).not.toHaveTextContent('Jane Smith');
+    const bookedGroup = screen.getByRole('heading', { name: /^booked/i }).closest('.board-col');
+    const attendedGroup = screen.getByRole('heading', { name: /^attended/i }).closest('.board-col');
+    expect(within(bookedGroup).getByText('Jane Smith')).toBeInTheDocument();
+    expect(attendedGroup).not.toHaveTextContent('Jane Smith');
   });
 
   it('drops a stale optimistic override once fresh data disagrees with it', async () => {
     const calls = stubFetchRoutes([{ method: 'PATCH', path: '/admin/referrals/r1/status' }]);
     const { rerender } = render(<PipelineBoard referrals={referrals} onChanged={vi.fn()} notify={vi.fn()} />);
 
-    await userEvent.selectOptions(screen.getByLabelText(/status for jane smith/i), 'contacted');
+    await userEvent.selectOptions(screen.getByLabelText(/status for jane smith/i), 'attended');
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
-    const contactedGroup = () => screen.getByRole('heading', { name: /^contacted/i }).closest('.board-col');
-    expect(contactedGroup()).toHaveTextContent('Jane Smith');
+    const attendedGroup = () => screen.getByRole('heading', { name: /^attended/i }).closest('.board-col');
+    expect(attendedGroup()).toHaveTextContent('Jane Smith');
 
-    // A colleague (or the Dentally sync) has since moved this same referral on to Booked. The
-    // next poll (App.jsx refetches every 30s) hands the board fresh props saying so.
-    const movedByColleague = referrals.map((r) => (r.id === 'r1' ? { ...r, status: 'booked' } : r));
+    // A colleague has since moved this same referral further on, to Treatment agreed. The next
+    // poll (App.jsx refetches every 30s) hands the board fresh props saying so.
+    const movedByColleague = referrals.map((r) => (r.id === 'r1' ? { ...r, status: 'treatment_agreed' } : r));
     rerender(<PipelineBoard referrals={movedByColleague} onChanged={vi.fn()} notify={vi.fn()} />);
 
-    const bookedGroup = () => screen.getByRole('heading', { name: /^booked/i }).closest('.board-col');
-    await vi.waitFor(() => expect(within(bookedGroup()).getByText('Jane Smith')).toBeInTheDocument());
-    expect(contactedGroup()).not.toHaveTextContent('Jane Smith');
+    const agreedGroup = () => screen.getByRole('heading', { name: /^treatment agreed/i }).closest('.board-col');
+    await vi.waitFor(() => expect(within(agreedGroup()).getByText('Jane Smith')).toBeInTheDocument());
+    expect(attendedGroup()).not.toHaveTextContent('Jane Smith');
   });
 
   it('does not let a stale failed request roll back a newer successful move', async () => {
-    // Two in-flight PATCHes for the same card: the first (New -> Contacted) hangs, the second
-    // (Contacted -> Booked, fired once the confirm-lost/credit gates are out of the way) resolves
-    // first and succeeds. When the first one finally rejects, it must not undo the second.
+    // Two in-flight PATCHes for the same card: the first (Booked -> Attended) hangs, the second
+    // (Attended -> Treatment agreed, fired once the confirm-lost/credit gates are out of the
+    // way) resolves first and succeeds. When the first finally rejects, it must not undo it.
     let rejectFirst;
     let resolveSecond;
     let call = 0;
@@ -251,19 +280,19 @@ describe('PipelineBoard', () => {
     }));
     render(<PipelineBoard referrals={referrals} onChanged={vi.fn()} notify={vi.fn()} />);
 
-    await userEvent.selectOptions(screen.getByLabelText(/status for jane smith/i), 'contacted');
-    await userEvent.selectOptions(screen.getByLabelText(/status for jane smith/i), 'booked');
+    await userEvent.selectOptions(screen.getByLabelText(/status for jane smith/i), 'attended');
+    await userEvent.selectOptions(screen.getByLabelText(/status for jane smith/i), 'treatment_agreed');
 
-    const bookedGroup = () => screen.getByRole('heading', { name: /^booked/i }).closest('.board-col');
-    expect(within(bookedGroup()).getByText('Jane Smith')).toBeInTheDocument();
+    const agreedGroup = () => screen.getByRole('heading', { name: /^treatment agreed/i }).closest('.board-col');
+    expect(within(agreedGroup()).getByText('Jane Smith')).toBeInTheDocument();
 
     resolveSecond(new Response(JSON.stringify({ ok: true }), { status: 200 }));
-    await vi.waitFor(() => expect(within(bookedGroup()).getByText('Jane Smith')).toBeInTheDocument());
+    await vi.waitFor(() => expect(within(agreedGroup()).getByText('Jane Smith')).toBeInTheDocument());
 
     rejectFirst(Object.assign(new Error('stale'), { code: 'invalid_transition' }));
     // Give the rejected promise's catch a turn to (not) run.
     await new Promise((r) => setTimeout(r, 0));
-    expect(within(bookedGroup()).getByText('Jane Smith')).toBeInTheDocument();
+    expect(within(agreedGroup()).getByText('Jane Smith')).toBeInTheDocument();
   });
 });
 
