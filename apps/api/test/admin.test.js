@@ -638,4 +638,35 @@ describe('/referrals/mine explains an existing-patient closure', () => {
     const row = (await mine()).find((r) => r.id === referralId);
     expect(row.closedReason).toBeUndefined();
   });
+
+  it('reports booking_window_expired when the claim lapsed', async () => {
+    // The sweep closes a referral that never booked inside the window, which also releases
+    // that friend's phone for anyone else to refer. The referrer is owed that explanation:
+    // it is the one closure where the useful next step is "refer them again".
+    const { referralId, mine } = await referralFrom('07700 900848', '07700 900849', 'Mia Lapsed');
+
+    // Age it past the window, then let the sweep run. referredStatusFor calls it, as does the
+    // sync — this goes through the real function rather than writing 'lost' by hand.
+    await db.query(`update referrals set created_at = now() - interval '400 hours' where id=$1`, [referralId]);
+    const { expireUnbookedReferrals } = await import('../src/services/referralService.js');
+    expect(await expireUnbookedReferrals()).toBeGreaterThan(0);
+
+    const row = (await mine()).find((r) => r.id === referralId);
+    expect(row.status).toBe('lost');
+    expect(row.closedReason).toBe('booking_window_expired');
+  });
+
+  it('does not lapse a referral inside the 14-day window', async () => {
+    // The window was 12 hours, which killed a Friday-evening referral before the practice
+    // opened on Saturday. A week old must still be live.
+    const { referralId, mine } = await referralFrom('07700 900850', '07700 900851', 'Ned Fresh');
+    await db.query(`update referrals set created_at = now() - interval '7 days' where id=$1`, [referralId]);
+
+    const { expireUnbookedReferrals } = await import('../src/services/referralService.js');
+    await expireUnbookedReferrals();
+
+    const row = (await mine()).find((r) => r.id === referralId);
+    expect(row.status).not.toBe('lost');
+    expect(row.closedReason).toBeUndefined();
+  });
 });

@@ -65,8 +65,20 @@ export const config = {
     // as failed.
     webhookSecret: process.env.EMAIL_WEBHOOK_SECRET ?? null,
   },
-  // FR: a referred friend must book within this window or the referral resets.
-  referralBookingWindowHours: Number(process.env.REFERRAL_BOOKING_WINDOW_HOURS ?? 12),
+  // How long a referrer's claim on a friend lasts. This is not a nag timer: expiry sets
+  // status='lost', and referrals_referred_phone_active is a partial unique index
+  // `where status <> 'lost'`, so expiring a referral RELEASES that phone number back into the
+  // pool for anyone else to refer. The window is therefore the answer to "how long is this
+  // friend reserved exclusively for the person who referred them".
+  //
+  // Was 12 hours, which answered "until tomorrow morning". A friend picks a practice in the
+  // app and then books, usually by phoning during opening hours — submit at 8pm on a Friday
+  // and the referral was dead before the practice opened. Since 2026-09-11 a referral also
+  // waits off the pipeline board until Dentally confirms a booking, so nobody can see or
+  // rescue one before the window closes. 14 days is long enough to survive a weekend, a
+  // holiday and simply forgetting; short enough that a cold lead does not lock that person
+  // out of the scheme forever.
+  referralBookingWindowHours: Number(process.env.REFERRAL_BOOKING_WINDOW_HOURS ?? 336),
   consentVersionReferred: 'referred-v1-2026-08',
   // Dentally (FR-05/FR-16). Effective mode is resolved at runtime by
   // connectionService.resolveDentallyMode(): DENTALLY_MODE override > env token

@@ -235,7 +235,10 @@ describe('admin stats', () => {
   });
 });
 
-describe('practices booking links + 12h booking window', () => {
+// The window is config.referralBookingWindowHours, 14 days since 2026-09-11. It was 12 hours,
+// which closed a Friday-evening referral before the practice opened on Saturday — and once
+// referrals started waiting off the pipeline board, nobody could see or rescue one in time.
+describe('practices booking links + the booking window', () => {
   const mk = {};
 
   beforeAll(async () => {
@@ -265,17 +268,21 @@ describe('practices booking links + 12h booking window', () => {
     for (const p of res.body.practices) expect(p).toHaveProperty('bookingUrl');
   });
 
-  it('an unbooked referral older than 12h resets — friend starts from the beginning and can resubmit', async () => {
+  it('an unbooked referral past the window resets — friend starts from the beginning and can resubmit', async () => {
     const friend = await signIn('+447700970002');
     expect((await submit(friend.token, 'Exp Iry')).status).toBe(200);
 
-    // Still inside the window: the submitted state (with practice attached) shows.
+    // Still inside the window: the submitted state (with practice attached) shows. A week in
+    // is now comfortably live, where under the old 12-hour window it was long dead.
+    await mk.db.query(
+      `update referrals set created_at = now() - interval '7 days' where referred_phone = '+447700970002'`,
+    );
     const before = await request(app).get('/referrals/referred-status').set(auth(friend.token));
     expect(before.body.status).toBe('new');
     expect(before.body.practiceName).toBeTruthy();
 
     await mk.db.query(
-      `update referrals set created_at = now() - interval '13 hours' where referred_phone = '+447700970002'`,
+      `update referrals set created_at = now() - interval '400 hours' where referred_phone = '+447700970002'`,
     );
 
     // Past the window: the referral is cleared and the flow resets.
@@ -294,7 +301,7 @@ describe('practices booking links + 12h booking window', () => {
     expect((await submit(friend.token, 'Boo Ked')).status).toBe(200);
     await mk.db.query(
       `update referrals set status='booked', appointment_dentally_id='appointment-window-test',
-       appointment_starts_at = now() + interval '2 days', created_at = now() - interval '13 hours'
+       appointment_starts_at = now() + interval '2 days', created_at = now() - interval '400 hours'
        where referred_phone = '+447700970003'`,
     );
 

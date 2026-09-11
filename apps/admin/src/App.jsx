@@ -165,6 +165,7 @@ export default function App() {
       setData({
         ...base,
         settings: settings.settings,
+        bookingWindowHours: settings.bookingWindowHours,
         proposals: proposals.proposals,
         aging: aging.aging,
         agingDays: aging.days,

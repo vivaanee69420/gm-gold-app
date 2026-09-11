@@ -64,3 +64,59 @@ describe('WaitingOnBooking', () => {
     expect(container).toBeEmptyDOMElement();
   });
 });
+
+// Waiting is not indefinite: expireUnbookedReferrals closes a referral that has not booked
+// inside the claim window, which also frees that friend to be referred by someone else. These
+// leads have no card on the board, so this card is the only place the deadline can be beaten.
+describe('WaitingOnBooking deadlines', () => {
+  const WINDOW = 336; // 14 days, the configured default
+
+  const at = (daysAgo) => new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
+  const lead = (id, name, daysAgo) => ({
+    id, referred_name: name, referred_phone: '+447700900111',
+    status: 'new', practice: 'Sidcup', referrer: 'Sarah Lewis', created_at: at(daysAgo),
+  });
+
+  it('counts down the days left rather than the days waited', () => {
+    render(<WaitingOnBooking referrals={[lead('a', 'Ann Aging', 4)]} windowHours={WINDOW} />);
+    // 14-day window, waiting 4 days -> 10 left. The number that can still be acted on.
+    expect(screen.getByText('10d left')).toBeInTheDocument();
+  });
+
+  it('still shows the time waited in the detail line', () => {
+    render(<WaitingOnBooking referrals={[lead('a', 'Ann Aging', 4)]} windowHours={WINDOW} />);
+    expect(screen.getByText(/waiting 4d/)).toBeInTheDocument();
+  });
+
+  it('never counts below zero', () => {
+    // A lead past its window but not yet swept — the sweep runs on the sync, not on a clock.
+    render(<WaitingOnBooking referrals={[lead('a', 'Ann Overdue', 40)]} windowHours={WINDOW} />);
+    expect(screen.getByText('0d left')).toBeInTheDocument();
+  });
+
+  it('puts the closest to lapsing first', () => {
+    const { container } = render(
+      <WaitingOnBooking
+        referrals={[lead('b', 'Ben Fresh', 1), lead('a', 'Ann Urgent', 12)]}
+        windowHours={WINDOW}
+      />,
+    );
+    const names = [...container.querySelectorAll('li')].map((li) => li.textContent);
+    expect(names[0]).toContain('Ann Urgent');
+    expect(names[1]).toContain('Ben Fresh');
+  });
+
+  it('falls back to the days waited when the window is unknown', () => {
+    // A dashboard that loaded before the settings call resolved must not print "NaNd left".
+    render(<WaitingOnBooking referrals={[lead('a', 'Ann Aging', 4)]} />);
+    expect(screen.getByText('4d')).toBeInTheDocument();
+    expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/left/)).not.toBeInTheDocument();
+  });
+
+  it('warns in the copy that running out of time frees the friend', () => {
+    // The consequence is not obvious and is not reversible, so the card says it.
+    render(<WaitingOnBooking referrals={[lead('a', 'Ann Aging', 4)]} windowHours={WINDOW} />);
+    expect(screen.getByText(/frees that friend to be referred by someone else/i)).toBeInTheDocument();
+  });
+});

@@ -15,7 +15,7 @@ export default function OperationsPage({ data, loadAll, notify }) {
           <AgingReport aging={data.aging} days={data.agingDays} />
           {/* Leads the board deliberately does not show yet. Here rather than nowhere, so a
               phone that never matches Dentally is visible instead of silently dropped. */}
-          <WaitingOnBooking referrals={data.referrals} />
+          <WaitingOnBooking referrals={data.referrals} windowHours={data.bookingWindowHours} />
         </div>
       </Zone>
       <ReferralRecord referrals={data.referrals} />

@@ -91,6 +91,22 @@ describe('an existing-patient closure on the referrals list', () => {
     expect(screen.queryByText(/no reward/i)).not.toBeInTheDocument();
   });
 
+  it('explains an expired claim, and says they can be referred again', async () => {
+    // The only closure with a useful next step. It must not read as a telling-off — the
+    // referrer did nothing wrong, their friend simply did not book in time.
+    await show([row({ status: 'lost', closedReason: 'booking_window_expired' })]);
+
+    expect(screen.getByText('Expired')).toBeInTheDocument();
+    expect(screen.getByText(/didn’t book in time/i)).toBeInTheDocument();
+    expect(screen.getByText(/welcome to refer them again/i)).toBeInTheDocument();
+  });
+
+  it('does not blame the referrer for an expiry either', async () => {
+    await show([row({ status: 'lost', closedReason: 'booking_window_expired' })]);
+    const note = screen.getByText(/didn’t book in time/i).textContent;
+    expect(note).not.toMatch(/you failed|your fault|too late|missed your/i);
+  });
+
   it('shows one note per affected referral, not one for the list', async () => {
     await show([
       row({ id: 'a', friendName: 'Ann A.', status: 'lost', closedReason: 'existing_patient' }),

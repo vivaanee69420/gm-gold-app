@@ -13,6 +13,19 @@ import { useAppState } from '../state/AppState';
 
 const STORE_LINKS = 'iPhone: https://apps.apple.com/gb/app/gm-referral · Android: https://play.google.com/store/apps/details?id=uk.co.gmdental.referral';
 
+// The two closures the API relays a reason for, in words. Keyed on the same values as
+// CLOSED_LABELS in components/ui.js, which names them on the chip.
+//
+// Neither blames the referrer, because neither is their fault, and "expired" in particular
+// must not read as a telling-off: the friend is free to be referred again, which is the one
+// actionable thing in either sentence.
+const CLOSED_NOTES = {
+  existing_patient:
+    'They were already a patient here before your referral, so this one earns no reward.',
+  booking_window_expired:
+    'They didn’t book in time, so this referral has closed. You’re welcome to refer them again.',
+};
+
 const shareCard = (code = 'GMRF7K2X') =>
   Share.share({
     message:
@@ -111,10 +124,8 @@ export function ReferralsScreen() {
             {/* The chip alone cannot carry this. Someone who referred a friend in good faith
                 and gets nothing is owed the reason in words, or the only reading left is that
                 the app lost their referral. Said plainly, and without blaming them. */}
-            {item.closedReason === 'existing_patient' && (
-              <Text style={styles.rowNote}>
-                They were already a patient here before your referral, so this one earns no reward.
-              </Text>
+            {CLOSED_NOTES[item.closedReason] && (
+              <Text style={styles.rowNote}>{CLOSED_NOTES[item.closedReason]}</Text>
             )}
           </View>
         )}

@@ -8,6 +8,11 @@ import { clawbackReferralCredit, creditReferral } from './walletService.js';
 
 export const STATUS_ORDER = ['new', 'contacted', 'booked', 'attended', 'treatment_agreed', 'treatment_started', 'treatment_completed'];
 
+// The only lost_reason values the referrer's own app is told about. Both are written by the
+// system, never typed by an admin, so relaying them cannot leak a private note. Everything
+// else stays between the practice and its records.
+const RELAYED_CLOSE_REASONS = new Set(['existing_patient', 'booking_window_expired']);
+
 export async function submitReferral({ code, fullName, email, phone, treatmentInterest, preferredPracticeId, consentVersion, referredUser, source = 'code' }) {
   // The phone the friend will book with at Dentally is what commission matching
   // runs on — accept an override, normalized, falling back to the account phone.
@@ -211,11 +216,16 @@ export async function referralsForReferrer(referrerId) {
     // can still pay — so telling the referrer "no commission" at that point would be a lie
     // roughly as often as it was true. Until it is confirmed they see the ordinary status.
     //
-    // Deliberately NOT the raw lost_reason: that column is free text an admin types for any
-    // other kind of closure ("moved away", "changed their mind"), which is a note to
-    // themselves about someone else's friend, not something to relay.
-    closedReason: r.status === 'lost' && r.lost_reason === 'existing_patient'
-      ? 'existing_patient'
+    // Deliberately NOT the raw lost_reason in general: that column is free text an admin
+    // types for most closures ("moved away", "changed their mind"), which is a note to
+    // themselves about someone else's friend, not something to relay. Only these two
+    // machine-written values, both of which the referrer is owed an explanation of:
+    //
+    //   existing_patient       - their friend was already a patient, so FR-11 pays nothing
+    //   booking_window_expired - the friend never booked inside the claim window, so the
+    //                            referral lapsed and that friend is free to be referred again
+    closedReason: r.status === 'lost' && RELAYED_CLOSE_REASONS.has(r.lost_reason)
+      ? r.lost_reason
       : undefined,
   }));
 }
@@ -228,7 +238,10 @@ export async function referralsForReferrer(referrerId) {
  */
 export async function expireUnbookedReferrals() {
   const { rows } = await db.query(
-    `update referrals set status='lost'
+    // lost_reason is stamped, not just logged as an event: it is what lets the referrer's own
+    // app explain the closure (referralsForReferrer) instead of showing a bare "Closed", and
+    // what puts a reason on the card for whoever finds it in the Lost column later.
+    `update referrals set status='lost', lost_reason='booking_window_expired'
      where status in ('new','contacted') and appointment_dentally_id is null
        and created_at < now() - make_interval(hours => $1)
      returning id, referred_name`,

@@ -161,17 +161,22 @@ const STATUS_LABELS = {
   lost: 'Closed',
 };
 
+// A bare "Closed" with no money beside it is indistinguishable from the app having lost the
+// referral. For the two closures the API relays a machine-written reason for, name the actual
+// outcome; the row underneath carries the sentence about the reward. Anything else — an
+// admin's free-text reason, which is never relayed — stays "Closed".
+const CLOSED_LABELS = {
+  existing_patient: 'Already a patient',
+  booking_window_expired: 'Expired',
+};
+
 export function StatusChip({ status, creditPennies, closedReason }) {
   const done = status === 'treatment_completed';
-  // 'lost' reads as "Closed", which for the one closure the referrer did nothing wrong to
-  // cause — their friend was already a patient here — looks like the referral went missing.
-  // Name the actual outcome instead; the row underneath explains the reward.
-  const existingPatient = status === 'lost' && closedReason === 'existing_patient';
-  const label = existingPatient
-    ? 'Already a patient'
-    : done && creditPennies
+  const closedLabel = status === 'lost' ? CLOSED_LABELS[closedReason] : null;
+  const label = closedLabel
+    ?? (done && creditPennies
       ? `${STATUS_LABELS[status]} · +£${(creditPennies / 100).toFixed(0)}`
-      : STATUS_LABELS[status] ?? status;
+      : STATUS_LABELS[status] ?? status);
   return (
     <View style={[styles.chip, done && { borderColor: colors.success }]}>
       <Text style={[styles.chipText, done && { color: colors.success }]}>{label}</Text>

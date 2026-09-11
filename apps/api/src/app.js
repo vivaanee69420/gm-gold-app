@@ -505,7 +505,14 @@ export function buildApp() {
 
   app.get('/admin/settings', requireAdmin, wrap(async (_req, res) => {
     const { rows } = await db.query('select key, value from app_settings order by key');
-    res.json({ settings: Object.fromEntries(rows.map((r) => [r.key, r.value])) });
+    res.json({
+      settings: Object.fromEntries(rows.map((r) => [r.key, r.value])),
+      // Env-backed, not a row in app_settings, so it rides along here rather than needing a
+      // route of its own. The dashboard needs it to say how long a waiting lead has left
+      // before its claim lapses — a deadline nobody can see is a deadline nobody can beat.
+      // Read-only on purpose: the PUT below only accepts the app_settings keys it lists.
+      bookingWindowHours: config.referralBookingWindowHours,
+    });
   }));
 
   app.put('/admin/settings', requireAdmin, wrap(async (req, res) => {
