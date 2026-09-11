@@ -1,3 +1,21 @@
+// Run these with `npm run test:mobile` FROM THE REPO ROOT, not with a `test` script in this
+// package.json. That is load-bearing, not a style choice.
+//
+// app.json sets `runtimeVersion: { policy: 'fingerprint' }`, and the Expo fingerprint hashes
+// this package's package.json scripts — every one of them except `android` and `ios`. Adding a
+// `test` script here moved the fingerprint from 518efa8697… to 9067a32fb0…, which silently made
+// every existing build ineligible for OTA updates: `eas update` would publish successfully,
+// report success, and reach zero devices. The ROOT package.json is not a fingerprint input, so
+// the script lives there.
+//
+// It also has to be `npm exec --workspace apps/mobile -- vitest run` rather than plain
+// `vitest run`: this workspace is on vitest 5 while apps/api and apps/admin are on vitest 3,
+// and a bare `vitest` inside an npm script resolves the ROOT binary (v3), which ignores this
+// config entirely — no setupFiles, no jsdom, ten confusing failures.
+//
+// After ANY change to this package's scripts, re-check:
+//   npx expo-updates fingerprint:generate --platform android
+// against `npx eas-cli build:list --json`.
 import { defineConfig, transformWithEsbuild } from 'vite';
 
 // This app keeps its JSX in .js files. That is fine for the app itself — Metro's

@@ -10,7 +10,8 @@
     "api": "npm run dev --workspace apps/api",
     "admin": "npm run dev --workspace apps/admin",
     "mobile": "npm run start --workspace apps/mobile",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present && npm run test:mobile",
+    "test:mobile": "npm exec --workspace apps/mobile -- vitest run"
   },
   "engines": {
     "node": ">=22"
