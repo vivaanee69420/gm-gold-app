@@ -6,7 +6,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useFocusEffect } from '@react-navigation/native';
 import { normalizeCode } from '@gm-referral/shared/referral-code';
 import { api, isMockMode } from '../api/client';
-import { Body, Eyebrow, Field, GoldButton, Hairline, Screen, Title } from '../components/ui';
+import { BackLink, Body, Eyebrow, Field, GoldButton, Hairline, Screen, Title } from '../components/ui';
 import BookAppointment from '../components/BookAppointment';
 import { colors, radius, space, type } from '../theme';
 import { useAppState } from '../state/AppState';
@@ -42,7 +42,10 @@ export function EnterCodeScreen({ navigation }) {
   const proceed = (raw) => {
     const code = normalizeCode(String(raw).replace(/^gmreferral:\/\/r\//i, ''));
     if (!code) {
-      setError('That code doesn’t look right — it’s 8 letters and numbers, like GMRF-7K2X.');
+      // Describes the shape they should be looking at on their friend's card. Deliberately
+      // vague about length: a code is a first name plus four characters, so "SARAH-7K2X" and
+      // "JO-7K2X" are both right and no single number is.
+      setError('That code doesn’t look right — it’s your friend’s name and a few characters, like SARAH-7K2X.');
       return;
     }
     setError(null);
@@ -64,6 +67,10 @@ export function EnterCodeScreen({ navigation }) {
   return (
     <Screen>
       <View style={{ flex: 1, justifyContent: 'center' }}>
+        {/* The way out. "I was referred" used to be a one-way door — this screen is the first
+            in its stack, so there was nothing behind it and the role picker was unreachable.
+            Anyone who tapped the wrong role, or who has no code to enter, was stuck here. */}
+        <BackLink label="Not what you meant?" onPress={() => navigation.navigate('RolePicker')} />
         <Eyebrow>Welcome</Eyebrow>
         <Title>Were you referred{'\n'}by a friend?</Title>
         <Body muted style={{ marginBottom: space(6) }}>
@@ -75,7 +82,7 @@ export function EnterCodeScreen({ navigation }) {
           label="Referral code"
           value={typed}
           onChangeText={setTyped}
-          placeholder="GMRF-7K2X"
+          placeholder="SARAH-7K2X"
           autoCapitalize="characters"
           autoCorrect={false}
           onSubmitEditing={() => proceed(typed)}

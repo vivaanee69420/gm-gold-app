@@ -115,13 +115,28 @@ export async function pickRole(userId, role) {
     await db.query(`update users set role_referrer=true where id=$1`, [userId]);
     const existing = await db.query(`select code from referral_codes where user_id=$1 and active`, [userId]);
     if (!existing.rows[0]) {
+      // The code carries the referrer's first name (SARAH-7K2X), because it is said out loud
+      // and typed by a friend. Read here rather than passed in: this is the only place a code
+      // is ever issued, and the name is a SNAPSHOT — saveProfile never regenerates it, so a
+      // later rename leaves cards and QR codes already shared still working.
+      //
+      // The profile step precedes the role picker in the app, so a first name is normally
+      // present. generateCode falls back to an all-random code when it is not, rather than
+      // refusing someone a referral code.
+      const { rows: nameRows } = await db.query(`select first_name from users where id=$1`, [userId]);
+      const firstName = nameRows[0]?.first_name ?? '';
       let attempts = 0;
       for (;;) {
         try {
-          await db.query(`insert into referral_codes (user_id, code) values ($1,$2)`, [userId, generateCode()]);
+          await db.query(
+            `insert into referral_codes (user_id, code) values ($1,$2)`,
+            [userId, generateCode(firstName)],
+          );
           break;
         } catch (err) {
-          if (++attempts > 5) throw err; // collision retry
+          // Same name, same suffix: generateCode is called again on each pass, so a retry
+          // draws a fresh suffix rather than re-inserting the value that just collided.
+          if (++attempts > 5) throw err;
         }
       }
     }

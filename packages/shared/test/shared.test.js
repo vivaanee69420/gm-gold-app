@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { normalizePhone, isUkMobile, isE164 } from '../src/phone.js';
-import { normalizeCode, formatCode, generateCode, CODE_ALPHABET } from '../src/referral-code.js';
+import {
+  normalizeCode, formatCode, generateCode,
+  CODE_ALPHABET, CODE_LENGTH, SUFFIX_LENGTH, NAME_MAX_LENGTH,
+} from '../src/referral-code.js';
 import { formatPennies, addPennies, parseGBPToPennies, assertPennies } from '../src/money.js';
 import { referralSubmitSchema, profileSchema, phoneSchema, adminLoginSchema, adminCreateSchema } from '../src/schemas.js';
 
@@ -30,22 +33,87 @@ describe('phone normalization', () => {
 
 describe('referral codes', () => {
   it('normalizes hyphens, spaces, lowercase', () => {
-    expect(normalizeCode('gmrf-7k2x')).toBe('GMRF7K2X');
-    expect(normalizeCode(' GMRF 7K2X ')).toBe('GMRF7K2X');
+    expect(normalizeCode('sarah-7k2x')).toBe('SARAH7K2X');
+    expect(normalizeCode(' SARAH 7K2X ')).toBe('SARAH7K2X');
   });
-  it('rejects ambiguous characters and wrong lengths', () => {
-    expect(normalizeCode('GMRF7K2')).toBeNull(); // 7 chars
-    expect(normalizeCode('GMRF7K20')).toBeNull(); // 0 not in alphabet
-    expect(normalizeCode('GMRF7KIL')).toBeNull(); // I and L not in alphabet
+
+  it('accepts the range of lengths a name can produce', () => {
+    expect(normalizeCode('JO7K2X')).toBe('JO7K2X');              // short name
+    expect(normalizeCode('CHRISTO7K2X')).toBe('CHRISTO7K2X');    // truncated long name
+    expect(normalizeCode('GMRF7K2X')).toBe('GMRF7K2X');          // an old all-random code
   });
-  it('formats for display', () => {
+
+  it('rejects shapes no code can have', () => {
+    expect(normalizeCode('7K2X')).toBeNull();                    // suffix with no name
+    expect(normalizeCode('CHRISTOPHER7K2X')).toBeNull();         // longer than name+suffix allows
+    expect(normalizeCode('')).toBeNull();
+    expect(normalizeCode(null)).toBeNull();
+  });
+
+  it('no longer rejects the ambiguous letters, because names contain them', () => {
+    // OLIVIA alone has O, L and I — the three the suffix alphabet excludes. The shape check
+    // cannot police them any more; whether a code EXISTS is the API's answer (404), and that
+    // was always the only real authority.
+    expect(normalizeCode('OLIVIA7K2X')).toBe('OLIVIA7K2X');
+  });
+
+  it('formats for display, old codes included', () => {
+    expect(formatCode('SARAH7K2X')).toBe('SARAH-7K2X');
     expect(formatCode('GMRF7K2X')).toBe('GMRF-7K2X');
+    expect(formatCode('JO7K2X')).toBe('JO-7K2X');
+    // Nothing sensible to split: return it rather than inventing a hyphen.
+    expect(formatCode('7K2X')).toBe('7K2X');
+    expect(formatCode(null)).toBe('');
   });
-  it('generates valid canonical codes', () => {
-    for (let i = 0; i < 200; i += 1) {
-      const code = generateCode();
+
+  it('builds a code from the first name plus a random suffix', () => {
+    const code = generateCode('Sarah');
+    expect(code.startsWith('SARAH')).toBe(true);
+    expect(code).toHaveLength('SARAH'.length + SUFFIX_LENGTH);
+    expect(normalizeCode(code)).toBe(code);
+    // Only the suffix has to come from the unambiguous alphabet.
+    for (const ch of code.slice(-SUFFIX_LENGTH)) expect(CODE_ALPHABET.includes(ch)).toBe(true);
+  });
+
+  it('truncates a long name so the code still fits a gold card', () => {
+    const code = generateCode('Christopher');
+    expect(code.startsWith('CHRISTO')).toBe(true);
+    expect(code.length).toBeLessThanOrEqual(NAME_MAX_LENGTH + SUFFIX_LENGTH);
+  });
+
+  it('strips anything that is not a letter out of the name', () => {
+    expect(generateCode("O'Brien").startsWith('OBRIEN')).toBe(true);
+    expect(generateCode('Anne-Marie').startsWith('ANNEMARI')).toBe(true); // and truncated at 8
+    expect(generateCode('José').startsWith('JOS')).toBe(true);            // accent dropped
+  });
+
+  it('falls back to an all-random code when no letters survive', () => {
+    // An empty profile, or a name in a script leaving no A-Z. A working code beats refusing
+    // someone a referral code over the spelling of their name.
+    for (const name of ['', '  ', '123', '???', undefined]) {
+      const code = generateCode(name);
       expect(normalizeCode(code)).toBe(code);
+      expect(code).toHaveLength(CODE_LENGTH);
       for (const ch of code) expect(CODE_ALPHABET.includes(ch)).toBe(true);
+    }
+  });
+
+  it('varies the suffix so two people with the same name differ', () => {
+    const seen = new Set();
+    for (let i = 0; i < 200; i += 1) seen.add(generateCode('Sarah'));
+    expect(seen.size).toBeGreaterThan(150); // collisions are handled by a retry, not by luck
+  });
+
+  it('takes a deterministic rng for tests', () => {
+    expect(generateCode('Sarah', { rng: () => 0 })).toBe(`SARAH${CODE_ALPHABET[0].repeat(SUFFIX_LENGTH)}`);
+  });
+
+  it('round-trips every generated code through normalize', () => {
+    for (const name of ['Sarah', 'Jo', 'Christopher', 'Olivia', '']) {
+      for (let i = 0; i < 50; i += 1) {
+        const code = generateCode(name);
+        expect(normalizeCode(code), `${name} -> ${code}`).toBe(code);
+      }
     }
   });
 });

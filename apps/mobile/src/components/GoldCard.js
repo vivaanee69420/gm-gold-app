@@ -18,7 +18,13 @@ export function GoldCard({ name, code }) {
       <View style={styles.qrWell}>
         <QRCode value={deepLink} size={148} backgroundColor={colors.ivory} color={colors.black} />
       </View>
-      <Text style={styles.serial}>{formatCode(code)}</Text>
+      {/* Codes are variable length now that they carry a first name: GMRF-7K2X was always 9
+          characters, CHRISTOP-7K2X is 13. At fontSize 20 with letterSpacing 4 that is fine on
+          most phones and tight on a narrow one, so shrink to fit rather than wrap — a serial
+          broken across two lines stops looking like a serial. */}
+      <Text style={styles.serial} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+        {formatCode(code)}
+      </Text>
       <Text style={styles.hint}>Friend scans this — or types the code in their app</Text>
     </View>
   );

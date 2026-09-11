@@ -55,13 +55,41 @@ describe('auth', () => {
 });
 
 describe('referrer setup', () => {
-  it('saves profile and issues a referral code on referrer role', async () => {
+  it('saves profile and issues a referral code carrying the first name', async () => {
     await request(app).post('/me/profile').set(auth(agents.referrer))
       .send({ firstName: 'Sarah', lastName: 'Lewis', notifyOptIn: true });
     const role = await request(app).post('/me/role').set(auth(agents.referrer)).send({ role: 'referrer' });
     expect(role.status).toBe(200);
-    expect(role.body.user.referralCode).toMatch(/^[A-Z2-9]{8}$/);
+    // The code is said out loud and typed by a friend, so it leads with who it belongs to.
+    expect(role.body.user.referralCode).toMatch(/^SARAH[A-Z2-9]{4}$/);
     agents.code = role.body.user.referralCode;
+  });
+
+  it('keeps the code when the referrer later renames themselves', async () => {
+    // The name in a code is a snapshot of when it was issued. Regenerating it would silently
+    // break every card, QR code and text already shared — so a rename must not touch it.
+    const before = (await request(app).get('/me').set(auth(agents.referrer))).body.user.referralCode;
+
+    await request(app).post('/me/profile').set(auth(agents.referrer))
+      .send({ firstName: 'Sara', lastName: 'Lewis', notifyOptIn: true });
+
+    const after = (await request(app).get('/me').set(auth(agents.referrer))).body.user.referralCode;
+    expect(after).toBe(before);
+    expect(after.startsWith('SARAH'), 'the old spelling stays — that is the point').toBe(true);
+  });
+
+  it('issues a code even when the profile has no usable first name', async () => {
+    // Refusing someone a referral code over the spelling of their name would be worse than a
+    // code with no name in it.
+    // Via the helper's own firstName, which goes through profileSchema properly — a partial
+    // /me/profile post 422s (lastName and phone are required) and would leave the helper's
+    // default name in place, quietly testing nothing.
+    const odd = await patientSession(app, authStub, { phone: '07700 900931', firstName: '???' });
+    const role = await request(app).post('/me/role').set(auth(odd.token)).send({ role: 'referrer' });
+
+    expect(role.status).toBe(200);
+    // No letters survive '???', so the code is all-random — still a working code.
+    expect(role.body.user.referralCode).toMatch(/^[A-Z2-9]{8}$/);
   });
 });
 

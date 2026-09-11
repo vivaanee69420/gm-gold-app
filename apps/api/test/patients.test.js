@@ -89,7 +89,8 @@ describe('GET /admin/patients/:id', () => {
     expect(res.status).toBe(200);
     expect(res.body.patient).toMatchObject({ name: 'Percy Patient', email: 'percy@example.com' });
     expect(res.body.referrer).toMatchObject({ name: expect.stringContaining('Rita') });
-    expect(res.body.referrer.code).toMatch(/^[A-Z2-9]{8}$/);
+    // Codes lead with the referrer's first name, so Rita's starts with RITA.
+    expect(res.body.referrer.code).toMatch(/^RITA[A-Z2-9]{4}$/);
     expect(res.body.practice).toMatchObject({ chosen: practices[0].name, booked: null });
     expect(res.body.commission).toMatchObject({ amountPennies: null, creditedAt: null });
 

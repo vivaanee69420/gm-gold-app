@@ -52,6 +52,27 @@ export function Eyebrow({ children, style }) {
   return <Text style={[styles.eyebrow, style]}>{children}</Text>;
 }
 
+/**
+ * A way back out of a screen, for the stacks that draw no header (all of them — the navigator
+ * sets headerShown: false so screens own their own chrome).
+ *
+ * Quiet by design: mist rather than gold, because leaving a screen is never the action we are
+ * asking for. Sized past the 14px glyph by padding so it clears the 44pt touch target.
+ */
+export function BackLink({ label = 'Back', onPress, style }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      onPress={onPress}
+      hitSlop={8}
+      style={({ pressed }) => [styles.backLink, pressed && { opacity: 0.6 }, style]}
+    >
+      <Text style={styles.backLinkText}>{`‹  ${label}`}</Text>
+    </Pressable>
+  );
+}
+
 export function Title({ children, style }) {
   return <Text style={[styles.title, style]}>{children}</Text>;
 }
@@ -241,6 +262,9 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     marginBottom: space(2),
   },
+  // alignSelf: 'flex-start' so the tappable area is the label, not the whole column width.
+  backLink: { alignSelf: 'flex-start', paddingVertical: space(2), paddingRight: space(3) },
+  backLinkText: { color: colors.mist, fontSize: 15 },
   title: {
     fontFamily: type.display,
     color: colors.ivory,

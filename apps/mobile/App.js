@@ -99,6 +99,13 @@ function Router() {
           <Stack.Screen name="EnterCode" component={EnterCodeScreen} />
           <Stack.Screen name="BookingForm" component={BookingFormScreen} />
           <Stack.Screen name="ReferredStatus" component={ReferredStatusScreen} />
+          {/* Reachable from EnterCode's back link. Without it, picking "I was referred" was a
+              one-way door: EnterCode is this stack's first screen, so goBack() did nothing and
+              the role picker lived only in the no-roles navigator below — unreachable once a
+              role existed. Someone who mis-tapped was stuck on the code screen for good.
+              Choosing "I want to refer" here adds the referrer role, and the tree above swaps
+              itself to ReferrerTabs. */}
+          <Stack.Screen name="RolePicker" component={RolePickerScreen} />
         </Stack.Navigator>
       ) : (
         <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName={initialAuthRoute}>

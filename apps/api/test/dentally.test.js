@@ -105,7 +105,9 @@ describe('anyone can refer — no referrer verification (2026-09-09)', () => {
     const role = await request(app).post('/me/role').set(auth(token)).send({ role: 'referrer' });
 
     expect(role.status).toBe(200);
-    expect(role.body.user.referralCode).toMatch(/^[A-Z2-9]{8}$/);
+    // First name plus a 4-char suffix. The point of this test is that a referrer with no
+    // Dentally record still gets a working code, so assert the shape, not the name.
+    expect(role.body.user.referralCode).toMatch(/^[A-Z]{1,8}[A-Z2-9]{4}$/);
     expect(role.body.user.roles).toContain('referrer');
     // No verification state is exposed to the app at all any more.
     expect(role.body.user).not.toHaveProperty('verificationStatus');
