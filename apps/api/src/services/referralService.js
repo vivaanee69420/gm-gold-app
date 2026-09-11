@@ -13,6 +13,9 @@ export const STATUS_ORDER = ['new', 'contacted', 'booked', 'attended', 'treatmen
 // else stays between the practice and its records.
 const RELAYED_CLOSE_REASONS = new Set(['existing_patient', 'booking_window_expired']);
 
+/** Ceiling on GET /referrals/mine. See referralsForReferrer. */
+const MY_REFERRALS_LIMIT = 200;
+
 export async function submitReferral({ code, fullName, email, phone, treatmentInterest, preferredPracticeId, consentVersion, referredUser, source = 'code' }) {
   // The phone the friend will book with at Dentally is what commission matching
   // runs on — accept an override, normalized, falling back to the account phone.
@@ -201,8 +204,12 @@ export async function referralsForReferrer(referrerId) {
             l.amount_pennies as credit_pennies
      from referrals r
      left join wallet_ledger l on l.referral_id = r.id and l.kind='credit'
-     where r.referrer_id = $1 order by r.created_at desc`,
-    [referrerId],
+     where r.referrer_id = $1 order by r.created_at desc
+     limit $2`,
+    // Bounded so one prolific referrer cannot make their own app screen slow, and so the
+    // response size has a ceiling on a mobile connection. 200 is far beyond any real referrer
+    // — the screen is a scrolling list of friends, not a report.
+    [referrerId, MY_REFERRALS_LIMIT],
   );
   return rows.map((r) => ({
     id: r.id,
