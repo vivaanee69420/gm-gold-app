@@ -17,9 +17,19 @@ let stub;
 const agents = {};
 
 // Strictly increasing timestamps so cursor semantics are deterministic.
-const base = Date.now();
+//
+// Anchored an hour AHEAD of real time, which is load-bearing rather than cosmetic. `ts()`
+// advances one fake second per call, but eligibility is decided against a REAL clock:
+// syncService compares `appointment.completedAt <= referral.created_at`, and created_at is
+// Postgres now(). Anchored at Date.now(), the fake clock was only a few seconds past base by
+// the second test, so whenever the suite ran slowly — file parallelism, a loaded machine —
+// real time overtook it, a treatment stubbed as "now" looked like it completed BEFORE the
+// referral was submitted, the sync correctly rejected it, and five tests failed on proposal
+// ids that were never created. The hour of headroom is far more than any run needs.
+const base = Date.now() + 60 * 60 * 1000;
 let tick = 0;
 const ts = () => new Date(base + ++tick * 1000).toISOString();
+// Still comfortably before any referral's created_at: the offset above is an hour, this is days.
 const past = (days) => new Date(base - days * 86_400_000).toISOString();
 
 async function signIn(phone, email) {

@@ -7,7 +7,8 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { bootTestApp } from './helpers/app.js';
 import { adminSession } from './helpers/admin.js';
-import { MANAGER_ROUTES } from '../src/middleware/auth.js';
+import { MANAGER_PAGES } from '@gm-referral/shared/schemas';
+import { MANAGER_ROUTES, ROUTE_PAGE } from '../src/middleware/auth.js';
 
 process.env.PGLITE_MEMORY = '1';
 
@@ -209,6 +210,51 @@ describe('per-manager page grants', () => {
     await request(app).post(`/admin/team/${scopedId}/pages`)
       .set(auth(ownerToken)).send({ pages: [] });
     expect((await request(app).get('/admin/payouts').set(auth(scopedToken))).status).toBe(403);
+  });
+
+  // The page fence is fail-OPEN by design: middleware/auth.js does
+  // `const page = ROUTE_PAGE.get(routeKey); if (page && !admin.pages.includes(page)) -> 403`,
+  // so a route absent from ROUTE_PAGE is reachable by any manager regardless of their grants.
+  // That is correct for the three routes below and wrong for everything else.
+  //
+  // Nothing protected that distinction. ADMIN_ROUTE_SNAPSHOT forces a decision whenever an
+  // /admin route is added, but it is satisfied by editing MANAGER_ROUTES alone — so adding a
+  // manager route and forgetting ROUTE_PAGE silently opened it to every manager with the whole
+  // suite still green. This turns "forgot to decide" into a failure without changing the
+  // fail-open behaviour the three below rely on.
+  const INTENTIONALLY_UNGATED = new Set([
+    'GET /admin/me',            // identity: every account must be able to see who it is
+    'POST /admin/me/password',  // every account must be able to change its own password
+    'GET /admin/stats',         // the practice figures the dashboard shell itself renders
+  ]);
+
+  it('gates every manager route behind a page, or names it as deliberately ungated', () => {
+    const undecided = [...MANAGER_ROUTES].filter(
+      (route) => !ROUTE_PAGE.has(route) && !INTENTIONALLY_UNGATED.has(route),
+    );
+    expect(
+      undecided,
+      'these manager routes are behind no page grant. Add each to ROUTE_PAGE, or to '
+      + 'INTENTIONALLY_UNGATED above if every manager really should reach it',
+    ).toEqual([]);
+  });
+
+  it('keeps the ungated list honest', () => {
+    // The other direction: an entry that has since been gated, or that is no longer a manager
+    // route at all, is a stale exemption waiting to excuse the next real mistake.
+    const stale = [...INTENTIONALLY_UNGATED].filter(
+      (route) => !MANAGER_ROUTES.has(route) || ROUTE_PAGE.has(route),
+    );
+    expect(stale, 'remove these from INTENTIONALLY_UNGATED — they no longer need exempting').toEqual([]);
+  });
+
+  it('maps every gated route to a page a manager can actually be granted', () => {
+    // A typo'd page name ('payout' for 'payouts') would gate a route behind something no
+    // grant can ever satisfy, locking it for every manager with no error anywhere.
+    const unknown = [...ROUTE_PAGE.entries()]
+      .filter(([, page]) => !MANAGER_PAGES.includes(page))
+      .map(([route, page]) => `${route} -> ${page}`);
+    expect(unknown, 'ROUTE_PAGE names a page that is not in MANAGER_PAGES').toEqual([]);
   });
 
   it('answers the login with the same pages as /admin/me, not with everything', async () => {
