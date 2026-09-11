@@ -63,10 +63,17 @@ export default function OverviewPage({ data, loadAll, notify }) {
             value={inTreatment}
             caption="started or completed"
           />
+          {/* A single figure here used to read the global reward rule. There is no single
+              figure any more — the manager picks a tier per referral — so this shows the range
+              on offer rather than a number that describes no particular payment. */}
           <Metric
             label="Per referral"
-            value={data.stats.commissionPennies != null ? formatPennies(data.stats.commissionPennies) : '—'}
-            caption="what a referrer earns when treatment starts"
+            value={
+              data.stats.commissionTiersPennies?.length
+                ? `${formatPennies(Math.min(...data.stats.commissionTiersPennies))}–${formatPennies(Math.max(...data.stats.commissionTiersPennies))}`
+                : '—'
+            }
+            caption="chosen per referral by the practice"
           />
         </div>
       </Zone>
@@ -83,11 +90,10 @@ export default function OverviewPage({ data, loadAll, notify }) {
         </div>
       </Zone>
 
-      <Zone label="Rewards">
+      <Zone label="Payouts">
         <div className="zone-grid-wide">
           <Levers
-            key={`${data.stats.commissionPennies}:${data.settings.payout_threshold_pennies}:${data.settings.payout_expiry_days}`}
-            commissionPennies={data.stats.commissionPennies}
+            key={`${data.settings.payout_threshold_pennies}:${data.settings.payout_expiry_days}`}
             settings={data.settings}
             onChanged={loadAll}
             notify={notify}

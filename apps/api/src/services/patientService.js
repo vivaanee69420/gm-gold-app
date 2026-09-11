@@ -37,6 +37,9 @@ export async function patientDetail(referralId, scope) {
   const { rows } = await db.query(
     `select r.id, r.referred_name, r.referred_phone, r.referred_email, r.status,
             r.treatment_interest, r.treatment_name, r.doctor_name, r.treatment_value_pennies,
+            -- The chosen tier. Aliased apart from commission_pennies below, which is the
+            -- amount CREDITED — the two are different numbers and only one of them has moved.
+            r.commission_pennies as commission_tier_pennies,
             r.source, r.lost_reason,
             r.appointment_starts_at, r.appointment_dentally_id, r.created_at,
             pp.name as chosen_practice, bp.name as booked_practice,
@@ -83,6 +86,10 @@ export async function patientDetail(referralId, scope) {
       treatmentName: row.treatment_name ?? null,
       doctorName: row.doctor_name ?? null,
       treatmentValuePennies: row.treatment_value_pennies ?? null,
+      // The tier the manager chose, which is what the record's dropdown shows. Distinct from
+      // `commission.amountPennies` below — that is what has actually been credited, and is
+      // null for most of a referral's life.
+      commissionPennies: row.commission_tier_pennies ?? null,
       source: row.source,
       lostReason: row.lost_reason,
       referredAt: row.created_at,

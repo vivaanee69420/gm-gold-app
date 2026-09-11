@@ -12,6 +12,7 @@ import {
   adminLoginSchema,
   referralNoteSchema,
   treatmentDetailsSchema,
+  COMMISSION_TIERS_PENNIES,
 } from '@gm-referral/shared/schemas';
 import { db, logEvent, withTransaction } from './db.js';
 import {
@@ -44,7 +45,7 @@ import {
   addNote,
   deleteNote,
 } from './services/referralService.js';
-import { walletFor, requestPayout, markPayoutPaid, cancelPayout, getSetting, resolveRule, clawbackReferralCredit } from './services/walletService.js';
+import { walletFor, requestPayout, markPayoutPaid, cancelPayout, getSetting, clawbackReferralCredit } from './services/walletService.js';
 import { listPatients, patientDetail } from './services/patientService.js';
 import { runSync, agingReport } from './services/dentally/syncService.js';
 import {
@@ -338,6 +339,10 @@ export function buildApp() {
     const { rows } = await db.query(
       `select r.id, r.referred_name, r.referred_phone, r.referred_email, r.status, r.treatment_interest,
               r.treatment_name, r.doctor_name, r.treatment_value_pennies,
+              -- The tier the manager chose. Distinct from commission_pennies below, which is
+              -- the amount actually CREDITED (a ledger row). Chosen-but-unpaid is the normal
+              -- state for most of a referral's life, so the two cannot share a name.
+              r.commission_pennies as commission_tier_pennies,
               r.appointment_starts_at, r.created_at::date::text as created_at, r.source,
               coalesce(bp.name, pp.name) as practice,
               u.first_name || ' ' || coalesce(u.last_name,'') as referrer,
@@ -383,14 +388,16 @@ export function buildApp() {
     res.json(detail);
   }));
 
-  // { treatmentName, doctorName, treatmentValuePennies } — what was agreed. Any of them may be
-  // empty here; updateStatus is what refuses to release commission while one is missing.
+  // { treatmentName, doctorName, treatmentValuePennies, commissionPennies } — what was agreed
+  // and what it pays. Any of them may be empty here; updateStatus is what refuses to release
+  // commission while one is missing. commissionPennies is locked once a credit exists.
   app.put('/admin/referrals/:id/treatment', requireAdmin, requireUuidParam('id'), validate(treatmentDetailsSchema), wrap(async (req, res) => {
     res.json(await setTreatmentDetails({
       referralId: req.params.id,
       treatmentName: req.data.treatmentName,
       doctorName: req.data.doctorName,
       treatmentValuePennies: req.data.treatmentValuePennies,
+      commissionPennies: req.data.commissionPennies,
       actorId: req.admin.id,
       practiceIds: actionScope(req),
     }));
@@ -535,7 +542,6 @@ export function buildApp() {
   // so it comes back null for them, with credited-at-this-practice in its place.
   app.get('/admin/stats', requireAdmin, wrap(async (req, res) => {
     const scope = practiceScope(req);
-    const rule = await resolveRule(null);
 
     let liabilityPennies = null;
     if (scope === null) {
@@ -564,7 +570,10 @@ export function buildApp() {
 
     res.json({
       stats: {
-        commissionPennies: rule?.amount_pennies ?? null,
+        // There is no single commission any more (2026-09-11): the practice manager picks a
+        // tier per referral, so the dashboard reports what the tiers ARE rather than a figure
+        // that would be true of no particular payment.
+        commissionTiersPennies: COMMISSION_TIERS_PENNIES,
         liabilityPennies,
         creditedPennies: credited.rows[0].total,
         referralCounts: Object.fromEntries(counts.rows.map((r) => [r.status, r.n])),
@@ -572,15 +581,9 @@ export function buildApp() {
     });
   }));
 
-  app.put('/admin/reward-amount', requireAdmin, wrap(async (req, res) => {
-    const amount = Number(req.body?.amountPennies);
-    if (!Number.isSafeInteger(amount) || amount <= 0) return res.status(422).json({ error: 'validation' });
-    await db.query(
-      `insert into reward_rules (practice_id, type, amount_pennies, created_by) values (null,'fixed',$1,$2)`,
-      [amount, req.admin.id],
-    );
-    res.json({ ok: true, amountPennies: amount });
-  }));
+  // PUT /admin/reward-amount is gone. It wrote a global reward_rules row, and rules no longer
+  // decide any payment — leaving it would have let an owner change a number that affects
+  // nothing. Commission is set per referral on the card: PUT /admin/referrals/:id/treatment.
 
   // ---- dentally: proposals, verifications, aging, sync (FR-16/17/25 admin surfaces) ----
   app.get('/admin/proposals', requireAdmin, wrap(async (_req, res) => {

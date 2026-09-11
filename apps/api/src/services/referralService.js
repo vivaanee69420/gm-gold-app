@@ -164,16 +164,19 @@ export async function updateStatus({ referralId, status, lostReason, actorId, ac
     try {
       credit = await creditReferral({
         referral,
-        // The practice that is actually treating them owns the commission (FR-15 rule
-        // resolution is per-practice), falling back to the practice the form chose.
+        // Still recorded on the ledger row, for attribution and the per-practice payout
+        // reports — it just no longer decides the amount.
         practiceId: referral.booked_practice_id ?? referral.preferred_practice_id,
+        // The tier the practice manager picked. missingTreatmentDetails above has already
+        // refused this move if it is unset, so by here it is a real figure.
+        amountPennies: referral.commission_pennies,
         actorId,
         actorKind,
         reason: `${status === 'treatment_started' ? 'treatment started' : 'treatment completed'} (${actorKind ?? 'system'} confirmed)`,
       });
     } catch (err) {
       // already_credited is the expected, correct outcome of started -> completed. Anything
-      // else (no_active_rule, a real failure) still propagates.
+      // else (commission_not_set, a real failure) still propagates.
       if (err.message !== 'already_credited') throw err;
     }
   }
@@ -313,27 +316,51 @@ async function referralInScope(referralId, practiceIds) {
  * lands at the move that pays, not here.
  */
 export async function setTreatmentDetails({
-  referralId, treatmentName, doctorName, treatmentValuePennies, actorId, practiceIds = null,
+  referralId, treatmentName, doctorName, treatmentValuePennies, commissionPennies, actorId, practiceIds = null,
 }) {
   await referralInScope(referralId, practiceIds);
+
+  // The commission is the one detail that becomes immutable the moment it is acted on. Once a
+  // credit exists, the ledger has already moved that exact figure into someone's wallet, and
+  // the ledger is append-only (NFR-03) — so restating it here would leave the record claiming
+  // a number that was never paid. Correcting a paid commission needs an adjustment row and a
+  // reason, which is a different feature.
+  //
+  // The other three stay editable after payment, as they always were: they describe the
+  // treatment, not the money.
+  const { rows: paid } = await db.query(
+    `select l.amount_pennies, r.commission_pennies
+       from referrals r
+       left join wallet_ledger l on l.referral_id = r.id and l.kind = 'credit'
+      where r.id = $1`,
+    [referralId],
+  );
+  const alreadyCredited = paid[0]?.amount_pennies != null;
+  const incoming = commissionPennies ?? null;
+  if (alreadyCredited && incoming !== (paid[0]?.commission_pennies ?? null)) {
+    throw Object.assign(new Error('commission_locked'), { status: 409 });
+  }
+
   const { rows } = await db.query(
     `update referrals
-        set treatment_name = $2, doctor_name = $3, treatment_value_pennies = $4
+        set treatment_name = $2, doctor_name = $3, treatment_value_pennies = $4,
+            commission_pennies = $5
       where id = $1
-      returning treatment_name, doctor_name, treatment_value_pennies`,
-    [referralId, treatmentName ?? null, doctorName ?? null, treatmentValuePennies ?? null],
+      returning treatment_name, doctor_name, treatment_value_pennies, commission_pennies`,
+    [referralId, treatmentName ?? null, doctorName ?? null, treatmentValuePennies ?? null, incoming],
   );
   const row = rows[0];
   await logEvent(db, {
     actorId, actorKind: 'admin', entityType: 'referral', entityId: String(referralId),
     action: 'treatment_details_changed',
-    toValue: [row.treatment_name, row.doctor_name, row.treatment_value_pennies]
+    toValue: [row.treatment_name, row.doctor_name, row.treatment_value_pennies, row.commission_pennies]
       .map((v) => (v === null ? '—' : v)).join(' · '),
   });
   return {
     treatmentName: row.treatment_name,
     doctorName: row.doctor_name,
     treatmentValuePennies: row.treatment_value_pennies,
+    commissionPennies: row.commission_pennies,
   };
 }
 

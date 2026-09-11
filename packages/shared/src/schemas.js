@@ -141,22 +141,45 @@ export const referralNoteSchema = z.object({
 // What was agreed, filled in as the practice learns it. Every field clears with an empty
 // value — that is how you take back a wrong entry, so none of them may fail validation here.
 // The requirement is enforced at the move that pays (updateStatus), not at the keystroke.
+// What a referrer can be paid, in pennies. The practice manager picks one per referral
+// (2026-09-11, replacing FR-15's reward rules) because different treatments are worth wildly
+// different amounts and a single rule could not express it.
+//
+// Enforced HERE rather than as a database CHECK: this list is a business decision that will
+// change, and a constraint would make each change a migration. The database's floor is only
+// `commission_pennies > 0`.
+export const COMMISSION_TIERS_PENNIES = [2000, 5000, 10000, 20000, 25000];
+
 export const treatmentDetailsSchema = z.object({
   treatmentName: z.string().trim().max(120).transform((v) => (v === '' ? null : v)),
   doctorName: z.string().trim().max(120).transform((v) => (v === '' ? null : v)),
   // Pennies, like every other amount in this codebase — never pounds as a float.
+  // NOTE this is the value of the TREATMENT, not the commission. They are different numbers
+  // and confusing them pays a referrer the price of a veneer case.
   treatmentValuePennies: z
     .union([z.number().int().min(0).max(100_000_000), z.null()])
     .default(null),
+  // The commission itself. Only the tiers above, so a typo cannot invent a payout.
+  commissionPennies: z
+    .union([z.number().int(), z.null()])
+    .default(null)
+    .refine((v) => v === null || COMMISSION_TIERS_PENNIES.includes(v), {
+      message: 'commission_not_a_tier',
+    }),
 });
 
-/** The three facts a commission credit needs. Missing any of them blocks the paying move. */
+/** The four facts a commission credit needs. Missing any of them blocks the paying move. */
 export function missingTreatmentDetails(referral) {
   const missing = [];
   if (!referral?.treatment_name) missing.push('treatment');
   if (!referral?.doctor_name) missing.push('dentist');
   if (referral?.treatment_value_pennies === null || referral?.treatment_value_pennies === undefined) {
     missing.push('value');
+  }
+  // Without this there is no amount to pay: commission no longer falls back to a rule, so an
+  // unpriced referral must not reach either crediting stage.
+  if (referral?.commission_pennies === null || referral?.commission_pennies === undefined) {
+    missing.push('commission');
   }
   return missing;
 }

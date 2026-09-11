@@ -54,7 +54,8 @@ beforeAll(async () => {
   const practices = await request(app).get('/practices');
   agents.practiceId = practices.body.practices[0].id;
   agents.otherPracticeId = practices.body.practices[1]?.id;
-  await request(app).put('/admin/reward-amount').set(auth(agents.admin)).send({ amountPennies: 2000 });
+  // Commission used to be a global £20 rule set here. It is per referral now: recordTreatment
+  // carries the tier and defaults to £20, so every figure in this suite is unchanged.
 });
 
 describe('client events and funnel (FR-28)', () => {
@@ -238,14 +239,18 @@ describe('top referrers (FR-25)', () => {
 
 describe('admin payout cancel (FR-21)', () => {
   it('requires a reason, cancels, notifies the member, and keeps the balance', async () => {
-    // Get Sarah to the £100 threshold: £80 rule + a second completed referral.
-    await request(app).put('/admin/reward-amount').set(auth(agents.admin)).send({ amountPennies: 8000 });
+    // Get Sarah over the £100 payout threshold. This used to raise a global £80 rule to land
+    // on exactly £100; £80 is not one of the five tiers, so the second referral pays the £100
+    // tier instead and the balance below is asserted from the wallet rather than hardcoded.
     const { referralId } = await submitReferralAs('07700 900804', 'Ada Lovelace');
-    await recordTreatment(app, agents.admin, referralId);
+    await recordTreatment(app, agents.admin, referralId, { commissionPennies: 10000 });
     await request(app)
       .patch(`/admin/referrals/${referralId}/status`)
       .set(auth(agents.admin))
       .send({ status: 'treatment_completed' });
+
+    const balanceBefore = (await request(app).get('/wallet').set(auth(agents.referrer)))
+      .body.wallet.balancePennies;
 
     const payout = await request(app).post('/payouts').set(auth(agents.referrer)).send({ practiceId: agents.practiceId });
     expect(payout.status).toBe(200);
@@ -265,7 +270,10 @@ describe('admin payout cancel (FR-21)', () => {
     expect(list.body.payouts.find((p) => p.id === payoutId).status).toBe('cancelled');
 
     const wallet = await request(app).get('/wallet').set(auth(agents.referrer));
-    expect(wallet.body.wallet.balancePennies).toBe(10000); // balance untouched
+    // The invariant this test is actually about: cancelling a payout returns the money to the
+    // balance, whatever that balance happens to be. Asserted relative to before, so the tier
+    // amounts above can change without making this test lie.
+    expect(wallet.body.wallet.balancePennies, 'cancelling must not consume the balance').toBe(balanceBefore);
 
     const { rows } = await db.query(
       `select payload from notification_outbox where template='payout_cancelled'`,

@@ -44,7 +44,8 @@ async function referrerWithOpenPayout({ phone, friendPhone, name, practiceId }) 
     consentVersion: 'referred-v1-2026-08',
   });
   expect(sub.status).toBe(200);
-  await recordTreatment(app, t.admin, sub.body.referral.id);
+  // £100 a head throughout this suite — every payout figure below is 10000.
+  await recordTreatment(app, t.admin, sub.body.referral.id, { commissionPennies: 10000 });
   const done = await request(app)
     .patch(`/admin/referrals/${sub.body.referral.id}/status`)
     .set(auth(t.admin))
@@ -66,7 +67,8 @@ beforeAll(async () => {
   ({ app, db, stub: authStub } = await bootTestApp());
 
   t.admin = (await adminSession(app)).token;
-  await request(app).put('/admin/reward-amount').set(auth(t.admin)).send({ amountPennies: 10000 });
+  // Commission is per referral now, not a global rule — recordTreatment carries the tier.
+  // This suite wants £100 a head, so it passes commissionPennies: 10000 where it credits.
 
   const practices = (await request(app).get('/practices')).body.practices;
   t.practices = practices;
@@ -170,8 +172,9 @@ describe('manager is fenced to their practice', () => {
       expect(res.status, path).toBe(403);
       expect(res.body.error, path).toBe('forbidden');
     }
-    const lever = await request(app).put('/admin/reward-amount').set(auth(t.managerA)).send({ amountPennies: 1 });
-    expect(lever.status).toBe(403);
+    // PUT /admin/reward-amount used to be the money lever a manager had to be kept off. It no
+    // longer exists (commission is per referral), so there is nothing to assert a 403 on —
+    // the surface it guarded is gone rather than merely closed.
   });
 });
 
@@ -335,7 +338,7 @@ describe('credits behind an open payout exclude anything already paid out', () =
       consent: true, consentVersion: 'referred-v1-2026-08',
     });
     expect(sub1.status).toBe(200);
-    await recordTreatment(app, t.admin, sub1.body.referral.id);
+    await recordTreatment(app, t.admin, sub1.body.referral.id, { commissionPennies: 10000 });
     const done1 = await request(app)
       .patch(`/admin/referrals/${sub1.body.referral.id}/status`).set(auth(t.admin)).send({ status: 'treatment_completed' });
     expect(done1.status).toBe(200);
@@ -355,7 +358,7 @@ describe('credits behind an open payout exclude anything already paid out', () =
       consent: true, consentVersion: 'referred-v1-2026-08',
     });
     expect(sub2.status).toBe(200);
-    await recordTreatment(app, t.admin, sub2.body.referral.id);
+    await recordTreatment(app, t.admin, sub2.body.referral.id, { commissionPennies: 10000 });
     const done2 = await request(app)
       .patch(`/admin/referrals/${sub2.body.referral.id}/status`).set(auth(t.admin)).send({ status: 'treatment_completed' });
     expect(done2.status).toBe(200);
@@ -423,7 +426,7 @@ describe('status writes are practice-scoped', () => {
   });
 
   it('404s a manager moving another practice\'s referral, and writes no credit', async () => {
-    await recordTreatment(app, t.admin, referralId);
+    await recordTreatment(app, t.admin, referralId, { commissionPennies: 10000 });
     const res = await request(app)
       .patch(`/admin/referrals/${referralId}/status`)
       .set(auth(otherPracticeManager))
@@ -462,7 +465,7 @@ describe('status writes are practice-scoped', () => {
 
   it('lets the owning practice\'s manager credit the commission', async () => {
     const owner = await managerFor('07700 902005', t.practices[0].id);
-    await recordTreatment(app, t.admin, referralId);
+    await recordTreatment(app, t.admin, referralId, { commissionPennies: 10000 });
     const res = await request(app)
       .patch(`/admin/referrals/${referralId}/status`)
       .set(auth(owner))

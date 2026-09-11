@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { BOARD_STAGES, REFERRAL_STATUSES } from '@gm-referral/shared/schemas';
+import { formatPennies } from '@gm-referral/shared/money';
 import { api } from '../api/client.js';
 import { missingTreatmentDetails } from '@gm-referral/shared/schemas';
 import ReferralModal from './ReferralModal.jsx';
@@ -158,10 +159,18 @@ export default function PipelineBoard({ referrals, onMoved, onCardEdited, onChan
     }
     if (CREDITS_COMMISSION.has(status)) {
       clear(setLostDrafts, referral.id);
-      // The API refuses this move while the treatment, the dentist or the value is missing.
-      // Rather than let it fail and explain afterwards, open the record on the one screen that
-      // fixes it — and make the move from there once it is filled in.
-      if (missingTreatmentDetails(referral).length) {
+      // The API refuses this move while the treatment, the dentist, the value or the
+      // commission is missing. Rather than let it fail and explain afterwards, open the record
+      // on the one screen that fixes it — and make the move from there once it is filled in.
+      //
+      // commission_tier_pennies is remapped because this row comes from /admin/referrals,
+      // where `commission_pennies` already means the amount CREDITED. Feeding the row in
+      // unmapped made the commission read as permanently missing, and every credit-confirm
+      // diverted to the record instead.
+      if (missingTreatmentDetails({
+        ...referral,
+        commission_pennies: referral.commission_tier_pennies ?? null,
+      }).length) {
         setBlockedMove(status);
         setOpenId(referral.id);
         return;
@@ -284,6 +293,14 @@ export default function PipelineBoard({ referrals, onMoved, onCardEdited, onChan
                     <strong>{r.referred_name}</strong>
                     <span className="meta">{r.treatment_name || INTEREST[r.treatment_interest] || 'No treatment yet'}</span>
                     <span className="meta">{r.practice}</span>
+                    {/* Read-only here, edited in the record. A money selector on the card face
+                        would sit on a draggable surface next to a control that releases
+                        commission — one mis-tap from changing what someone gets paid. */}
+                    <span className="meta card-commission">
+                      {r.commission_tier_pennies != null
+                        ? `Commission ${formatPennies(r.commission_tier_pennies)}`
+                        : 'Commission not set'}
+                    </span>
                   </button>
                   {movesFrom(statusOf(r)).length > 0 ? (
                     <select

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { formatPennies, parseGBPToPennies } from '@gm-referral/shared/money';
-import { missingTreatmentDetails } from '@gm-referral/shared/schemas';
+import { missingTreatmentDetails, COMMISSION_TIERS_PENNIES } from '@gm-referral/shared/schemas';
 import { api } from '../api/client.js';
 import { STATUS_LABELS } from './PatientDetail.jsx';
 
@@ -52,6 +52,7 @@ export default function ReferralModal({
   const [treatment, setTreatment] = useState('');
   const [doctor, setDoctor] = useState('');
   const [value, setValue] = useState('');
+  const [commission, setCommission] = useState('');
   const [savingTreatment, setSavingTreatment] = useState(false);
   const [noteDraft, setNoteDraft] = useState('');
   const [savingNote, setSavingNote] = useState(false);
@@ -67,6 +68,11 @@ export default function ReferralModal({
       detail?.patient?.treatmentValuePennies != null
         ? (detail.patient.treatmentValuePennies / 100).toFixed(2)
         : '',
+    );
+    // '' is "not chosen yet" — deliberately not defaulting to a tier. A preselected money
+    // value is the kind of thing someone accepts without reading.
+    setCommission(
+      detail?.patient?.commissionPennies != null ? String(detail.patient.commissionPennies) : '',
     );
     setNotes(detail?.notes ?? null);
     setNoteDraft('');
@@ -87,10 +93,16 @@ export default function ReferralModal({
 
   const valuePennies = value.trim() === '' ? null : parseGBPToPennies(value);
   const valueLooksWrong = value.trim() !== '' && !Number.isInteger(valuePennies);
+  const commissionPennies = commission === '' ? null : Number(commission);
+  // Once a credit exists the ledger has already moved that exact figure, and it is
+  // append-only — so the API refuses a change (commission_locked) and the control goes
+  // read-only rather than offering an edit that will be rejected.
+  const commissionLocked = detail?.commission?.amountPennies != null;
   const wouldStillBeMissing = missingTreatmentDetails({
     treatment_name: treatment.trim() || null,
     doctor_name: doctor.trim() || null,
     treatment_value_pennies: valuePennies,
+    commission_pennies: commissionPennies,
   });
 
   const saveTreatment = async (e) => {
@@ -100,12 +112,21 @@ export default function ReferralModal({
     try {
       const out = await api(`/admin/referrals/${referral.id}/treatment`, {
         method: 'PUT',
-        body: { treatmentName: treatment, doctorName: doctor, treatmentValuePennies: valuePennies },
+        body: {
+          treatmentName: treatment,
+          doctorName: doctor,
+          treatmentValuePennies: valuePennies,
+          commissionPennies,
+        },
       });
       onSaved?.(referral.id, {
         treatment_name: out.treatmentName,
         doctor_name: out.doctorName,
         treatment_value_pennies: out.treatmentValuePennies,
+        // The board's row calls the chosen tier commission_tier_pennies — `commission_pennies`
+        // there is the amount CREDITED. Emitting the wrong key left the card face reading
+        // "Commission not set" immediately after someone had set it.
+        commission_tier_pennies: out.commissionPennies,
       });
       // The move that brought them here is now possible, so make it — rather than saving,
       // closing, and asking them to drag the card a second time.
@@ -236,9 +257,9 @@ export default function ReferralModal({
                 <form onSubmit={saveTreatment}>
                   {blockedMove && (
                     <p className="notice" role="status">
-                      {referral.referred_name} can’t start treatment until all three are filled in —
-                      they’re what the commission payment points at afterwards. Save them and the
-                      move goes through.
+                      {referral.referred_name} can’t start treatment until all four are filled in —
+                      three of them are what the payment points at afterwards, and the fourth is
+                      the payment. Save them and the move goes through.
                     </p>
                   )}
                   <div className="field-pair">
@@ -281,9 +302,33 @@ export default function ReferralModal({
                   />
                   {valueLooksWrong && <p className="error-note">Type an amount in pounds, like 4800 or 4800.50.</p>}
                   <p className="meta">
-                    What the patient is paying for this treatment. It doesn’t change the
-                    referrer’s commission — that comes from the reward levers.
+                    What the patient is paying for this treatment. This is not the referrer’s
+                    reward — that is the commission below.
                   </p>
+
+                  <label htmlFor={`commission-${referral.id}`}>
+                    Referrer’s commission <span className="required" aria-hidden="true">*</span>
+                  </label>
+                  <select
+                    id={`commission-${referral.id}`}
+                    required
+                    value={commission}
+                    disabled={commissionLocked}
+                    onChange={(e) => setCommission(e.target.value)}
+                  >
+                    <option value="">Choose an amount…</option>
+                    {COMMISSION_TIERS_PENNIES.map((pennies) => (
+                      <option key={pennies} value={String(pennies)}>{formatPennies(pennies)}</option>
+                    ))}
+                  </select>
+                  <p className="meta">
+                    {commissionLocked
+                      // Not an error — it is the ledger being append-only. Saying so beats a
+                      // disabled control with no explanation.
+                      ? `Already paid — ${formatPennies(detail.commission.amountPennies)} has been credited to ${detail.referrer.name}, so this can no longer change.`
+                      : 'What this referral pays the person who sent them. Chosen per referral, and fixed once it has been paid.'}
+                  </p>
+
                   <div className="form-actions">
                     <button type="button" className="ghost" onClick={onClose}>Cancel</button>
                     <button type="submit" className="btn-primary" disabled={savingTreatment || valueLooksWrong}>

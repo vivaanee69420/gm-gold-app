@@ -23,38 +23,45 @@ async function balanceOf(client, userId) {
   return rows[0].balance;
 }
 
-/** Resolve the active rule: treating practice scope first, else global (FR-15). */
-export async function resolveRule(practiceId) {
-  const { rows } = await db.query(
-    `select * from reward_rules
-     where active_from <= now() and (practice_id = $1 or practice_id is null)
-     order by (practice_id is null) asc, active_from desc
-     limit 1`,
-    [practiceId],
-  );
-  return rows[0] ?? null;
-}
+// resolveRule is gone (2026-09-11). It resolved FR-15's reward rules — treating-practice scope
+// first, else global, by active_from — and nothing decides commission that way any more: the
+// practice manager picks a tier per referral and both crediting paths read it off the referral.
+//
+// The reward_rules TABLE and its rows remain, because wallet_ledger.rule_id references it and
+// every credit written before today must keep resolving to the rule that paid it. Nothing
+// writes to it now.
 
-/** Credit a completed referral (FR-17/FR-18 manual path). One credit per referral, enforced twice. */
-export async function creditReferral({ referral, practiceId, actorId, actorKind = null, idempotencyKey = null, reason = null }) {
-  const rule = await resolveRule(practiceId);
-  if (!rule) throw Object.assign(new Error('no_active_rule'), { status: 409 });
+/**
+ * Credit a completed referral (FR-17/FR-18 manual path). One credit per referral, enforced twice.
+ *
+ * The amount is passed IN, from `referrals.commission_pennies` — the tier the practice manager
+ * picked. It used to be resolved from reward_rules (FR-15, retired 2026-09-11). Callers must
+ * supply it; there is no fallback on purpose, because the alternative to "refuse to pay" is
+ * "guess how much of someone's money to move".
+ *
+ * `rule_id` is written null. Historical credits keep theirs, which is why reward_rules and its
+ * rows still exist.
+ */
+export async function creditReferral({ referral, practiceId, amountPennies, actorId, actorKind = null, idempotencyKey = null, reason = null }) {
+  if (!Number.isSafeInteger(amountPennies) || amountPennies <= 0) {
+    throw Object.assign(new Error('commission_not_set'), { status: 409 });
+  }
 
   return withWalletLock(referral.referrer_id, async (client) => {
     try {
       const { rows } = await client.query(
         `insert into wallet_ledger (user_id, kind, amount_pennies, referral_id, rule_id, practice_id, idempotency_key, reason, created_by)
-         values ($1,'credit',$2,$3,$4,$5,$6,$7,$8) returning *`,
-        [referral.referrer_id, rule.amount_pennies, referral.id, rule.id, practiceId, idempotencyKey, reason, actorId],
+         values ($1,'credit',$2,$3,null,$4,$5,$6,$7) returning *`,
+        [referral.referrer_id, amountPennies, referral.id, practiceId, idempotencyKey, reason, actorId],
       );
       await client.query(
         `insert into notification_outbox (recipient_kind, recipient_id, template, payload)
          values ('user',$1,'wallet_credit',$2)`,
-        [referral.referrer_id, JSON.stringify({ amountPennies: rule.amount_pennies, referralId: referral.id })],
+        [referral.referrer_id, JSON.stringify({ amountPennies, referralId: referral.id })],
       );
       await logEvent(client, {
         actorId, actorKind, entityType: 'wallet', entityId: referral.referrer_id,
-        action: 'credit', toValue: String(rule.amount_pennies), reason,
+        action: 'credit', toValue: String(amountPennies), reason,
       });
       return rows[0];
     } catch (err) {

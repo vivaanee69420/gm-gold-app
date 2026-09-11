@@ -306,7 +306,7 @@ describe('commission needs the treatment on record first', () => {
     request(app).patch(`/admin/referrals/${gateReferral}/status`)
       .set(auth(gateAdmin)).send({ status });
 
-  it('refuses treatment started while any of the three is missing, naming what is missing', async () => {
+  it('refuses treatment started while any of the four is missing, naming what is missing', async () => {
     const bare = await move('treatment_started');
     expect(bare.status).toBe(422);
     expect(bare.body.error).toBe('treatment_details_required');
@@ -319,22 +319,76 @@ describe('commission needs the treatment on record first', () => {
       .set(auth(gateAdmin)).send({ treatmentName: 'Full arch', doctorName: 'Dr Okafor', treatmentValuePennies: null });
     expect((await move('treatment_started')).status, 'the value is still missing').toBe(422);
 
+    // Everything except the commission — the fourth fact, added when the manager started
+    // choosing the amount. Without it there is no figure to pay, so the gate must still hold.
+    const noTier = await request(app).put(`/admin/referrals/${gateReferral}/treatment`)
+      .set(auth(gateAdmin))
+      .send({ treatmentName: 'Full arch', doctorName: 'Dr Okafor', treatmentValuePennies: 650000 });
+    expect(noTier.status).toBe(200);
+    const stillHeld = await move('treatment_started');
+    expect(stillHeld.status, 'no commission chosen — nothing to pay').toBe(422);
+    expect(stillHeld.body.error).toBe('treatment_details_required');
+    // NOTE the `missing` array updateStatus throws does not reach the client: the global error
+    // boundary forwards only err.message. The dashboard computes the list itself with
+    // missingTreatmentDetails, which is why the modal can still name what is absent.
+
     // The referral has not moved and nothing has been credited while the gate held.
     const held = await request(app).get(`/admin/referrals/${gateReferral}`).set(auth(gateAdmin));
     expect(held.body.patient.status).toBe('treatment_agreed');
     expect(held.body.commission.amountPennies).toBeNull();
   });
 
-  it('lets the money move once all three are on record', async () => {
+  it('rejects an amount outside the tiers', async () => {
+    // £80 was expressible under the old global rule. It is not a tier, so a typo cannot
+    // invent a payout.
+    const odd = await request(app).put(`/admin/referrals/${gateReferral}/treatment`)
+      .set(auth(gateAdmin))
+      .send({ treatmentName: 'Full arch', doctorName: 'Dr Okafor', treatmentValuePennies: 650000, commissionPennies: 8000 });
+    expect(odd.status).toBe(422);
+  });
+
+  it('lets the money move once all four are on record, and pays the chosen tier', async () => {
     await request(app).put(`/admin/referrals/${gateReferral}/treatment`)
       .set(auth(gateAdmin))
-      .send({ treatmentName: 'Full arch', doctorName: 'Dr Okafor', treatmentValuePennies: 650000 });
+      .send({
+        treatmentName: 'Full arch', doctorName: 'Dr Okafor', treatmentValuePennies: 650000,
+        commissionPennies: 10000,
+      });
 
     const moved = await move('treatment_started');
     expect(moved.status).toBe(200);
     const after = await request(app).get(`/admin/referrals/${gateReferral}`).set(auth(gateAdmin));
     expect(after.body.patient.status).toBe('treatment_started');
+    // The tier the manager picked, not a rule's figure.
     expect(after.body.commission.amountPennies).toBe(10000);
+  });
+
+  it('locks the commission once it has been paid', async () => {
+    // The ledger has already moved that exact figure into a wallet, and it is append-only —
+    // restating the number here would leave the record claiming something never paid.
+    const relabel = await request(app).put(`/admin/referrals/${gateReferral}/treatment`)
+      .set(auth(gateAdmin))
+      .send({
+        treatmentName: 'Full arch', doctorName: 'Dr Okafor', treatmentValuePennies: 650000,
+        commissionPennies: 25000,
+      });
+    expect(relabel.status).toBe(409);
+    expect(relabel.body.error).toBe('commission_locked');
+
+    const after = await request(app).get(`/admin/referrals/${gateReferral}`).set(auth(gateAdmin));
+    expect(after.body.commission.amountPennies).toBe(10000);
+  });
+
+  it('still allows the other three details to be corrected after payment', async () => {
+    // They describe the treatment, not the money, so they stay editable as they always were.
+    const fix = await request(app).put(`/admin/referrals/${gateReferral}/treatment`)
+      .set(auth(gateAdmin))
+      .send({
+        treatmentName: 'Full arch upper', doctorName: 'Dr Okafor', treatmentValuePennies: 700000,
+        commissionPennies: 10000,
+      });
+    expect(fix.status).toBe(200);
+    expect(fix.body.treatmentName).toBe('Full arch upper');
   });
 
   it('gates the jump straight to Completed too — it releases the same money', async () => {

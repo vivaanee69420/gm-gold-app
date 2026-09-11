@@ -14,28 +14,28 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Levers', () => {
-  it('shows current values in pounds and saves a changed commission', async () => {
-    const calls = stubFetchRoutes([{ method: 'PUT', path: '/admin/reward-amount' }]);
-    const onChanged = vi.fn();
-    render(<Levers commissionPennies={2000} settings={settings} onChanged={onChanged} notify={vi.fn()} />);
+  it('shows current values in pounds', async () => {
+    stubFetchRoutes([{ method: 'PUT', path: '/admin/settings' }]);
+    render(<Levers settings={settings} onChanged={vi.fn()} notify={vi.fn()} />);
 
-    const commission = screen.getByLabelText(/commission per referral/i);
-    expect(commission).toHaveValue('20');
     expect(screen.getByLabelText(/payout threshold/i)).toHaveValue('100');
-
-    await userEvent.clear(commission);
-    await userEvent.type(commission, '25');
-    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
-
-    expect(calls).toEqual([
-      { method: 'PUT', path: '/admin/reward-amount', body: { amountPennies: 2500 } },
-    ]);
-    expect(onChanged).toHaveBeenCalled();
+    expect(screen.getByLabelText(/payout expiry/i)).toHaveValue('90');
   });
 
-  it('saves a changed threshold via settings without touching the reward rule', async () => {
+  it('no longer offers a commission field, because commission is per referral', async () => {
+    // It used to write a single global reward_rules row. Commission is chosen per referral on
+    // the pipeline card now, so a field here would have let an owner set a number carefully
+    // and change nothing — worse than not offering it, because it looks like a control.
+    render(<Levers settings={settings} onChanged={vi.fn()} notify={vi.fn()} />);
+
+    expect(screen.queryByLabelText(/commission per referral/i)).not.toBeInTheDocument();
+    // And it says where the number actually lives.
+    expect(screen.getByText(/set per referral on the pipeline card/i)).toBeInTheDocument();
+  });
+
+  it('saves a changed threshold via settings', async () => {
     const calls = stubFetchRoutes([{ method: 'PUT', path: '/admin/settings' }]);
-    render(<Levers commissionPennies={2000} settings={settings} onChanged={vi.fn()} notify={vi.fn()} />);
+    render(<Levers settings={settings} onChanged={vi.fn()} notify={vi.fn()} />);
 
     const threshold = screen.getByLabelText(/payout threshold/i);
     await userEvent.clear(threshold);

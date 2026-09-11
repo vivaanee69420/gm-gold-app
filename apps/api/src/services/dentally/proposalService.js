@@ -2,11 +2,10 @@
 //
 // Confirm is ONE transaction under the referrer's wallet lock (NFR-09):
 //   proposal open→confirmed  +  referral →treatment_completed (privileged)
-//   +  ledger credit (rule resolved per FR-15)  +  outbox rows  +  audit events
+//   +  ledger credit (the tier on the referral)  +  outbox rows  +  audit events
 // Any failure rolls the whole thing back; the one-credit-per-referral partial
 // unique index is the last line of defence against double crediting.
 import { db, logEvent, withWalletLock } from '../../db.js';
-import { resolveRule } from '../walletService.js';
 import { firstNameInitial } from '../referralService.js';
 
 const httpError = (message, status) => Object.assign(new Error(message), { status });
@@ -43,8 +42,16 @@ export async function confirmProposal(proposalId, adminId) {
   // choice. treating_practice_id (the Dentally appointment site) outranks both — it is what
   // the treatment actually happened at.
   const practiceId = proposal.treating_practice_id ?? referral.booked_practice_id ?? referral.preferred_practice_id;
-  const rule = await resolveRule(practiceId);
-  if (!rule) throw httpError('no_active_rule', 409);
+
+  // The tier the practice manager picked on the card (2026-09-11, replacing FR-15's rule
+  // resolution). This path has no gate of its own — updateStatus's missingTreatmentDetails
+  // check guards the manager route, not this one — so confirming refuses outright rather than
+  // guessing an amount. The Confirm queue is no longer one click for an unpriced referral:
+  // someone has to open it and choose, which is the accepted cost of per-referral control.
+  const amountPennies = referral.commission_pennies;
+  if (!Number.isSafeInteger(amountPennies) || amountPennies <= 0) {
+    throw httpError('commission_not_set', 409);
+  }
 
   return withWalletLock(referral.referrer_id, async (client) => {
     const { rows: decided } = await client.query(
@@ -87,13 +94,14 @@ export async function confirmProposal(proposalId, adminId) {
     let credit;
     try {
       const { rows: creditRows } = await client.query(
+        // rule_id null: no rule decided this any more. Historical credits keep theirs, which
+        // is why reward_rules and its rows still exist.
         `insert into wallet_ledger (user_id, kind, amount_pennies, referral_id, rule_id, practice_id, reason, created_by)
-         values ($1,'credit',$2,$3,$4,$5,$6,$7) returning *`,
+         values ($1,'credit',$2,$3,null,$4,$5,$6) returning *`,
         [
           referral.referrer_id,
-          rule.amount_pennies,
+          amountPennies,
           referral.id,
-          rule.id,
           practiceId,
           `dentally proposal confirmed (${proposal.invoice_state ?? 'completed'})`,
           adminId,
@@ -113,7 +121,7 @@ export async function confirmProposal(proposalId, adminId) {
       [
         referral.referrer_id,
         JSON.stringify({ friendName: firstNameInitial(referral.referred_name) }),
-        JSON.stringify({ amountPennies: rule.amount_pennies, referralId: referral.id }),
+        JSON.stringify({ amountPennies, referralId: referral.id }),
       ],
     );
     await logEvent(client, {
@@ -128,7 +136,7 @@ export async function confirmProposal(proposalId, adminId) {
     }
     await logEvent(client, {
       actorId: adminId, actorKind: 'admin', entityType: 'wallet', entityId: referral.referrer_id,
-      action: 'credit', toValue: String(rule.amount_pennies), reason: `proposal ${proposalId}`,
+      action: 'credit', toValue: String(amountPennies), reason: `proposal ${proposalId}`,
     });
     return { ok: true, credit: { amountPennies: credit.amount_pennies }, alreadyCredited: false };
   });

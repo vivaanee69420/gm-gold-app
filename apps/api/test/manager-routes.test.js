@@ -70,7 +70,9 @@ const ADMIN_ROUTE_SNAPSHOT = [
   'POST /admin/team/:id/profile',
   'POST /admin/users/:id/revoke-sessions',
   'PUT /admin/referrals/:id/treatment',
-  'PUT /admin/reward-amount',
+  // 'PUT /admin/reward-amount' was here until 2026-09-11. It wrote a global reward_rules row,
+  // and rules no longer decide any payment — commission is chosen per referral via
+  // PUT /admin/referrals/:id/treatment, which is already in this snapshot below.
   'PUT /admin/settings',
 ];
 

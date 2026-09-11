@@ -84,11 +84,23 @@ client queries Postgres directly.
   notifications on `booked` and `treatment_completed` (opt-in holders only).
 
 ### Commission & wallet
-- **FR-15** Reward rules: `type='fixed'`, amount in pennies (launch default 2000 = £20), scope global or per
-  practice, `active_from` date. **Resolution**: the single rule in scope with the greatest
-  `active_from ≤ now` — treating-practice scope first, else global; overlapping same-scope rules are
-  rejected on save. Admin edits affect future confirmations only. (Shape supports percent-with-cap for
-  Phase 2.) The payout threshold does NOT live on rules; see FR-20.
+- **FR-15** ~~Reward rules~~ **RETIRED 2026-09-11.** Commission is a **per-referral figure the practice
+  manager chooses** from five fixed tiers — £20, £50, £100, £200, £250 — on the referral's own record in
+  the pipeline. It is stored on `referrals.commission_pennies`, enforced as a tier at the validation
+  boundary (`COMMISSION_TIERS_PENNIES` in shared/schemas.js) rather than as a database CHECK, so the list
+  can change without a migration.
+  - **Required before payment**: `missingTreatmentDetails` counts it as a fourth fact, so `updateStatus`
+    refuses both crediting stages — including the privileged jump to `treatment_completed` — while it is
+    unset. `confirmProposal` refuses with `commission_not_set` for the same reason, which means a
+    Dentally-detected treatment cannot be confirmed until someone has priced it.
+  - **Immutable once paid**: `setTreatmentDetails` answers 409 `commission_locked` on any change after a
+    credit exists, because the ledger is append-only (NFR-03). Correcting a paid commission would need an
+    adjustment row and a reason; that is not built.
+  - What this retired: reward rules (`type='fixed'`, global or per-practice scope, `active_from`
+    versioning, "treating-practice scope first, else global"), the `PUT /admin/reward-amount` lever, and
+    the Phase-2 shape for percent-with-cap. The `reward_rules` table and its rows remain because
+    `wallet_ledger.rule_id` references them and historical credits must keep resolving; nothing writes to
+    it. The payout threshold never lived on rules; see FR-20.
 - **FR-16** A Dentally sync worker (in-process cron in the API; optional inbound webhook verified by HMAC
   signature) detects completed-and-paid treatments, matches patient phones against open referrals, and
   creates **proposals** carrying the **treating practice id** from the Dentally event. Matching is **exact
@@ -103,9 +115,11 @@ client queries Postgres directly.
   FR-05 referrer verification read, giving one Dentally read path instead of two; (d) cadence — poll every
   15 minutes; webhook (if Dentally provides one) becomes a trigger for an immediate poll, not a separate
   ingestion path.
-- **FR-17** Admin confirms a proposal with one click: referral → `treatment_completed` (privileged
-  transition), and a ledger credit is written using the rule resolved per FR-15, storing amount, rule id, and
-  treating practice id immutably. Confirm, the status transition, and the credit are **one transaction**
+- **FR-17** Admin confirms a proposal: referral → `treatment_completed` (privileged transition), and a
+  ledger credit is written using the **tier chosen on the referral** (FR-15, revised 2026-09-11), storing
+  amount and treating practice id immutably. `rule_id` is null on every credit written since that date —
+  no rule decides an amount any more. Confirm is **no longer one click for an unpriced referral**: it
+  answers 409 `commission_not_set` until a manager has chosen the commission. Confirm, the status transition, and the credit are **one transaction**
   under the NFR-09 lock. Confirm is **blocked** while the referral's
   `review_status = 'existing_patient_suspect'` (resolve the review first); if the flag lands after a credit,
   the referral surfaces in the review list and admin may void via a reasoned adjustment. One credit per
@@ -371,7 +385,7 @@ Greenfield: every planned path below must land with its test. Tooling per NFR-07
 | 4 | Referral submit: consent, self-referral, duplicate phone, rate limit | vitest | FR-10/11 |
 | 5 | Async existing-patient check: down → retry → retroactive flag | vitest | FR-11 |
 | 6 | Transitions: adjacent-only, 409, privileged confirm jump, lost re-referral | vitest | FR-12 |
-| 7 | Credit via confirm: rule resolution (practice > global, active_from) | vitest | FR-15/17 |
+| 7 | Credit via confirm: the tier chosen on the referral; refuses when unset; locked once paid | vitest | FR-15/17 |
 | 8 | Manual credit idempotency key (double-click) | vitest | FR-18 |
 | 9 | Wallet concurrency: two simultaneous ops, advisory lock, balance ≥ 0 | vitest | NFR-09 |
 | 10 | Payout create / cancel / expire / mark-paid; one-open constraint | vitest | FR-20/21/22 |

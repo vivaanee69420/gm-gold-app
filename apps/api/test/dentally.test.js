@@ -32,6 +32,18 @@ const ts = () => new Date(base + ++tick * 1000).toISOString();
 // Still comfortably before any referral's created_at: the offset above is an hour, this is days.
 const past = (days) => new Date(base - days * 86_400_000).toISOString();
 
+/**
+ * The tier a practice manager would have picked on the card.
+ *
+ * confirmProposal reads it off the referral and refuses to pay without one (2026-09-11) —
+ * there is no reward rule left to fall back on, so a Dentally-detected treatment cannot be
+ * confirmed until someone has priced it. Written straight to the column here because these
+ * suites exercise the sync and the confirm queue; the admin route that sets it properly is
+ * covered in patients.test.js.
+ */
+const priceReferral = (referralId, pennies = 2000) =>
+  db.query(`update referrals set commission_pennies=$2 where id=$1`, [referralId, pennies]);
+
 async function signIn(phone, email) {
   // Identity is email now; the phone is attached at the profile step. helpers/patient.js
   // walks the same two HTTP calls the mobile app makes. Pass `email` when the test needs the
@@ -142,6 +154,7 @@ describe('FR-16 sync worker: eligibility, idempotency, cursor', () => {
     const sub = await submitReferral(token, 'Jane Smith');
     expect(sub.status).toBe(200);
     agents.referralId = sub.body.referral.id;
+    await priceReferral(agents.referralId);
 
     stub.stubAddCompletedTreatment({ phone: '+447700910010', completedAt: past(1), updatedAt: ts() });
     const sync = await runSync('test');
@@ -565,6 +578,7 @@ describe('clawback: commission reversed when the payment is refunded', () => {
     });
     expect(sub.status).toBe(200);
     referralId = sub.body.referral.id;
+    await priceReferral(referralId);
 
     stub.stubAddCompletedTreatment({ phone: '+447700960003', completedAt: ts(), updatedAt: ts() });
     await runSync('test');
@@ -781,20 +795,16 @@ describe('FIX 4: a manager marking Booked by hand is confirmed by reality, not s
   });
 });
 
-describe('confirmProposal resolves the reward-rule practice via booked_practice_id, not just the form choice', () => {
-  it('a practice-scoped rule at the booked practice wins over the global rule when treating_practice_id is unset', async () => {
+// This suite used to assert that a practice-scoped REWARD RULE at the booked practice beat the
+// global one. Rules no longer decide any amount (2026-09-11) — the manager picks a tier — so
+// that premise is gone. The coalesce order it exercised is not: practiceId still decides which
+// practice the credit is ATTRIBUTED to, which is what every per-practice payout figure and
+// manager-scoped report is built on. Same setup, asserting attribution instead of money.
+describe('confirmProposal attributes the credit via booked_practice_id, not just the form choice', () => {
+  it('the booked practice wins over the form choice when treating_practice_id is unset', async () => {
     const practices = (await request(app).get('/practices')).body.practices;
     const practiceA = practices[0]; // the form's original choice (preferred_practice_id)
     const practiceB = practices[1]; // where the patient actually booked (booked_practice_id)
-
-    // A rule for B distinct from the £20 global rule (seeded in 0002_seed_dev.sql) — if
-    // confirmProposal fell through to preferred_practice_id (A, which has no scoped rule) it
-    // would resolve the global £20 rule instead, not this one.
-    await db.query(
-      `insert into reward_rules (practice_id, type, amount_pennies, created_by)
-       values ($1,'fixed',3500,'test')`,
-      [practiceB.id],
-    );
 
     const sub = await submitReferral(agents.referrer, 'Precedence Check', {
       phone: '07700 904003', preferredPracticeId: practiceA.id,
@@ -802,10 +812,11 @@ describe('confirmProposal resolves the reward-rule practice via booked_practice_
     expect(sub.status).toBe(200);
     const referralId = sub.body.referral.id;
     await db.query(`update referrals set booked_practice_id=$2 where id=$1`, [referralId, practiceB.id]);
+    await priceReferral(referralId, 5000);
 
     // No siteId — the resulting completion_proposals row gets treating_practice_id NULL
-    // (practiceIdForSite(null) short-circuits to null), so the only way to reach B's rule is
-    // via booked_practice_id.
+    // (practiceIdForSite(null) short-circuits to null), so the only way to reach B is via
+    // booked_practice_id.
     const { rows: [{ referred_phone: friendPhone }] } = await db.query(
       `select referred_phone from referrals where id=$1`, [referralId],
     );
@@ -821,7 +832,16 @@ describe('confirmProposal resolves the reward-rule practice via booked_practice_
 
     const confirm = await request(app).post(`/admin/proposals/${proposal.id}/confirm`).set(auth(agents.admin));
     expect(confirm.status).toBe(200);
-    expect(confirm.body.credit.amountPennies, 'booked_practice_id must be consulted before preferred_practice_id').toBe(3500);
+    // The amount is the tier on the referral, wherever it was treated.
+    expect(confirm.body.credit.amountPennies).toBe(5000);
+
+    const { rows: [ledger] } = await db.query(
+      `select practice_id, rule_id from wallet_ledger where referral_id=$1 and kind='credit'`,
+      [referralId],
+    );
+    expect(ledger.practice_id, 'booked_practice_id must be consulted before preferred_practice_id')
+      .toBe(practiceB.id);
+    expect(ledger.rule_id, 'no rule decided this amount').toBeNull();
   });
 });
 

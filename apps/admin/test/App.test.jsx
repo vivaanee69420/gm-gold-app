@@ -16,7 +16,7 @@ function dashboardRoutes() {
     { method: 'GET', path: '/admin/me', body: { role: 'admin', practices: [] } },
     { method: 'GET', path: '/admin/team', body: { team: [] } },
     { method: 'GET', path: '/admin/settings', body: { settings: { payout_threshold_pennies: '10000', payout_expiry_days: '90' } } },
-    { method: 'GET', path: '/admin/stats', body: { stats: { commissionPennies: 2000, liabilityPennies: 46000, referralCounts: { new: 2, booked: 1 } } } },
+    { method: 'GET', path: '/admin/stats', body: { stats: { commissionTiersPennies: [2000, 5000, 10000, 20000, 25000], liabilityPennies: 46000, referralCounts: { new: 2, booked: 1 } } } },
     { method: 'GET', path: '/admin/payouts', body: { payouts: [] } },
     { method: 'GET', path: '/admin/referrals', body: { referrals: [] } },
     { method: 'GET', path: '/admin/patients', body: { patients: [] } },
@@ -77,7 +77,7 @@ describe('App', () => {
     expect(screen.queryByRole('heading', { name: /referral record/i })).not.toBeInTheDocument();
     // Overview content lives on its own page.
     expect(screen.queryByRole('heading', { name: /^funnel$/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: /reward levers/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /payout levers/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /top referrers/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /^dentally$/i })).not.toBeInTheDocument();
   });
@@ -125,7 +125,7 @@ describe('App', () => {
     // Then the reports behind them.
     expect(screen.getByRole('heading', { name: /^funnel$/i })).toBeInTheDocument();
     expect(screen.getByText('50%')).toBeInTheDocument(); // tripwire
-    expect(screen.getByRole('heading', { name: /reward levers/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /payout levers/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /top referrers/i })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /payout requests/i })).not.toBeInTheDocument();
     // Team and the Dentally connection are configuration, and live on Settings.
@@ -258,7 +258,7 @@ describe('App', () => {
 describe('role-driven navigation', () => {
   const managerRoutes = [
     { method: 'GET', path: '/admin/me', body: { id: 'm1', email: 'm@x.co', role: 'manager', practices: [{ id: 'p1', name: 'Ashford' }] } },
-    { method: 'GET', path: '/admin/stats', body: { stats: { commissionPennies: 10000, liabilityPennies: null, creditedPennies: 5000, referralCounts: {} } } },
+    { method: 'GET', path: '/admin/stats', body: { stats: { commissionTiersPennies: [2000, 5000, 10000, 20000, 25000], liabilityPennies: null, creditedPennies: 5000, referralCounts: {} } } },
     { method: 'GET', path: '/admin/payouts', body: { payouts: [] } },
     { method: 'GET', path: '/admin/referrals', body: { referrals: [] } },
     { method: 'GET', path: '/admin/patients', body: { patients: [] } },
@@ -294,7 +294,7 @@ describe('role-driven navigation', () => {
         path: '/admin/me',
         body: { id: 'm3', email: 'm3@x.co', role: 'manager', pages: ['payouts'], practices: [{ id: 'p1', name: 'Ashford' }] },
       },
-      { method: 'GET', path: '/admin/stats', body: { stats: { commissionPennies: 0, liabilityPennies: null, creditedPennies: 0, referralCounts: {} } } },
+      { method: 'GET', path: '/admin/stats', body: { stats: { commissionTiersPennies: [2000, 5000, 10000, 20000, 25000], liabilityPennies: null, creditedPennies: 0, referralCounts: {} } } },
       { method: 'GET', path: '/admin/payouts', body: { payouts: [] } },
     ]);
     setToken('tok');
@@ -321,7 +321,7 @@ describe('role-driven navigation', () => {
         path: '/admin/me',
         body: { id: 'm4', email: 'm4@x.co', role: 'manager', pages: [], practices: [{ id: 'p1', name: 'Ashford' }] },
       },
-      { method: 'GET', path: '/admin/stats', body: { stats: { commissionPennies: 0, liabilityPennies: null, creditedPennies: 0, referralCounts: {} } } },
+      { method: 'GET', path: '/admin/stats', body: { stats: { commissionTiersPennies: [2000, 5000, 10000, 20000, 25000], liabilityPennies: null, creditedPennies: 0, referralCounts: {} } } },
     ]);
     setToken('tok');
     render(<App />);

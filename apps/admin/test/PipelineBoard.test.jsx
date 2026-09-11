@@ -45,7 +45,7 @@ describe('PipelineBoard', () => {
   it('does reload the dashboard when the move credits commission — the money figures moved too', async () => {
     const withAgreed = [
       ...referrals,
-      { id: 'r3', referred_name: 'Ann Ford', referred_phone: '+447700900111', status: 'treatment_agreed', treatment_interest: 'veneers', practice: 'Ashford', referrer: 'Sarah Lewis', treatment_name: 'Veneers x6', doctor_name: 'Dr Patel', treatment_value_pennies: 480000 },
+      { id: 'r3', referred_name: 'Ann Ford', referred_phone: '+447700900111', status: 'treatment_agreed', treatment_interest: 'veneers', practice: 'Ashford', referrer: 'Sarah Lewis', treatment_name: 'Veneers x6', doctor_name: 'Dr Patel', treatment_value_pennies: 480000, commission_tier_pennies: 2000 },
     ];
     stubFetchRoutes([{ method: 'PATCH', path: '/admin/referrals/r3/status' }]);
     const onChanged = vi.fn();
@@ -112,7 +112,7 @@ describe('PipelineBoard', () => {
     const calls = stubFetchRoutes([{ method: 'PATCH', path: '/admin/referrals/r3/status' }]);
     const withAgreed = [
       ...referrals,
-      { id: 'r3', referred_name: 'Ann Ford', referred_phone: '+447700900111', status: 'treatment_agreed', treatment_interest: 'veneers', practice: 'Ashford', referrer: 'Sarah Lewis', treatment_name: 'Veneers x6', doctor_name: 'Dr Patel', treatment_value_pennies: 480000 },
+      { id: 'r3', referred_name: 'Ann Ford', referred_phone: '+447700900111', status: 'treatment_agreed', treatment_interest: 'veneers', practice: 'Ashford', referrer: 'Sarah Lewis', treatment_name: 'Veneers x6', doctor_name: 'Dr Patel', treatment_value_pennies: 480000, commission_tier_pennies: 2000 },
     ];
     render(<PipelineBoard referrals={withAgreed} onChanged={vi.fn()} notify={vi.fn()} />);
 
@@ -135,7 +135,7 @@ describe('PipelineBoard', () => {
     const calls = stubFetchRoutes([{ method: 'PATCH', path: '/admin/referrals/r3/status' }]);
     const withAgreed = [
       ...referrals,
-      { id: 'r3', referred_name: 'Ann Ford', referred_phone: '+447700900111', status: 'treatment_started', treatment_interest: 'veneers', practice: 'Ashford', referrer: 'Sarah Lewis', treatment_name: 'Veneers x6', doctor_name: 'Dr Patel', treatment_value_pennies: 480000 },
+      { id: 'r3', referred_name: 'Ann Ford', referred_phone: '+447700900111', status: 'treatment_started', treatment_interest: 'veneers', practice: 'Ashford', referrer: 'Sarah Lewis', treatment_name: 'Veneers x6', doctor_name: 'Dr Patel', treatment_value_pennies: 480000, commission_tier_pennies: 2000 },
     ];
     render(<PipelineBoard referrals={withAgreed} onChanged={vi.fn()} notify={vi.fn()} />);
 
@@ -153,7 +153,7 @@ describe('PipelineBoard', () => {
     const calls = stubFetchRoutes([{ method: 'PATCH', path: '/admin/referrals/r3/status' }]);
     const withAgreed = [
       ...referrals,
-      { id: 'r3', referred_name: 'Ann Ford', referred_phone: '+447700900111', status: 'treatment_agreed', treatment_interest: 'veneers', practice: 'Ashford', referrer: 'Sarah Lewis', treatment_name: 'Veneers x6', doctor_name: 'Dr Patel', treatment_value_pennies: 480000 },
+      { id: 'r3', referred_name: 'Ann Ford', referred_phone: '+447700900111', status: 'treatment_agreed', treatment_interest: 'veneers', practice: 'Ashford', referrer: 'Sarah Lewis', treatment_name: 'Veneers x6', doctor_name: 'Dr Patel', treatment_value_pennies: 480000, commission_tier_pennies: 2000 },
     ];
     render(<PipelineBoard referrals={withAgreed} onChanged={vi.fn()} notify={vi.fn()} />);
 
@@ -335,7 +335,7 @@ describe('the card and its record', () => {
   it('shows the typed treatment on the card once it is saved, in place of the form answer', async () => {
     const calls = stubFetchRoutes([
       { method: 'GET', path: '/admin/referrals/r1', body: detail },
-      { method: 'PUT', path: '/admin/referrals/r1/treatment', body: { treatmentName: 'Upper arch implants', doctorName: 'Dr Patel', treatmentValuePennies: 480000 } },
+      { method: 'PUT', path: '/admin/referrals/r1/treatment', body: { treatmentName: 'Upper arch implants', doctorName: 'Dr Patel', treatmentValuePennies: 480000, commissionPennies: 2000 } },
     ]);
     const onCardEdited = vi.fn();
     render(
@@ -353,20 +353,25 @@ describe('the card and its record', () => {
     await userEvent.type(screen.getByLabelText(/^treatment/i), 'Upper arch implants');
     await userEvent.type(screen.getByLabelText(/^dentist/i), 'Dr Patel');
     await userEvent.type(screen.getByLabelText(/^value/i), '4800');
+    await userEvent.selectOptions(screen.getByLabelText(/commission/i), '2000');
     await userEvent.click(screen.getByRole('button', { name: /save treatment/i }));
 
     await vi.waitFor(() =>
       expect(calls).toContainEqual({
         method: 'PUT',
         path: '/admin/referrals/r1/treatment',
-        body: { treatmentName: 'Upper arch implants', doctorName: 'Dr Patel', treatmentValuePennies: 480000 },
+        body: { treatmentName: 'Upper arch implants', doctorName: 'Dr Patel', treatmentValuePennies: 480000, commissionPennies: 2000 },
       }),
     );
-    // The board is told, so the card face updates without refetching the whole list.
+    // The board is told, so the card face updates without refetching the whole list. The
+    // commission is in here too, because the card face shows it.
     expect(onCardEdited).toHaveBeenCalledWith('r1', {
       treatment_name: 'Upper arch implants',
       doctor_name: 'Dr Patel',
       treatment_value_pennies: 480000,
+      // The row's name for the chosen tier. `commission_pennies` on a row means the amount
+      // credited, so emitting that key here left the card reading "not set" after a save.
+      commission_tier_pennies: 2000,
     });
   });
 
@@ -435,22 +440,27 @@ describe('starting treatment needs the treatment on record', () => {
 
     await userEvent.selectOptions(screen.getByLabelText(/status for nia blank/i), 'treatment_started');
 
-    expect(await screen.findByText(/can’t start treatment until all three are filled in/i)).toBeInTheDocument();
+    expect(await screen.findByText(/can’t start treatment until all four are filled in/i)).toBeInTheDocument();
     // Not a confirm-then-fail: the PATCH was never sent.
     expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(0);
-    // And all three fields are marked as required, not merely present.
+    // And all four fields are marked as required, not merely present. The commission is the
+    // fourth: without it there is no amount to pay, so the gate holds on it too.
     expect(screen.getByLabelText(/^treatment/i)).toBeRequired();
     expect(screen.getByLabelText(/^dentist/i)).toBeRequired();
     expect(screen.getByLabelText(/^value/i)).toBeRequired();
+    expect(screen.getByLabelText(/commission/i)).toBeRequired();
   });
 
-  it('saves the three facts and makes the move in one go', async () => {
+  it('saves the four facts and makes the move in one go', async () => {
     const calls = stubFetchRoutes([
       { method: 'GET', path: '/admin/referrals/r9', body: detailFor() },
       {
         method: 'PUT',
         path: '/admin/referrals/r9/treatment',
-        body: { treatmentName: 'Full arch', doctorName: 'Dr Okafor', treatmentValuePennies: 650000 },
+        body: {
+          treatmentName: 'Full arch', doctorName: 'Dr Okafor', treatmentValuePennies: 650000,
+          commissionPennies: 10000,
+        },
       },
       { method: 'PATCH', path: '/admin/referrals/r9/status' },
     ]);
@@ -461,6 +471,8 @@ describe('starting treatment needs the treatment on record', () => {
     await userEvent.type(await screen.findByLabelText(/^treatment/i), 'Full arch');
     await userEvent.type(screen.getByLabelText(/^dentist/i), 'Dr Okafor');
     await userEvent.type(screen.getByLabelText(/^value/i), '6500');
+    // The manager chooses what this referral pays. No tier is preselected, deliberately.
+    await userEvent.selectOptions(screen.getByLabelText(/commission/i), '10000');
 
     // The button says what it is about to do — save AND start treatment, not just save.
     await userEvent.click(screen.getByRole('button', { name: /save and start treatment/i }));

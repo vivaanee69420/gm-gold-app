@@ -182,8 +182,9 @@ describe('pipeline and money', () => {
     expect(below.status).toBe(409);
     expect(below.body.error).toBe('below_threshold');
 
-    // Raise the reward to £80 and complete a second referral -> balance £100 = threshold.
-    await request(app).put('/admin/reward-amount').set(auth(agents.admin)).send({ amountPennies: 8000 });
+    // Complete a second referral at the £100 tier -> balance £120, over the £100 threshold.
+    // This used to raise a global £80 rule to land on exactly £100; commission is now one of
+    // five fixed tiers and £80 is not among them, so the figures below are £20 + £100.
     const { token } = await signIn('07700 900789');
     await request(app).post('/me/profile').set(auth(token)).send({ firstName: 'Tom', lastName: 'Hall', notifyOptIn: false });
     await request(app).post('/me/role').set(auth(token)).send({ role: 'referred' });
@@ -196,17 +197,17 @@ describe('pipeline and money', () => {
       consentVersion: 'referred-v1-2026-08',
     });
     const id2 = sub.body.referral.id;
-    await recordTreatment(app, agents.admin, id2);
+    await recordTreatment(app, agents.admin, id2, { commissionPennies: 10000 });
     const done = await request(app)
       .patch(`/admin/referrals/${id2}/status`)
       .set(auth(agents.admin))
       .send({ status: 'treatment_completed' }); // privileged jump from 'new'
     expect(done.status).toBe(200);
-    expect(done.body.credit.amount_pennies).toBe(8000);
+    expect(done.body.credit.amount_pennies).toBe(10000);
 
     const payout = await request(app).post('/payouts').set(auth(agents.referrer)).send({ practiceId: agents.practiceId });
     expect(payout.status).toBe(200);
-    expect(payout.body.payout.amountPennies).toBe(10000);
+    expect(payout.body.payout.amountPennies).toBe(12000); // £20 + £100
 
     const second = await request(app).post('/payouts').set(auth(agents.referrer)).send({ practiceId: agents.practiceId });
     expect(second.status).toBe(409); // one open request per user
@@ -214,12 +215,12 @@ describe('pipeline and money', () => {
     const paid = await request(app)
       .post(`/admin/payouts/${payout.body.payout.id}/mark-paid`)
       .set(auth(agents.admin))
-      .send({ amountPennies: 10000 });
+      .send({ amountPennies: 12000 });
     expect(paid.status).toBe(200);
 
     const wallet = await request(app).get('/wallet').set(auth(agents.referrer));
     expect(wallet.body.wallet.balancePennies).toBe(0);
-    expect(wallet.body.wallet.lifetimePennies).toBe(10000);
+    expect(wallet.body.wallet.lifetimePennies).toBe(12000);
   });
 });
 
@@ -257,8 +258,12 @@ describe('admin stats', () => {
 
     const res = await request(app).get('/admin/stats').set(auth(agents.admin));
     expect(res.status).toBe(200);
-    expect(res.body.stats.commissionPennies).toBe(8000);
-    expect(res.body.stats.liabilityPennies).toBe(8000);
+    // There is no single commission to report any more — the manager picks a tier per
+    // referral — so stats carry the tiers themselves. A figure here would have been true of
+    // no particular payment.
+    expect(res.body.stats.commissionTiersPennies).toEqual([2000, 5000, 10000, 20000, 25000]);
+    expect(res.body.stats.commissionPennies, 'the old single-figure stat is gone').toBeUndefined();
+    expect(res.body.stats.liabilityPennies).toBe(2000); // this referral paid the £20 tier
     expect(res.body.stats.referralCounts).toMatchObject({ new: 1, treatment_completed: 3 });
   });
 });
