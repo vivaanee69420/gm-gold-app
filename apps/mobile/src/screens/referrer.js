@@ -97,11 +97,25 @@ export function ReferralsScreen() {
         ItemSeparatorComponent={Hairline}
         renderItem={({ item }) => (
           <View style={styles.row}>
-            <View>
-              <Text style={styles.friend}>{item.friendName}</Text>
-              <Text style={styles.date}>{item.createdAt}</Text>
+            <View style={styles.rowTop}>
+              <View>
+                <Text style={styles.friend}>{item.friendName}</Text>
+                <Text style={styles.date}>{item.createdAt}</Text>
+              </View>
+              <StatusChip
+                status={item.status}
+                creditPennies={item.creditPennies}
+                closedReason={item.closedReason}
+              />
             </View>
-            <StatusChip status={item.status} creditPennies={item.creditPennies} />
+            {/* The chip alone cannot carry this. Someone who referred a friend in good faith
+                and gets nothing is owed the reason in words, or the only reading left is that
+                the app lost their referral. Said plainly, and without blaming them. */}
+            {item.closedReason === 'existing_patient' && (
+              <Text style={styles.rowNote}>
+                They were already a patient here before your referral, so this one earns no reward.
+              </Text>
+            )}
           </View>
         )}
       />
@@ -289,14 +303,17 @@ export function WalletScreen() {
 }
 
 const styles = StyleSheet.create({
-  row: {
+  // A column now, so an explanatory line can sit under the name-and-chip line. The row used
+  // to BE that line; its layout moved to rowTop unchanged.
+  row: { paddingVertical: space(3.5) },
+  rowTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: space(3.5),
   },
   friend: { color: colors.ivory, fontSize: 15 },
   date: { color: colors.mist, fontSize: 12, marginTop: 2 },
+  rowNote: { color: colors.mist, fontSize: 12, lineHeight: 17, marginTop: space(2) },
   balanceCard: {
     backgroundColor: colors.cardface,
     borderRadius: radius.card,

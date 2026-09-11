@@ -161,11 +161,17 @@ const STATUS_LABELS = {
   lost: 'Closed',
 };
 
-export function StatusChip({ status, creditPennies }) {
+export function StatusChip({ status, creditPennies, closedReason }) {
   const done = status === 'treatment_completed';
-  const label = done && creditPennies
-    ? `${STATUS_LABELS[status]} · +£${(creditPennies / 100).toFixed(0)}`
-    : STATUS_LABELS[status] ?? status;
+  // 'lost' reads as "Closed", which for the one closure the referrer did nothing wrong to
+  // cause — their friend was already a patient here — looks like the referral went missing.
+  // Name the actual outcome instead; the row underneath explains the reward.
+  const existingPatient = status === 'lost' && closedReason === 'existing_patient';
+  const label = existingPatient
+    ? 'Already a patient'
+    : done && creditPennies
+      ? `${STATUS_LABELS[status]} · +£${(creditPennies / 100).toFixed(0)}`
+      : STATUS_LABELS[status] ?? status;
   return (
     <View style={[styles.chip, done && { borderColor: colors.success }]}>
       <Text style={[styles.chipText, done && { color: colors.success }]}>{label}</Text>

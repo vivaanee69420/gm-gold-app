@@ -189,7 +189,7 @@ export async function updateStatus({ referralId, status, lostReason, actorId, ac
 
 export async function referralsForReferrer(referrerId) {
   const { rows } = await db.query(
-    `select r.id, r.referred_name, r.status, r.created_at::date::text as created_at,
+    `select r.id, r.referred_name, r.status, r.lost_reason, r.created_at::date::text as created_at,
             l.amount_pennies as credit_pennies
      from referrals r
      left join wallet_ledger l on l.referral_id = r.id and l.kind='credit'
@@ -202,6 +202,21 @@ export async function referralsForReferrer(referrerId) {
     status: r.status,
     createdAt: r.created_at,
     creditPennies: r.credit_pennies ?? undefined,
+    // Why a referral closed, for the one case the referrer is owed an explanation of: their
+    // friend turned out to be an existing patient of the practice, so FR-11 pays nothing. A
+    // bare "Closed" chip with no money next to it reads like the app lost the referral.
+    //
+    // Only ever the CONFIRMED outcome. A referral sitting at review_status
+    // 'existing_patient_suspect' has not been decided — the owner can still clear it and it
+    // can still pay — so telling the referrer "no commission" at that point would be a lie
+    // roughly as often as it was true. Until it is confirmed they see the ordinary status.
+    //
+    // Deliberately NOT the raw lost_reason: that column is free text an admin types for any
+    // other kind of closure ("moved away", "changed their mind"), which is a note to
+    // themselves about someone else's friend, not something to relay.
+    closedReason: r.status === 'lost' && r.lost_reason === 'existing_patient'
+      ? 'existing_patient'
+      : undefined,
   }));
 }
 

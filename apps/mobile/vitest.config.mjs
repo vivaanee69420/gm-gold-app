@@ -19,6 +19,10 @@ const jsxInJs = {
 
 export default defineConfig({
   plugins: [jsxInJs],
+  // Metro injects __DEV__ into every module; react-native-web and anything ported from
+  // react-native reads it, and an undefined global throws at import time rather than
+  // failing a test you can read. True, because these are development-time runs.
+  define: { __DEV__: 'true' },
   resolve: {
     // The screens and primitives all import from 'react-native'. react-native-web is already a
     // dependency here (the app ships a web build through it), speaks the same component and

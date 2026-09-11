@@ -565,3 +565,77 @@ describe('losing a referral reverses money it already released', () => {
     expect(res.status).toBe(422);
   });
 });
+
+// What the referrer is told in their own app. A friend who turns out to be an existing patient
+// pays nothing (FR-11), and "Closed, no money" with no reason reads like the app lost the
+// referral rather than like a rule being applied.
+describe('/referrals/mine explains an existing-patient closure', () => {
+  async function referralFrom(referrerPhone, friendPhone, friendName) {
+    const referrer = await signIn(referrerPhone);
+    await request(app).post('/me/role').set(auth(referrer.token)).send({ role: 'referrer' });
+    const code = (await request(app).get('/me').set(auth(referrer.token))).body.user.referralCode;
+
+    const friend = await signIn(friendPhone);
+    await request(app).post('/me/role').set(auth(friend.token)).send({ role: 'referred' });
+    const sub = await request(app).post('/referrals').set(auth(friend.token)).send({
+      code,
+      fullName: friendName,
+      treatmentInterest: 'implants',
+      preferredPracticeId: agents.practiceId,
+      consent: true,
+      consentVersion: 'referred-v1-2026-08',
+    });
+    expect(sub.status).toBe(200);
+
+    const mine = async () => (await request(app).get('/referrals/mine').set(auth(referrer.token))).body.referrals;
+    return { referralId: sub.body.referral.id, mine };
+  }
+
+  it('reports existing_patient once the owner has confirmed it', async () => {
+    const { referralId, mine } = await referralFrom('07700 900840', '07700 900841', 'Ivy Existing');
+    await db.query(`update referrals set review_status='existing_patient_suspect' where id=$1`, [referralId]);
+
+    const decide = await request(app)
+      .post(`/admin/referral-review/${referralId}/decide`)
+      .set(auth(agents.admin))
+      .send({ decision: 'existing_patient' });
+    expect(decide.status).toBe(200);
+
+    const row = (await mine()).find((r) => r.id === referralId);
+    expect(row.status).toBe('lost');
+    expect(row.closedReason).toBe('existing_patient');
+  });
+
+  it('says nothing while the review is still undecided', async () => {
+    // A suspect can be cleared and can still pay. Announcing "no commission" here would be
+    // wrong about as often as it was right.
+    const { referralId, mine } = await referralFrom('07700 900842', '07700 900843', 'Jed Suspect');
+    await db.query(`update referrals set review_status='existing_patient_suspect' where id=$1`, [referralId]);
+
+    const row = (await mine()).find((r) => r.id === referralId);
+    expect(row.closedReason).toBeUndefined();
+    expect(row.status).not.toBe('lost');
+  });
+
+  it('does not relay the free-text reason behind any other closure', async () => {
+    // lost_reason is a note an admin types about someone else's friend. Only the one
+    // structured outcome the referrer is owed an explanation of gets through.
+    const { referralId, mine } = await referralFrom('07700 900844', '07700 900845', 'Kay Moved');
+    const lost = await request(app)
+      .patch(`/admin/referrals/${referralId}/status`)
+      .set(auth(agents.admin))
+      .send({ status: 'lost', lostReason: 'moved to Australia' });
+    expect(lost.status).toBe(200);
+
+    const row = (await mine()).find((r) => r.id === referralId);
+    expect(row.status).toBe('lost');
+    expect(row.closedReason, 'only existing_patient is relayed').toBeUndefined();
+    expect(JSON.stringify(row)).not.toContain('Australia');
+  });
+
+  it('leaves a healthy referral unmarked', async () => {
+    const { referralId, mine } = await referralFrom('07700 900846', '07700 900847', 'Lou Fine');
+    const row = (await mine()).find((r) => r.id === referralId);
+    expect(row.closedReason).toBeUndefined();
+  });
+});
